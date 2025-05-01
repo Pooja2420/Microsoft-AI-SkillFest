@@ -1,4 +1,5 @@
-Introduction to MigrateSense AI – A Custom LLM for Cloud Migration
+**MigrateSense AI – A Custom LLM for Cloud Migration**
+
 MigrateSense AI is a custom-built Large Language Model (LLM)–powered assistant designed to streamline and automate the end-to-end migration of applications, APIs, and databases to Microsoft Azure. At its core, MigrateSense AI is more than a chatbot—it is a purpose-trained language model, fine-tuned on Azure-specific documentation and enhanced with Retrieval-Augmented Generation (RAG) and multi-agent orchestration. The project exemplifies the development of a domain-specialized LLM that offers deep contextual understanding, real-time decision-making, and intelligent code reasoning in the context of cloud migration.
 
 Unlike general-purpose models like GPT-3.5 or GPT-4, MigrateSense AI is trained specifically to handle cloud migration use cases. The model was fine-tuned using over 240MB of Microsoft Learn content, covering service architectures, pricing strategies, and infrastructure design patterns for Azure. Paired with a FAISS-based vector database and a real-time Microsoft Docs scraper, the system retrieves highly relevant information, even for nuanced technical queries. This enables the LLM to provide grounded, accurate, and context-aware responses.
