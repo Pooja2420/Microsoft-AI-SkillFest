@@ -1,0 +1,132 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tuning query performance with Azure Cosmos DB
+Article
+2024-08-14
+3 contributors
+In this article
+APPLIES TO:NoSQL
+Azure Cosmos DB provides aAPI for NoSQL for querying data, without requiring schema or secondary indexes. This article provides the following information for developers:
+High-level details on how Azure Cosmos DB's SQL query execution works
+Tips and best practices for query performance
+Examples of how to utilize SQL query execution metrics to debug query performance
+About SQL query execution
+In Azure Cosmos DB data is stored in containers, which can grow to anystorage size or request throughput. Azure Cosmos DB seamlessly scales data across physical partitions under the covers to handle data growth or increases in provisioned throughput. You can issue SQL queries to any container using the REST API or one of the supportedSQL SDKs.
+A brief overview of partitioning: you define a partition key like "city", which determines how data is split across physical partitions. Data belonging to a single partition key (for example, "city" == "Seattle") is stored within a physical partition, and a single physical partition can store data from multiple partition keys. When a partition reaches its storage limit, the service seamlessly splits the partition into two new partitions. Data is distributed evenly across the new partitions, keeping all data for a single partition key together. Since partitions are transient, the APIs use an abstraction of a partition key range, which denotes the ranges of partition key hashes.
+When you issue a query to Azure Cosmos DB, the SDK performs these logical steps:
+Parse the SQL query to determine the query execution plan.
+If the query includes a filter against the partition key, likeSELECT * FROM c WHERE c.city = "Seattle", it's routed to a single partition. If the query doesn't have a filter on the partition key, then it's executed in all partitions and results from each partition are merged client side.
+SELECT * FROM c WHERE c.city = "Seattle"
+The query is executed within each partition in series or parallel, based on client configuration. Within each partition, the query might make one or more round trips depending on the query complexity, configured page size, and provisioned throughput of the collection. Each execution returns the number ofrequest unitsconsumed by query execution and query execution statistics.
+The SDK performs a summarization of the query results across partitions. For example, if the query involves an ORDER BY across partitions, then results from individual partitions are merge-sorted to return results in globally sorted order. If the query is an aggregation likeCOUNT, the counts from individual partitions are summed to produce the overall count.
+COUNT
+The SDKs provide various options for query execution. For example, in .NET these options are available in theQueryRequestOptionsclass. The following table describes these options and how they affect query execution time.
+QueryRequestOptions
+EnableScanInQuery
+MaxItemCount
+MaxBufferedItemCount
+MaxConcurrency
+PopulateIndexMetrics
+ResponseContinuationTokenLimitInKb
+For example, here's a query on a container partitioned by/cityusing the .NET SDK:
+/city
+QueryDefinition query = new QueryDefinition("SELECT * FROM c WHERE c.city = 'Seattle'");
+QueryRequestOptions options = new QueryRequestOptions()
+{
+    MaxItemCount = -1,
+    MaxBufferedItemCount = -1,
+    MaxConcurrency = -1,
+    PopulateIndexMetrics = true
+};
+FeedIterator<dynamic> feedIterator = container.GetItemQueryIterator<dynamic>(query);
+
+FeedResponse<dynamic> feedResponse = await feedIterator.ReadNextAsync();
+QueryDefinition query = new QueryDefinition("SELECT * FROM c WHERE c.city = 'Seattle'");
+QueryRequestOptions options = new QueryRequestOptions()
+{
+    MaxItemCount = -1,
+    MaxBufferedItemCount = -1,
+    MaxConcurrency = -1,
+    PopulateIndexMetrics = true
+};
+FeedIterator<dynamic> feedIterator = container.GetItemQueryIterator<dynamic>(query);
+
+FeedResponse<dynamic> feedResponse = await feedIterator.ReadNextAsync();
+Each query execution corresponds to a REST APIPOSTwith headers set for the query request options and the SQL query in the body. For details on the REST API request headers and options, seeQuerying resources using the REST API.
+POST
+Best practices for query performance
+The following factors commonly have the biggest effect on Azure Cosmos DB query performance. We dig deeper into each of these factors in this article.
+Provisioned throughput
+In Azure Cosmos DB, you create containers of data, each with reserved throughput expressed in request units (RU) per-second. A read of a 1-KB document is one RU, and every operation (including queries) is normalized to a fixed number of RUs based on its complexity. For example, if you have 1000 RU/s provisioned for your container, and you have a query likeSELECT * FROM c WHERE c.city = 'Seattle'that consumes 5 RUs, then you can execute (1000 RU/s) / (5 RU/query) = 200 of these queries per second.
+SELECT * FROM c WHERE c.city = 'Seattle'
+If you submit more than 200 queries/sec (or some other operations that saturate all provisioned RUs), the service starts rate-limiting incoming requests. The SDKs automatically handle rate-limiting by performing a backoff/retry, therefore you might notice higher latency for these queries. Increasing the provisioned throughput to the required value improves your query latency and throughput.
+To learn more about request units, seeRequest units.
+Partitioning and partition keys
+With Azure Cosmos DB, the following scenarios for reading data are ordered from what is typically fastest/most efficient to the slowest/least efficient.
+GET on a single partition key and item id, also known as a point read
+Query with a filter clause on a single partition key
+Query with an equality or range filter clause on any property
+Query without filters
+Queries that need to be executed on all partitions have higher latency, and can consume higher RUs. Since each partition has automatic indexing against all properties, the query can be served efficiently from the index in this case. You can make queries that span partitions faster by using the parallelism options.
+To learn more about partitioning and partition keys, seePartitioning in Azure Cosmos DB.
+SDK and query options
+Seequery performance tipsandperformance testingfor how to get the best client-side performance from Azure Cosmos DB using our SDKs.
+Network latency
+SeeAzure Cosmos DB global distributionfor how to set up global distribution and connect to the closest region. Network latency has a significant effect on query performance when you need to make multiple round-trips or retrieve a large result set from the query.
+You can usequery execution metricsto retrieve the server execution time of queries, allowing you to differentiate time spent in query execution from time spent in network transit.
+Indexing policy
+Seeconfiguring indexing policyfor indexing paths, kinds, and modes, and how they impact query execution. By default, Azure Cosmos DB applies automatic indexing to all data and uses range indexes for strings and numbers, which is effective for equality queries. For high performance insert scenarios, consider excluding paths to reduce the RU cost for each insert operation.
+You can use theindex metricsto identify which indexes are used for each query and if there are any missing indexes that would improve query performance.
+Query execution metrics
+Detailed metrics are returned for each query execution in theDiagnosticsfor the request. These metrics describe where time is spent during query execution and enable advanced troubleshooting.
+Learn more aboutgetting the query metrics.
+TotalTime
+DocumentLoadTime
+DocumentWriteTime
+IndexLookupTime
+QueryPreparationTime
+RuntimeExecutionTime
+VMExecutionTime
+OutputDocumentCount
+OutputDocumentSize
+RetrievedDocumentCount
+RetrievedDocumentSize
+IndexHitRatio
+The client SDKs can internally make multiple query requests to serve the query within each partition. The client makes more than one call per-partition if the total results exceed the max item count request option, if the query exceeds the provisioned throughput for the partition, if the query payload reaches the maximum size per page, or if the query reaches the system allocated timeout limit. Each partial query execution returns query metrics for that page.
+Here are some sample queries, and how to interpret some of the metrics returned from query execution:
+SELECT TOP 100 * FROM c
+"RetrievedDocumentCount": 101
+WriteOutputTime
+DocumentLoadTime
+SELECT TOP 500 * FROM c
+"RetrievedDocumentCount": 501
+SELECT * FROM c WHERE c.N = 55
+"IndexLookupTime": "00:00:00.0009500"
+/N/?
+SELECT * FROM c WHERE c.N > 55
+"IndexLookupTime": "00:00:00.0017700"
+/N/?
+SELECT TOP 500 c.N FROM c
+"IndexLookupTime": "00:00:00.0017700"
+DocumentLoadTime
+DocumentWriteTime
+SELECT TOP 500 udf.toPercent(c.N) FROM c
+"RuntimeExecutionTime": "00:00:00.2136500"
+RuntimeExecutionTime
+c.N
+SELECT TOP 500 c.Name FROM c WHERE STARTSWITH(c.Name, 'Den')
+"IndexLookupTime": "00:00:00.0006400", "RuntimeExecutionTime": "00:00:00.0074100"
+IndexLookupTime
+/Name/?
+RuntimeExecutionTime
+SELECT TOP 500 c.Name FROM c WHERE STARTSWITH(LOWER(c.Name), 'den')
+"IndexLookupTime": "00:00:00", "RetrievedDocumentCount": 2491,  "OutputDocumentCount": 500
+LOWER
+Next steps
+To learn about the supported SQL query operators and keywords, seeSQL query.
+To learn about request units, seerequest units.
+To learn about indexing policy, seeindexing policy
+Feedback
+Was this page helpful?
+Additional resources

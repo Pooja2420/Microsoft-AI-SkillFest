@@ -1,0 +1,197 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Azure Cosmos DB SDK observability
+Article
+2024-11-19
+2 contributors
+In this article
+APPLIES TO:NoSQL
+The Azure Cosmos DB .NET and Java SDKs support distributed tracing to help you monitor your applications. Tracing the flow of requests is helpful in debugging, analyzing latency and performance, and gathering diagnostics. Instrument tracing for your applications usingOpenTelemetry, which is vendor-neutral and has a set of semantic conventions to ensure a standardized data format regardless of your chosen exporter, or use theApplication Insights SDK or Azure Monitor OpenTelemetry Distro.
+Get started
+Distributed tracing is available in the following SDKs:
+3.36.0
+DisableDistributedTracing = false
+CosmosClientOptions.CosmosClientTelemetryOptions
+3.33.0-preview
+DisableDistributedTracing = true
+CosmosClientOptions.CosmosClientTelemetryOptions
+4.43.0
+Trace attributes
+Azure Cosmos DB traces follow theOpenTelemetry database specificationand also provide several custom attributes. You can see different attributes depending on the operation of your request, and these attributes are core attributes for all requests.
+net.peer.name
+db.name
+db.system
+cosmosdb
+db.operation
+CreateItemAsync
+db.cosmosdb.container
+db.cosmosdb.client_id
+db.cosmosdb.operation_type
+Create
+db.cosmosdb.connection_mode
+direct
+gateway
+db.cosmosdb.status_code
+db.cosmosdb.sub_status_code
+db.cosmosdb.request_charge
+db.cosmosdb.regions_contacted
+user_agent.original
+Gather diagnostics
+If you configured logs in your trace provider, you can automatically getdiagnosticsfor Azure Cosmos DB requests that failed or had high latency. These logs can help you diagnose failed and slow requests without requiring any custom code to capture them.
+.NET
+Java
+In addition to getting diagnostic logs for failed requests, you can configure different latency thresholds for when to collect diagnostics from successful requests. The default values are 100 ms for point operations and 500 ms for non point operations. These thresholds can be adjusted through client options.
+CosmosClientOptions options = new CosmosClientOptions()
+{
+    CosmosClientTelemetryOptions = new CosmosClientTelemetryOptions()
+    {
+        DisableDistributedTracing = false,
+        CosmosThresholdOptions = new CosmosThresholdOptions()
+        {
+            PointOperationLatencyThreshold = TimeSpan.FromMilliseconds(100),
+            NonPointOperationLatencyThreshold = TimeSpan.FromMilliseconds(500)
+        }
+    },
+};
+CosmosClientOptions options = new CosmosClientOptions()
+{
+    CosmosClientTelemetryOptions = new CosmosClientTelemetryOptions()
+    {
+        DisableDistributedTracing = false,
+        CosmosThresholdOptions = new CosmosThresholdOptions()
+        {
+            PointOperationLatencyThreshold = TimeSpan.FromMilliseconds(100),
+            NonPointOperationLatencyThreshold = TimeSpan.FromMilliseconds(500)
+        }
+    },
+};
+You can configure the log level to control which diagnostics logs you receive.
+Depending on your application environment, there are different ways to configure the log level. Here's a sample configuration inappSettings.json:
+appSettings.json
+{ 
+    "Logging": {â
+        "LogLevel": {â
+            "Azure-Cosmos-Operation-Request-Diagnostics": "Information"â
+        }â
+    }
+}
+{ 
+    "Logging": {â
+        "LogLevel": {â
+            "Azure-Cosmos-Operation-Request-Diagnostics": "Information"â
+        }â
+    }
+}
+In addition to getting diagnostic logs for failed requests, you can configure different conditions for when to collect diagnostics from successful requests. Conditions include a latency threshold for both point operations and non point operations and a threshold for requests that exceed a number of RUs. These thresholds can be set in the Azure Cosmos DB client.
+CosmosAsyncClient client = new CosmosClientBuilder()
+            .endpoint("<Your account endpoint>")
+            .key("<Your account key>")
+            .clientTelemetryConfig(new CosmosClientTelemetryConfig()
+                .diagnosticsThresholds(
+                    new CosmosDiagnosticsThresholds()
+                        .setPointOperationLatencyThreshold(Duration.ofMillis(100))
+                        .setNonPointOperationLatencyThreshold(Duration.ofMillis(2000))
+                        .setRequestChargeThreshold(100)))
+            .buildAsyncClient();
+CosmosAsyncClient client = new CosmosClientBuilder()
+            .endpoint("<Your account endpoint>")
+            .key("<Your account key>")
+            .clientTelemetryConfig(new CosmosClientTelemetryConfig()
+                .diagnosticsThresholds(
+                    new CosmosDiagnosticsThresholds()
+                        .setPointOperationLatencyThreshold(Duration.ofMillis(100))
+                        .setNonPointOperationLatencyThreshold(Duration.ofMillis(2000))
+                        .setRequestChargeThreshold(100)))
+            .buildAsyncClient();
+Configure OpenTelemetry
+To use OpenTelemetry with the Azure Cosmos DB SDKs, add theAzure.Cosmos.Operationsource to your trace provider. OpenTelemetry is compatible with many exporters that can ingest your data. The following sample uses theAzure Monitor OpenTelemetry Exporter, but you can choose to configure any exporter you wish. Depending on your chosen exporter, you might see a delay ingesting data of up to a few minutes.
+Azure.Cosmos.Operation
+Azure Monitor OpenTelemetry Exporter
+Tip
+If you use theAzure.Monitor.OpenTelemetry.Exporterpackage, ensure you're using version >=1.0.0-beta.11.
+If you're using ASP.NET Core and Azure Monitor, we recommend using theAzure Monitor OpenTelemetry Distroinstead.
+Azure.Monitor.OpenTelemetry.Exporter
+1.0.0-beta.11
+This sample shows how to configure OpenTelemetry for a .NET console app. See thecomplete sampleon GitHub.
+ResourceBuilder resource = ResourceBuilder.CreateDefault().AddService(
+            serviceName: serviceName,
+            serviceVersion: "1.0.0");
+
+// Set up logging to forward logs to chosen exporter
+using ILoggerFactory loggerFactory
+    = LoggerFactory.Create(builder => builder
+                                        .AddConfiguration(configuration.GetSection("Logging"))
+                                        .AddOpenTelemetry(options =>
+                                        {
+                                            options.IncludeFormattedMessage = true;
+                                            options.SetResourceBuilder(resource);
+                                            options.AddAzureMonitorLogExporter(o => o.ConnectionString = aiConnectionString); // Set up exporter of your choice
+                                        }));
+/*.AddFilter(level => level == LogLevel.Error) // Filter  is irrespective of event type or event name*/
+
+AzureEventSourceLogForwarder logforwader = new AzureEventSourceLogForwarder(loggerFactory);
+logforwader.Start();
+
+// Configure OpenTelemetry trace provider
+AppContext.SetSwitch("Azure.Experimental.EnableActivitySource", true);
+_traceProvider = Sdk.CreateTracerProviderBuilder()
+    .AddSource("Azure.Cosmos.Operation", // Cosmos DB source for operation level telemetry
+               "Sample.Application") 
+    .AddAzureMonitorTraceExporter(o => o.ConnectionString = aiConnectionString) // Set up exporter of your choice
+    .AddHttpClientInstrumentation() // Added to capture HTTP telemetry
+    .SetResourceBuilder(resource)
+    .Build();
+ResourceBuilder resource = ResourceBuilder.CreateDefault().AddService(
+            serviceName: serviceName,
+            serviceVersion: "1.0.0");
+
+// Set up logging to forward logs to chosen exporter
+using ILoggerFactory loggerFactory
+    = LoggerFactory.Create(builder => builder
+                                        .AddConfiguration(configuration.GetSection("Logging"))
+                                        .AddOpenTelemetry(options =>
+                                        {
+                                            options.IncludeFormattedMessage = true;
+                                            options.SetResourceBuilder(resource);
+                                            options.AddAzureMonitorLogExporter(o => o.ConnectionString = aiConnectionString); // Set up exporter of your choice
+                                        }));
+/*.AddFilter(level => level == LogLevel.Error) // Filter  is irrespective of event type or event name*/
+
+AzureEventSourceLogForwarder logforwader = new AzureEventSourceLogForwarder(loggerFactory);
+logforwader.Start();
+
+// Configure OpenTelemetry trace provider
+AppContext.SetSwitch("Azure.Experimental.EnableActivitySource", true);
+_traceProvider = Sdk.CreateTracerProviderBuilder()
+    .AddSource("Azure.Cosmos.Operation", // Cosmos DB source for operation level telemetry
+               "Sample.Application") 
+    .AddAzureMonitorTraceExporter(o => o.ConnectionString = aiConnectionString) // Set up exporter of your choice
+    .AddHttpClientInstrumentation() // Added to capture HTTP telemetry
+    .SetResourceBuilder(resource)
+    .Build();
+Configure the Application Insights SDK
+There are many different ways to configure Application Insights depending on the language your application is written in and your compute environment. For more information, see theApplication Insights documentation. Ingestion of data into Application Insights can take up to a few minutes.
+Note
+Use version >=2.22.0-beta2of the Application Insights package for your target .NET environment.
+2.22.0-beta2
+The following sample shows how to configure Application Insights for a .NET console app. See thecomplete sampleon GitHub.
+IServiceCollection services = new ServiceCollection();
+services.AddApplicationInsightsTelemetryWorkerService((ApplicationInsightsServiceOptions options) => options.ConnectionString = aiConnectionString);
+
+IServiceProvider serviceProvider = services.BuildServiceProvider();
+telemetryClient = serviceProvider.GetRequiredService<TelemetryClient>();
+IServiceCollection services = new ServiceCollection();
+services.AddApplicationInsightsTelemetryWorkerService((ApplicationInsightsServiceOptions options) => options.ConnectionString = aiConnectionString);
+
+IServiceProvider serviceProvider = services.BuildServiceProvider();
+telemetryClient = serviceProvider.GetRequiredService<TelemetryClient>();
+Once trace data is ingested into Application Insights, you can visualize it in the Azure portal to understand the request flow in your application. Here's an example of trace data from a cross partition query in the transaction search in the left navigation of the Azure portal.
+
+Next Steps
+Get started with the .NET SDK
+Get started with the Java SDK
+Monitor Azure Cosmos DB
+Feedback
+Was this page helpful?
+Additional resources

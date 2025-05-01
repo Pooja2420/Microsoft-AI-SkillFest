@@ -1,0 +1,251 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use Azure PowerShell to create a service principal with a certificate
+Article
+2025-04-16
+25 contributors
+In this article
+When you have an app or script that needs to access resources, you can set up an identity for the app and authenticate the app with its own credentials. This identity is known as a service principal. This approach enables you to:
+Assign permissions to the app identity that are different than your own permissions. Typically, these permissions are restricted to exactly what the app needs to do.
+Use a certificate for authentication when executing an unattended script.
+Important
+Instead of creating a service principal, consider using managed identities for Azure resources for your application identity. If your code runs on a service that supports managed identities and accesses resources that support Microsoft Entra authentication, managed identities are a better option for you. To learn more about managed identities for Azure resources, including which services currently support it, seeWhat is managed identities for Azure resources?.
+This article shows you how to create a service principal that authenticates with a certificate. To set up a service principal with password, seeCreate an Azure service principal with Azure PowerShell.
+You must have thelatest versionof PowerShell for this article.
+Note
+We recommend that you use the Azure Az PowerShell module to interact with Azure. SeeInstall Azure PowerShellto get started. To learn how to migrate to the Az PowerShell module, seeMigrate Azure PowerShell from AzureRM to Az.
+Required permissions
+To complete this article, you must have sufficient permissions in both your Microsoft Entra ID and Azure subscription. Specifically, you must be able to create an app in Microsoft Entra ID, and assign the service principal to a role.
+The easiest way to check whether your account has adequate permissions is through the Microsoft Entra admin center.
+Assign the application to a role
+To access resources in your subscription, you must assign the application to a role. Decide which role offers the right permissions for the application. To learn about the available roles, seeAzure built-in roles.
+You can set the scope at the level of the subscription, resource group, or resource. Permissions are inherited to lower levels of scope. For example, adding an application to theReaderrole for a resource group means it can read the resource group and any resources it contains. To allow the application to execute actions like reboot, start and stop instances, select theContributorrole.
+Create service principal with self-signed certificate
+The following example covers a simple scenario. It usesNew-âAzADâServiceâPrincipalto create a service principal with a self-signed certificate, and usesNew-AzRoleAssignmentto assign theReaderrole to the service principal. The role assignment is scoped to your currently selected Azure subscription. To select a different subscription, useSet-AzContext.
+Note
+The New-SelfSignedCertificate cmdlet and the PKI module are currently not supported in PowerShell Core.
+$cert = New-SelfSignedCertificate -CertStoreLocation "cert:\CurrentUser\My" `
+  -Subject "CN=exampleappScriptCert" `
+  -KeySpec KeyExchange
+$keyValue = [System.Convert]::ToBase64String($cert.GetRawCertData())
+
+$sp = New-AzADServicePrincipal -DisplayName exampleapp `
+  -CertValue $keyValue `
+  -EndDate $cert.NotAfter `
+  -StartDate $cert.NotBefore
+Sleep 20
+New-AzRoleAssignment -RoleDefinitionName Reader -ServicePrincipalName $sp.AppId
+$cert = New-SelfSignedCertificate -CertStoreLocation "cert:\CurrentUser\My" `
+  -Subject "CN=exampleappScriptCert" `
+  -KeySpec KeyExchange
+$keyValue = [System.Convert]::ToBase64String($cert.GetRawCertData())
+
+$sp = New-AzADServicePrincipal -DisplayName exampleapp `
+  -CertValue $keyValue `
+  -EndDate $cert.NotAfter `
+  -StartDate $cert.NotBefore
+Sleep 20
+New-AzRoleAssignment -RoleDefinitionName Reader -ServicePrincipalName $sp.AppId
+The example sleeps for 20 seconds to allow some time for the new service principal to propagate throughout Microsoft Entra ID. If your script doesn't wait long enough, you'll see an error stating: "Principal {ID} doesn't exist in the directory {DIR-ID}." To resolve this error, wait a moment then run theNew-AzRoleAssignmentcommand again.
+You can scope the role assignment to a specific resource group by using theResourceGroupNameparameter. You can scope to a specific resource by also using theResourceTypeandResourceNameparameters.
+If youdo not have Windows 10 or Windows Server 2016, download theNew-SelfSignedCertificateEx cmdletfrom PKI Solutions. Extract its contents and import the cmdlet you need.
+# Only run if you could not use New-SelfSignedCertificate
+Import-Module -Name c:\ExtractedModule\New-SelfSignedCertificateEx.ps1
+# Only run if you could not use New-SelfSignedCertificate
+Import-Module -Name c:\ExtractedModule\New-SelfSignedCertificateEx.ps1
+In the script, substitute the following two lines to generate the certificate.
+New-SelfSignedCertificateEx -StoreLocation CurrentUser `
+  -Subject "CN=exampleapp" `
+  -KeySpec "Exchange" `
+  -FriendlyName "exampleapp"
+$cert = Get-ChildItem -path Cert:\CurrentUser\my | where {$PSitem.Subject -eq 'CN=exampleapp' }
+New-SelfSignedCertificateEx -StoreLocation CurrentUser `
+  -Subject "CN=exampleapp" `
+  -KeySpec "Exchange" `
+  -FriendlyName "exampleapp"
+$cert = Get-ChildItem -path Cert:\CurrentUser\my | where {$PSitem.Subject -eq 'CN=exampleapp' }
+Provide certificate through automated PowerShell script
+Whenever you sign in as a service principal, provide the tenant ID of the directory for your AD app. A tenant is an instance of Microsoft Entra ID.
+$TenantId = (Get-AzSubscription -SubscriptionName "Contoso Default").TenantId
+$ApplicationId = (Get-AzADApplication -DisplayNameStartWith exampleapp).AppId
+
+$Thumbprint = (Get-ChildItem cert:\CurrentUser\My\ | Where-Object {$_.Subject -eq "CN=exampleappScriptCert" }).Thumbprint
+Connect-AzAccount -ServicePrincipal `
+  -CertificateThumbprint $Thumbprint `
+  -ApplicationId $ApplicationId `
+  -TenantId $TenantId
+$TenantId = (Get-AzSubscription -SubscriptionName "Contoso Default").TenantId
+$ApplicationId = (Get-AzADApplication -DisplayNameStartWith exampleapp).AppId
+
+$Thumbprint = (Get-ChildItem cert:\CurrentUser\My\ | Where-Object {$_.Subject -eq "CN=exampleappScriptCert" }).Thumbprint
+Connect-AzAccount -ServicePrincipal `
+  -CertificateThumbprint $Thumbprint `
+  -ApplicationId $ApplicationId `
+  -TenantId $TenantId
+Create service principal with certificate from Certificate Authority
+The following example uses a certificate issued from a Certificate Authority to create service principal. The assignment is scoped to the specified Azure subscription. It adds the service principal to theReaderrole. If an error occurs during the role assignment, it retries the assignment.
+Param (
+ [Parameter(Mandatory=$true)]
+ [String] $ApplicationDisplayName,
+
+ [Parameter(Mandatory=$true)]
+ [String] $SubscriptionId,
+
+ [Parameter(Mandatory=$true)]
+ [String] $CertPath,
+
+ [Parameter(Mandatory=$true)]
+ [String] $CertPlainPassword
+ )
+
+ Connect-AzAccount
+ Import-Module Az.Resources
+ Set-AzContext -Subscription $SubscriptionId
+
+ $CertPassword = ConvertTo-SecureString $CertPlainPassword -AsPlainText -Force
+
+ $PFXCert = New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList @($CertPath, $CertPassword)
+ $KeyValue = [System.Convert]::ToBase64String($PFXCert.GetRawCertData())
+
+ $ServicePrincipal = New-AzADServicePrincipal -DisplayName $ApplicationDisplayName
+ New-AzADSpCredential -ObjectId $ServicePrincipal.Id -CertValue $KeyValue -StartDate $PFXCert.NotBefore -EndDate $PFXCert.NotAfter
+ Get-AzADServicePrincipal -ObjectId $ServicePrincipal.Id 
+
+ $NewRole = $null
+ $Retries = 0;
+ While ($NewRole -eq $null -and $Retries -le 6)
+ {
+    # Sleep here for a few seconds to allow the service principal application to become active (should only take a couple of seconds normally)
+    Sleep 15
+    New-AzRoleAssignment -RoleDefinitionName Reader -ServicePrincipalName $ServicePrincipal.AppId | Write-Verbose -ErrorAction SilentlyContinue
+    $NewRole = Get-AzRoleAssignment -ObjectId $ServicePrincipal.Id -ErrorAction SilentlyContinue
+    $Retries++;
+ }
+
+ $NewRole
+Param (
+ [Parameter(Mandatory=$true)]
+ [String] $ApplicationDisplayName,
+
+ [Parameter(Mandatory=$true)]
+ [String] $SubscriptionId,
+
+ [Parameter(Mandatory=$true)]
+ [String] $CertPath,
+
+ [Parameter(Mandatory=$true)]
+ [String] $CertPlainPassword
+ )
+
+ Connect-AzAccount
+ Import-Module Az.Resources
+ Set-AzContext -Subscription $SubscriptionId
+
+ $CertPassword = ConvertTo-SecureString $CertPlainPassword -AsPlainText -Force
+
+ $PFXCert = New-Object -TypeName System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList @($CertPath, $CertPassword)
+ $KeyValue = [System.Convert]::ToBase64String($PFXCert.GetRawCertData())
+
+ $ServicePrincipal = New-AzADServicePrincipal -DisplayName $ApplicationDisplayName
+ New-AzADSpCredential -ObjectId $ServicePrincipal.Id -CertValue $KeyValue -StartDate $PFXCert.NotBefore -EndDate $PFXCert.NotAfter
+ Get-AzADServicePrincipal -ObjectId $ServicePrincipal.Id 
+
+ $NewRole = $null
+ $Retries = 0;
+ While ($NewRole -eq $null -and $Retries -le 6)
+ {
+    # Sleep here for a few seconds to allow the service principal application to become active (should only take a couple of seconds normally)
+    Sleep 15
+    New-AzRoleAssignment -RoleDefinitionName Reader -ServicePrincipalName $ServicePrincipal.AppId | Write-Verbose -ErrorAction SilentlyContinue
+    $NewRole = Get-AzRoleAssignment -ObjectId $ServicePrincipal.Id -ErrorAction SilentlyContinue
+    $Retries++;
+ }
+
+ $NewRole
+Provide certificate through automated PowerShell script
+Whenever you sign in as a service principal, provide the tenant ID of the directory for your AD app. A tenant is an instance of Microsoft Entra ID.
+Param (
+
+ [Parameter(Mandatory=$true)]
+ [String] $CertPath,
+
+ [Parameter(Mandatory=$true)]
+ [String] $CertPlainPassword,
+
+ [Parameter(Mandatory=$true)]
+ [String] $ApplicationId,
+
+ [Parameter(Mandatory=$true)]
+ [String] $TenantId
+ )
+
+ $CertPassword = ConvertTo-SecureString $CertPlainPassword -AsPlainText -Force
+ $PFXCert = New-Object `
+  -TypeName System.Security.Cryptography.X509Certificates.X509Certificate2 `
+  -ArgumentList @($CertPath, $CertPassword)
+ $Thumbprint = $PFXCert.Thumbprint
+
+ Connect-AzAccount -ServicePrincipal `
+  -CertificateThumbprint $Thumbprint `
+  -ApplicationId $ApplicationId `
+  -TenantId $TenantId
+Param (
+
+ [Parameter(Mandatory=$true)]
+ [String] $CertPath,
+
+ [Parameter(Mandatory=$true)]
+ [String] $CertPlainPassword,
+
+ [Parameter(Mandatory=$true)]
+ [String] $ApplicationId,
+
+ [Parameter(Mandatory=$true)]
+ [String] $TenantId
+ )
+
+ $CertPassword = ConvertTo-SecureString $CertPlainPassword -AsPlainText -Force
+ $PFXCert = New-Object `
+  -TypeName System.Security.Cryptography.X509Certificates.X509Certificate2 `
+  -ArgumentList @($CertPath, $CertPassword)
+ $Thumbprint = $PFXCert.Thumbprint
+
+ Connect-AzAccount -ServicePrincipal `
+  -CertificateThumbprint $Thumbprint `
+  -ApplicationId $ApplicationId `
+  -TenantId $TenantId
+The application ID and tenant ID aren't sensitive, so you can embed them directly in your script. If you need to retrieve the tenant ID, use:
+(Get-AzSubscription -SubscriptionName "Contoso Default").TenantId
+(Get-AzSubscription -SubscriptionName "Contoso Default").TenantId
+If you need to retrieve the application ID, use:
+(Get-AzADApplication -DisplayNameStartWith {display-name}).AppId
+(Get-AzADApplication -DisplayNameStartWith {display-name}).AppId
+Change credentials
+To change the credentials for an AD app, either because of a security compromise or a credential expiration, use theRemove-AzADAppCredentialandNew-AzADAppCredentialcmdlets.
+To remove all the credentials for an application, use:
+Get-AzADApplication -DisplayName exampleapp | Remove-AzADAppCredential
+Get-AzADApplication -DisplayName exampleapp | Remove-AzADAppCredential
+To add a certificate value, create a self-signed certificate as shown in this article. Then, use:
+Get-AzADApplication -DisplayName exampleapp | New-AzADAppCredential `
+  -CertValue $keyValue `
+  -EndDate $cert.NotAfter `
+  -StartDate $cert.NotBefore
+Get-AzADApplication -DisplayName exampleapp | New-AzADAppCredential `
+  -CertValue $keyValue `
+  -EndDate $cert.NotAfter `
+  -StartDate $cert.NotBefore
+Debug
+You may get the following errors when creating a service principal:
+"Authentication_Unauthorized"or"No subscription found in the context."- You see this error when your account doesn't have therequired permissionson the Microsoft Entra ID to register an app. Typically, you see this error when only admin users in your Microsoft Entra ID can register apps, and your account isn't an admin. Ask your administrator to either assign you to an administrator role, or to enable users to register apps.
+"Authentication_Unauthorized"or"No subscription found in the context."- You see this error when your account doesn't have therequired permissionson the Microsoft Entra ID to register an app. Typically, you see this error when only admin users in your Microsoft Entra ID can register apps, and your account isn't an admin. Ask your administrator to either assign you to an administrator role, or to enable users to register apps.
+Your account"does not have authorization to perform action 'Microsoft.Authorization/roleAssignments/write' over scope '/subscriptions/{guid}'."- You see this error when your account doesn't have sufficient permissions to assign a role to an identity. Ask your subscription administrator to add you to User Access Administrator role.
+Your account"does not have authorization to perform action 'Microsoft.Authorization/roleAssignments/write' over scope '/subscriptions/{guid}'."- You see this error when your account doesn't have sufficient permissions to assign a role to an identity. Ask your subscription administrator to add you to User Access Administrator role.
+Next steps
+To set up a service principal with password, seeCreate an Azure service principal with Azure PowerShellorCreate an Azure service principal with Azure CLI.
+For a more detailed explanation of applications and service principals, seeApplication Objects and Service Principal Objects.
+For more information about Microsoft Entra authentication, seeAuthentication Scenarios for Microsoft Entra ID.
+For information about working with app registrations by usingMicrosoft Graph, see theApplicationsAPI reference.
+Feedback
+Was this page helpful?
+Additional resources

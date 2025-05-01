@@ -1,0 +1,296 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Query store
+Article
+2024-11-19
+10 contributors
+In this article
+APPLIES TO:Azure Database for PostgreSQL - Flexible Server
+Query store is a feature in Azure Database for PostgreSQL flexible server that provides a way to track query performance over time. Query store simplifies the troubleshooting of performance issues by helping you quickly find the longest running and most resource-intensive queries. Query store automatically captures a history of queries and runtime statistics, and retains them for your review. It slices the data by time so that you can see temporal usage patterns. Data for all users, databases, and queries is stored in a database namedazure_sysin the Azure Database for PostgreSQL flexible server instance.
+azure_sys
+Enable query store
+Query store is available to use with no extra charges. It's an opt-in feature, so it isn't enabled by default on a server. Query store can be enabled or disabled globally for all databases on a given server and can't be turned on or off per database.
+Important
+Do not enable query store on Burstable pricing tier as it would cause performance impact.
+Enable query store in Azure portal
+Sign in to the Azure portal and select your Azure Database for PostgreSQL flexible server instance.
+SelectServer parametersin theSettingssection of the menu.
+Search for thepg_qs.query_capture_modeparameter.
+pg_qs.query_capture_mode
+Set the value totoporall, depending on whether you want to track top-level queries or also nested queries (the ones which execute inside a function or procedure), and selectSave.
+Allow up to 20 minutes for the first batch of data to persist in theazure_sysdatabase.
+top
+all
+azure_sys
+Enable query store wait sampling
+Search for thepgms_wait_sampling.query_capture_modeparameter.
+pgms_wait_sampling.query_capture_mode
+Set the value toallandSave.
+all
+Information in query store
+A runtime stats store for persisting the query execution statistics information.
+A wait stats store for persisting wait statistics information.
+Determining the number of times a query was executed in a given time window.
+Comparing the average execution time of a query across time windows to see large variations.
+Identifying longest running queries in the past few hours.
+Identifying top N queries that are waiting on resources.
+Understanding nature of the waits for a particular query.
+To minimize space usage, the runtime execution statistics in the runtime stats store are aggregated over a fixed, configurable time window. The information in these stores can be queried using views.
+Access query store information
+Query store data is stored in theazure_sysdatabase on your Azure Database for PostgreSQL flexible server instance.
+The following query returns information about queries which were recorded in query store:
+azure_sys
+SELECT * FROM  query_store.qs_view;
+SELECT * FROM  query_store.qs_view;
+And this query returns information about waiting statistics:
+SELECT * FROM  query_store.pgms_wait_sampling_view;
+SELECT * FROM  query_store.pgms_wait_sampling_view;
+Find wait queries
+Wait event types combine different wait events into buckets by similarity. Query store provides the wait event type, specific wait event name, and the query in question. Being able to correlate this wait information with the query runtime statistics means you can gain a deeper understanding of what contributes to query performance characteristics.
+Here are some examples of how you can gain more insights into your workload using the wait statistics in query store:
+Configuration options
+When query store is enabled, it saves data in aggregation windows of length determined by thepg_qs.interval_length_minutesserver parameter (defaults to 15 minutes). For each window, it stores up to 500 distinct queries per window. Attributes that distinguish the uniqueness of each query are user_id (identifier of the user who executes the query), db_id (identifier of the database in whose context the query executes), and query_id (an integer value uniquely identifying the query executed). If the number of distinct queries reaches 500 during the configured interval, 5% of the ones that are recorded are deallocated to make room for more. The ones deallocated first are the ones which were executed the least number of times.
+The following options are available for configuring Query Store parameters:
+pg_qs.interval_length_minutes
+15
+1
+30
+pg_qs.is_enabled_fs
+pg_qs.query_capture_mode
+on
+on
+off
+pg_qs.max_plan_size
+7500
+100
+10000
+pg_qs.max_query_text_length
+6000
+100
+10000
+pg_qs.parameters_capture_mode
+capture_parameterless_only
+capture_parameterless_only
+capture_first_sample
+pg_qs.query_capture_mode
+none
+none
+top
+all
+pg_qs.retention_period_in_days
+7
+1
+30
+pg_qs.store_query_plans
+off
+on
+off
+pg_qs.track_utility
+on
+on
+off
+(*) Static server parameter which requires a server restart for a change in its value to take effect.
+Note
+If you change the value forpg_qs.max_query_text_lengthparameter, the text of all queries that were captured before you make the change continue to use the same query_id and sql_query_text. It might give the impression that the new value doesn't take effect but, for queries that weren't recorded in query store before, you will see that the query text uses the newly configured maximum length. This is by design, and is explained atViews and functions. If you executequery_store.qs_reset, it removes all the information recorded by query store until now, including the text that was captured for each query ID, and if any of those queries is executed again, the newly configured maximum length is applied to the text being captured.
+pg_qs.max_query_text_length
+The following options apply specifically to wait statistics:
+pgms_wait_sampling.history_period
+100
+1
+600000
+pgms_wait_sampling.is_enabled_fs
+off
+pgms_wait_sampling.query_capture_mode
+on
+on
+off
+pgms_wait_sampling.query_capture_mode
+pgms_wait_sampling
+none
+none
+all
+Note
+pg_qs.query_capture_modesupersedespgms_wait_sampling.query_capture_mode. Ifpg_qs.query_capture_modeisnone, thepgms_wait_sampling.query_capture_modesetting has no effect.
+pg_qs.query_capture_mode
+pgms_wait_sampling.query_capture_mode
+pg_qs.query_capture_mode
+none
+pgms_wait_sampling.query_capture_mode
+Use theAzure portalto get or set a different value for a parameter.
+Views and functions
+You can query the information recorded by query store and or delete it using some views and functions available in thequery_storeschema of theazure_sysdatabase. Anyone in the PostgreSQL public role can use these views to see the data in query store. These views are only available in theazure_sysdatabase.
+query_store
+azure_sys
+Queries are normalized by looking at their structure and ignoring anything not semantically significant, like literals, constants, aliases, or differences in casing.
+If two queries are semantically identical, even if they use different aliases for the same referenced columns and tables, they're identified with the same query_id. If two queries only differ in the literal values used in them, they're also identified with the same query_id. For queries identified with the same query_id, their sql_query_text is that of the query that executed first since query store started recording activity, or since the last time the persisted data was discarded because the functionquery_store.qs_resetwas executed.
+How query normalization works
+Following are some examples to try to illustrate how this normalization works:
+Say that you create a table with the following statement:
+create table tableOne (columnOne int, columnTwo int);
+create table tableOne (columnOne int, columnTwo int);
+You enable Query Store data collection, and a single or multiple users execute the following queries, in this exact order:
+select * from tableOne;
+select columnOne, columnTwo from tableOne;
+select columnOne as c1, columnTwo as c2 from tableOne as t1;
+select columnOne as "column one", columnTwo as "column two" from tableOne as "table one";
+select * from tableOne;
+select columnOne, columnTwo from tableOne;
+select columnOne as c1, columnTwo as c2 from tableOne as t1;
+select columnOne as "column one", columnTwo as "column two" from tableOne as "table one";
+All the previous queries share the same query_id. And the text that Query Store keeps is that of the first query executed after enabling data collection. Therefore, it would beselect * from tableOne;.
+select * from tableOne;
+The following set of queries, once normalized, don't match the previous set of queries because the WHERE clause makes them semantically different:
+select columnOne as c1, columnTwo as c2 from tableOne as t1 where columnOne = 1 and columnTwo = 1;
+select * from tableOne where columnOne = -3 and columnTwo = -3;
+select columnOne, columnTwo from tableOne where columnOne = '5' and columnTwo = '5';
+select columnOne as "column one", columnTwo as "column two" from tableOne as "table one" where columnOne = 7 and columnTwo = 7;
+select columnOne as c1, columnTwo as c2 from tableOne as t1 where columnOne = 1 and columnTwo = 1;
+select * from tableOne where columnOne = -3 and columnTwo = -3;
+select columnOne, columnTwo from tableOne where columnOne = '5' and columnTwo = '5';
+select columnOne as "column one", columnTwo as "column two" from tableOne as "table one" where columnOne = 7 and columnTwo = 7;
+However, all queries in this last set share the same query_id and the text used to identify them all is that of the first query in the batchselect columnOne as c1, columnTwo as c2 from tableOne as t1 where columnOne = 1 and columnTwo = 1;.
+select columnOne as c1, columnTwo as c2 from tableOne as t1 where columnOne = 1 and columnTwo = 1;
+Finally, find below some queries not matching the query_id of the ones in the previous batch, and the reason why they don't:
+Query:
+select columnTwo as c2, columnOne as c1 from tableOne as t1 where columnOne = 1 and columnTwo = 1;
+select columnTwo as c2, columnOne as c1 from tableOne as t1 where columnOne = 1 and columnTwo = 1;
+Reason for not matching:
+List of columns refers to the same two columns (columnOne and ColumnTwo), but the order in which they're referred is reversed, fromcolumnOne, ColumnTwoin the previous batch toColumnTwo, columnOnein this query.
+columnOne, ColumnTwo
+ColumnTwo, columnOne
+Query:
+select * from tableOne where columnTwo = 25 and columnOne = 25;
+select * from tableOne where columnTwo = 25 and columnOne = 25;
+Reason for not matching:
+Order in which the expressions evaluated in the WHERE clause are referred is reversed fromcolumnOne = ? and ColumnTwo = ?in the previous batch toColumnTwo = ? and columnOne = ?in this query.
+columnOne = ? and ColumnTwo = ?
+ColumnTwo = ? and columnOne = ?
+Query:
+select abs(columnOne), columnTwo from tableOne where columnOne = 12 and columnTwo = 21;
+select abs(columnOne), columnTwo from tableOne where columnOne = 12 and columnTwo = 21;
+Reason for not matching:
+The first expression in the column list isn'tcolumnOneanymore, but functionabsevaluated overcolumnOne(abs(columnOne)), which isn't semantically equivalent.
+columnOne
+abs
+columnOne
+abs(columnOne)
+Query:
+select columnOne as "column one", columnTwo as "column two" from tableOne as "table one" where columnOne = ceiling(16) and columnTwo = 16;
+select columnOne as "column one", columnTwo as "column two" from tableOne as "table one" where columnOne = ceiling(16) and columnTwo = 16;
+Reason for not matching:
+The first expression in the WHERE clause doesn't evaluate the equality ofcolumnOnewith a literal anymore, but with the result of functionceilingevaluated over a literal, which isn't semantically equivalent.
+columnOne
+ceiling
+Views
+This view returns all the data that is persisted in the supporting tables of query store. Data that is still recording  in-memory for the currently active time window, isn't visible until the time window comes to an end, and its in-memory volatile data is collected and persisted to tables stored on disk. This view returns a different row for each distinct database (db_id), user (user_id), and query (query_id).
+runtime_stats_entry_id
+user_id
+db_id
+query_id
+query_sql_text
+pg_qs.max_query_text_length
+pg_qs.max_query_text_length
+plan_id
+start_time
+pg_qs.interval_length_minutes
+end_time
+calls
+total_time
+min_time
+max_time
+mean_time
+stddev_time
+rows
+shared_blks_hit
+shared_blks_read
+shared_blks_dirtied
+shared_blks_written
+local_blks_hit
+local_blks_read
+local_blks_dirtied
+local_blks_written
+temp_blks_read
+temp_blks_written
+blk_read_time
+blk_write_time
+is_system_query
+query_type
+unknown
+select
+update
+insert
+delete
+merge
+utility
+nothing
+undefined
+search_path
+query_parameters
+pg_qs.parameters_capture_mode
+capture_first_sample
+parameters_capture_status
+succeeded
+disabled
+pg_qs.parameters_capture_mode
+capture_parameterless_only
+too_long_to_capture
+query_parameters
+too_many_to_capture
+serialization_failed
+This view returns query text data in Query Store. There's one row for each distinct query_sql_text.
+query_text_id
+query_sql_text
+query_type
+0
+1
+2
+3
+4
+5
+6
+0
+1
+2
+3
+4
+5
+6
+7
+This view returns wait events data in Query Store. This view returns a different row for each distinct database (db_id), user (user_id), query (query_id), and event (event).
+start_time
+pg_qs.interval_length_minutes
+end_time
+user_id
+db_id
+query_id
+event_type
+event
+calls
+Note
+For a list of possible values in theevent_typeandeventcolumns of thequery_store.pgms_wait_sampling_viewview, refer to the official documentation ofpg_stat_activityand look for the information referring to columns with the same names.
+event_type
+event
+query_store.pgms_wait_sampling_view
+This view returns the query plan that was used to execute a query. There's one row per each distinct database ID, and query ID. Query store only records query plans for nonutility queries.
+plan_id
+db_id
+query_id
+plan_text
+Functions
+This function discards all statistics gathered so far by query store. It discards the statistics for already closed time windows, which are already persisted to on-disk tables. It also discards the statistics for the current time window, which only exist in-memory. Only members of the server admin role (azure_pg_admin) can execute this function.
+azure_pg_admin
+This function discards all statistics gathered in-memory by query store (that is, the data in memory that isn't flushed yet to the on disk tables supporting persistence of collected data for query store). Only members of the server admin role (azure_pg_admin) can execute this function.
+azure_pg_admin
+Read-only mode
+When an Azure Database for PostgreSQL flexible server is in read-only mode, such as when thedefault_transaction_read_onlyparameter is set toon, or if read-only mode isautomatically enabled due to reaching storage capacity, query store doesn't capture any data.
+default_transaction_read_only
+on
+Enabling query store on a server that hasread replicas, doesn't automatically enable query store on any of the read replicas. Even if you enable it on any of the read replicas, query store doesn't record the queries executed on any read replicas, because they operate in read-only mode until you promote them to primary.
+Related content
+Usage scenarios for query store
+Best practices for query store
+Query Performance Insight
+Feedback
+Was this page helpful?
+Additional resources

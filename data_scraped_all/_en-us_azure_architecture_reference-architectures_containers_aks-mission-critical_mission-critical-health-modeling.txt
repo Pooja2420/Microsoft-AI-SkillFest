@@ -1,0 +1,121 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Health modeling for mission-critical workloads
+Article
+2025-01-23
+8 contributors
+In this article
+The monitoring of applications and infrastructure is an important part of any infrastructure deployment. For a mission-critical workload, monitoring is a critical part of the deployment. Monitoring application health and key metrics of Azure resources helps you understand if the environment is working as expected.
+To fully understand these metrics and evaluate the overall health of a workload, requires a holistic understanding of all of the data monitored. A health model can assist with evaluation of the overall health status by displaying a clear indication of the health of the workload instead of raw metrics. The status is often presented as "traffic light" indicators such as red, green, or yellow. Representation of a health model with clear indicators makes it intuitive for an operator to understand the overall health of the workload and respond quickly to issues that arise.
+Health modeling can be expanded into the following operational tasks for the mission-critical deployment:
+Application Health Service- Application component on the compute cluster that provides an API to determine the health of a stamp.
+Application Health Service- Application component on the compute cluster that provides an API to determine the health of a stamp.
+Monitoring- Collection of performance and application counters that evaluate the health and performance of the application and infrastructure.
+Monitoring- Collection of performance and application counters that evaluate the health and performance of the application and infrastructure.
+Alerting- Actionable alerts of issues or outages in the infrastructure and application.
+Alerting- Actionable alerts of issues or outages in the infrastructure and application.
+Failure analysis- Breakdown and analysis of any failures including documentation of root cause.
+Failure analysis- Breakdown and analysis of any failures including documentation of root cause.
+These tasks make up a comprehensive health model for the mission-critical infrastructure. Development of a health model can and should be an exhaustive and integral part of any mission-critical deployment.
+For more information, seeHealth modeling and observability of mission-critical workloads on Azure.
+Application Health Service
+The Application Health Service (HealthService) is an application component that resides with the Catalog Service (CatalogService) and the Background Processor (BackgroundProcessor) within the compute cluster. TheHealthServiceprovides a REST API for Azure Front Door to call to determine the health of a stamp. TheHealthServiceis a complex component that reflects the state of dependencies, in addition to its own.
+When the compute cluster is down, the health service doesn't respond. When the services are up and running, it performs periodic checks against the following components in the infrastructure:
+It attempts to do a query against Azure Cosmos DB.
+It attempts to do a query against Azure Cosmos DB.
+It attempts to send a message to Event Hubs. The background worker filters out the message.
+It attempts to send a message to Event Hubs. The background worker filters out the message.
+It looks up a state file in the storage account. This file can be used to turn off a region, even while the other checks are still operating correctly. This file can be used to communicate with other processes. For example, if the stamp is to be vacated for maintenance purposes, the file could be deleted in order to force an unhealthy state and reroute traffic.
+It looks up a state file in the storage account. This file can be used to turn off a region, even while the other checks are still operating correctly. This file can be used to communicate with other processes. For example, if the stamp is to be vacated for maintenance purposes, the file could be deleted in order to force an unhealthy state and reroute traffic.
+It queries the health model to determine if all operational metrics are within the predetermined thresholds. When the health model indicates the stamp is unhealthy, traffic shouldn't be routed to the stamp even though the other tests the HealthService performs return successfully. The Health Model takes a more complete view of the health status into account.
+It queries the health model to determine if all operational metrics are within the predetermined thresholds. When the health model indicates the stamp is unhealthy, traffic shouldn't be routed to the stamp even though the other tests the HealthService performs return successfully. The Health Model takes a more complete view of the health status into account.
+All health check results are cached in memory for a configurable number of seconds, by default 10. This operation does potentially add a small latency in detecting outages, but it ensures not every HealthService query requires backend calls, thus reducing load on the cluster and downstream services.
+This caching pattern is important, because the number of HealthService queries grows significantly when using a global router like Azure Front Door: Every edge node in every Azure datacenter that serves requests call the Health Service to determine if it has a functional backend connection. Caching the results reduces extra cluster load generated by health checks.
+Configuration
+TheHealthServiceand theCatalogServicehave configuration settings common between the components except for the following settings used exclusively by theHealthService:
+HealthServiceCacheDurationSeconds
+HealthServiceStorageConnectionString
+HealthServiceBlobContainerName
+HealthServiceBlobName
+HealthServiceOverallTimeoutSeconds
+Implementation
+All checks are performed asynchronously andin parallel. If either of them fails,the whole stamp will be considered unavailable.
+Check results are cached in memory, using the standard, nondistributed ASP.NET CoreMemoryCache.SysConfig.HealthServiceCacheDurationSecondscontrols cache expiration. The default setting is 10 seconds.
+MemoryCache
+SysConfig.HealthServiceCacheDurationSeconds
+Note
+TheSysConfig.HealthServiceCacheDurationSecondsconfiguration setting reduces the extra load generated by health checks as not every request results in downstream call to the dependent services.
+SysConfig.HealthServiceCacheDurationSeconds
+The following table details the health checks for the components in the infrastructure:
+EventHubProducerService
+HEALTHCHECK=TRUE
+AlwaysOn.BackgroundProcessor.EventHubProcessorService.ProcessEventHandlerAsync()
+HEALTHCHECK
+CosmosDbService
+For the Read-only query, the following query is being used, which doesn't fetch any data and doesn't have a large effect on overall load:
+SELECT GetCurrentDateTime ()
+SELECT GetCurrentDateTime ()
+The write query creates a dummyItemRatingwith minimum content:
+ItemRating
+var testRating = new ItemRating()
+{
+    Id = Guid.NewGuid(),
+    CatalogItemId = Guid.NewGuid(), // Create some random (=non-existing) item id
+    CreationDate = DateTime.UtcNow,
+    Rating = 1,
+    TimeToLive = 10 // will be auto-deleted after 10sec
+};
+
+await AddNewRatingAsync(testRating);
+var testRating = new ItemRating()
+{
+    Id = Guid.NewGuid(),
+    CatalogItemId = Guid.NewGuid(), // Create some random (=non-existing) item id
+    CreationDate = DateTime.UtcNow,
+    Rating = 1,
+    TimeToLive = 10 // will be auto-deleted after 10sec
+};
+
+await AddNewRatingAsync(testRating);
+Monitoring
+Azure Log Analytics is used as the central store fo logs and metrics for all application and infrastructure components. Azure Application Insights is used for all application monitoring data. Each stamp in the infrastructure has a dedicated Log Analytics workspace and Application Insights instance. A separate Log Analytics workspace is used for the globally shared resources such as Front Door and Azure Cosmos DB.
+All stamps are short-lived and continuously replaced with each new release. The per-stamp Log Analytics workspaces are deployed as a global resource in a separate monitoring resource group as the stamp Log Analytics resources. These resources don't share the lifecycle of a stamp.
+For more information, seeUnified data sink for correlated analysis.
+Monitoring: Data sources
+Diagnostic settings: All Azure services used for Azure Mission-Critical are configured to send all their Diagnostic data including logs and metrics to the deployment specific (global or stamp) Log Analytics Workspace. This process happens automatically as part of the Terraform deployment. New options are identified automatically and added as part ofterraform apply.
+Diagnostic settings: All Azure services used for Azure Mission-Critical are configured to send all their Diagnostic data including logs and metrics to the deployment specific (global or stamp) Log Analytics Workspace. This process happens automatically as part of the Terraform deployment. New options are identified automatically and added as part ofterraform apply.
+terraform apply
+Kubernetes monitoring: Diagnostic settings are used to send Azure Kubernetes Service (AKS) logs and metrics to Log Analytics. AKS is configured to useContainer Insights. Container Insights deploys theOMSAgentForLinusvia a Kubernetes DaemonSet on each node in the AKS clusters. The OMSAgentForLinux is capable of collecting extra logs and metrics from within the Kubernetes cluster and sends them to its corresponding Log Analytics workspace. These extra logs and metrics contain more granular data about pods, deployments, services, and the overall cluster health. To gain more insights from the various components like ingress-nginx, cert-manager, and other components deployed to Kubernetes next to the mission-critical workload, it's possible to usePrometheus scraping. Prometheus scraping configures the OMSAgentForLinux to scrape Prometheus metrics from various endpoints within the cluster.
+Kubernetes monitoring: Diagnostic settings are used to send Azure Kubernetes Service (AKS) logs and metrics to Log Analytics. AKS is configured to useContainer Insights. Container Insights deploys theOMSAgentForLinusvia a Kubernetes DaemonSet on each node in the AKS clusters. The OMSAgentForLinux is capable of collecting extra logs and metrics from within the Kubernetes cluster and sends them to its corresponding Log Analytics workspace. These extra logs and metrics contain more granular data about pods, deployments, services, and the overall cluster health. To gain more insights from the various components like ingress-nginx, cert-manager, and other components deployed to Kubernetes next to the mission-critical workload, it's possible to usePrometheus scraping. Prometheus scraping configures the OMSAgentForLinux to scrape Prometheus metrics from various endpoints within the cluster.
+Application Insights data monitoring: Application Insights is used to collect monitoring data from the application. The code is instrumented to collect data on the performance of the application with the Application Insights SDK. Critical information, such as the resulting status code and duration of dependency calls and counters for unhandled exceptions is collected. This information is used in the Health Model and is available for alerting and troubleshooting.
+Application Insights data monitoring: Application Insights is used to collect monitoring data from the application. The code is instrumented to collect data on the performance of the application with the Application Insights SDK. Critical information, such as the resulting status code and duration of dependency calls and counters for unhandled exceptions is collected. This information is used in the Health Model and is available for alerting and troubleshooting.
+Monitoring: Application Insights availability tests
+To monitor the availability of the individual stamps and the overall solution from an outside point of view,Application Insights Availability Testsare set up in two places:
+Regional availability tests: These tests are set up in the regional Application Insights instances and are used to monitor the availability of the stamps. These tests target the clusters and the static storage accounts of the stamps directly. To call the ingress points of the clusters directly, requests need to carry the correct Front Door ID header, otherwise the ingress controller rejects the calls.
+Regional availability tests: These tests are set up in the regional Application Insights instances and are used to monitor the availability of the stamps. These tests target the clusters and the static storage accounts of the stamps directly. To call the ingress points of the clusters directly, requests need to carry the correct Front Door ID header, otherwise the ingress controller rejects the calls.
+Global availability test: These tests are set up in the global Application Insights instance and are used to monitor the availability of the overall solution by pinging Front Door. Two tests are used: One to test an API call against theCatalogServiceand one to test the home page of the website.
+Global availability test: These tests are set up in the global Application Insights instance and are used to monitor the availability of the overall solution by pinging Front Door. Two tests are used: One to test an API call against theCatalogServiceand one to test the home page of the website.
+Monitoring: Queries
+Azure Mission-Critical uses different Kusto Query Language (KQL) queries to implement custom queries as functions to retrieve data from Log Analytics. These queries are stored as individual files in our code repository, separated for global and stamp deployments. They're imported and applied automatically via Terraform as part of each infrastructure pipeline run.
+This approach separates the query logic from the visualization layer. The Log Analytics queries are called directly from code, for example from the HealthService API. Another example is from a visualization tool such as Azure Dashboards, Monitor Workbooks, or Grafana.
+Monitoring: Visualization
+We use Grafana to visualize the results of our Log Analytics health queries in our reference implementation. Grafana shows the results of Log Analytics queries and contains no logic itself. We release the Grafana stack separately from the solution's deployment lifecycle.
+For more information, seeVisualization.
+Alerting
+Alerts are an important part of the overall operations strategy. Proactive monitoring such as the use of dashboards should be used with alerts that raise immediate attention to issues.
+These alerts form an extension of the health model, by alerting the operator to a change in health state, either to degraded/yellow state or to unhealthy/red state. By setting the alert to the root node of the Health Model, the operator is immediately aware of any business level affect to the state of the solution: After all, this root node will turn yellow or red if any of the underlying user flows or resources report yellow or red metrics. The operator can direct their attention to the Health Model visualization for troubleshooting.
+For more information, seeAutomated incident response.
+Failure analysis
+Composing the failure analysis is mostly a theoretical planning exercise. This theoretical exercise should be used as input for the automated failure injections that are part of the continuous validation process. By simulating the failure modes defined here, we can validate the resiliency of the solution against these failures to minimize outages.
+The following table lists example failure cases of the various components of the Azure Mission-Critical reference implementation.
+GetSecret
+kubectl describe pod
+GetSecret
+SetSecret
+Next steps
+Deploy the reference implementation to get a full understanding of the resources and their configuration used in this architecture.
+Implementation: Mission-Critical Online
+Feedback
+Was this page helpful?
+Additional resources

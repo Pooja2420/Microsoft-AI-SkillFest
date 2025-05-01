@@ -1,0 +1,897 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Use custom allocation policies with Device Provisioning Service (DPS)
+Article
+2024-03-29
+13 contributors
+In this article
+Custom allocation policies give you more control over how devices are assigned to your IoT hubs. With custom allocation policies, you can define your own allocation policies when the policies provided by the Azure IoT Hub Device Provisioning Service (DPS) don't meet the requirements of your scenario. A custom allocation policy is implemented in a webhook hosted inAzure Functionsand configured on one or more individual enrollments and/or enrollment groups. When a device registers with DPS using a configured enrollment entry, DPS calls the webhook to find out which IoT hub the device should be registered to and, optionally, its initial state. To learn more, seeUnderstand custom allocation policies.
+This tutorial demonstrates a custom allocation policy using an Azure Function written in C#. Devices are assigned to one of two IoT hubs representing aContoso Toasters Divisionand aContoso Heat Pumps Division. Devices requesting provisioning must have a registration ID with one of the following suffixes to be accepted for provisioning:
+-contoso-tstrsd-007for the Contoso Toasters Division
+-contoso-hpsd-088for the Contoso Heat Pumps Division
+Devices are simulated using a provisioning sample included in theAzure IoT C SDK.
+In this tutorial, you'll do the following:
+Use the Azure CLI to create a DPS instance and to create and link two Contoso division IoT hubs (Contoso Toasters DivisionandContoso Heat Pumps Division) to it.
+Create an Azure Function that implements the custom allocation policy.
+Create a new enrollment group uses the Azure Function for the custom allocation policy.
+Create device symmetric keys for two simulated devices.
+Set up the development environment for the Azure IoT C SDK.
+Simulate the devices and verify that they are provisioned according to the example code in the custom allocation policy.
+If you don't have anAzure subscription, create anAzure free accountbefore you begin.
+Prerequisites
+The following prerequisites are for a Windows development environment. For Linux or macOS, see the appropriate section inPrepare your development environmentin the SDK documentation.
+Visual Studio2022 with the'Desktop development with C++'workload enabled. Visual Studio 2015 and Visual Studio 2017 are also supported.
+Visual Studio2022 with the'Desktop development with C++'workload enabled. Visual Studio 2015 and Visual Studio 2017 are also supported.
+Git installed. For more information, seeGit downloads.
+Git installed. For more information, seeGit downloads.
+Azure CLI installed. For more information, seeHow to install the Azure CLI. Or, you can run the commands in this tutorial in the Bash environment inAzure Cloud Shell.
+Azure CLI installed. For more information, seeHow to install the Azure CLI. Or, you can run the commands in this tutorial in the Bash environment inAzure Cloud Shell.
+Create the provisioning service and two IoT hubs
+In this section, you use the Azure Cloud Shell to create a provisioning service and two IoT hubs representing theContoso Toasters Divisionand theContoso Heat Pumps division.
+First, set environment variables in your workspace to simplify the commands in this tutorial.The DPS and IoT Hub names must be globally unique. Replace theSUFFIXplaceholder with your own value.Also, the Azure Function code you create later in this tutorial looks for IoT hubs that have either-toasters-or-heatpumps-in their names. If you change the suggested values, make sure to use names that contain the required substrings.#!/bin/bash
+export RESOURCE_GROUP="contoso-us-resource-group"
+export LOCATION="westus"
+export DPS="contoso-provisioning-service-SUFFIX"
+export TOASTER_HUB="contoso-toasters-hub-SUFFIX"
+export HEATPUMP_HUB="contoso-heatpumps-hub-SUFFIX"# PowerShell
+$env:RESOURCE_GROUP = "contoso-us-resource-group"
+$env:LOCATION = "westus"
+$env:DPS = "contoso-provisioning-service-SUFFIX"
+$env:TOASTER_HUB = "contoso-toasters-hub-SUFFIX"
+$env:HEATPUMP_HUB = "contoso-heatpumps-hub-SUFFIX"TipThe commands used in this tutorial create resources in the West US location by default. We recommend that you create your resources in the region nearest you that supports Device Provisioning Service. You can view a list of available locations by going to theAzure Statuspage and searching for "Device Provisioning Service". In commands, locations can be specified either in one word or multi-word format; for example: westus, West US, WEST US, etc. The value is not case sensitive.
+First, set environment variables in your workspace to simplify the commands in this tutorial.
+The DPS and IoT Hub names must be globally unique. Replace theSUFFIXplaceholder with your own value.
+SUFFIX
+Also, the Azure Function code you create later in this tutorial looks for IoT hubs that have either-toasters-or-heatpumps-in their names. If you change the suggested values, make sure to use names that contain the required substrings.
+-toasters-
+-heatpumps-
+#!/bin/bash
+export RESOURCE_GROUP="contoso-us-resource-group"
+export LOCATION="westus"
+export DPS="contoso-provisioning-service-SUFFIX"
+export TOASTER_HUB="contoso-toasters-hub-SUFFIX"
+export HEATPUMP_HUB="contoso-heatpumps-hub-SUFFIX"
+#!/bin/bash
+export RESOURCE_GROUP="contoso-us-resource-group"
+export LOCATION="westus"
+export DPS="contoso-provisioning-service-SUFFIX"
+export TOASTER_HUB="contoso-toasters-hub-SUFFIX"
+export HEATPUMP_HUB="contoso-heatpumps-hub-SUFFIX"
+# PowerShell
+$env:RESOURCE_GROUP = "contoso-us-resource-group"
+$env:LOCATION = "westus"
+$env:DPS = "contoso-provisioning-service-SUFFIX"
+$env:TOASTER_HUB = "contoso-toasters-hub-SUFFIX"
+$env:HEATPUMP_HUB = "contoso-heatpumps-hub-SUFFIX"
+# PowerShell
+$env:RESOURCE_GROUP = "contoso-us-resource-group"
+$env:LOCATION = "westus"
+$env:DPS = "contoso-provisioning-service-SUFFIX"
+$env:TOASTER_HUB = "contoso-toasters-hub-SUFFIX"
+$env:HEATPUMP_HUB = "contoso-heatpumps-hub-SUFFIX"
+Tip
+The commands used in this tutorial create resources in the West US location by default. We recommend that you create your resources in the region nearest you that supports Device Provisioning Service. You can view a list of available locations by going to theAzure Statuspage and searching for "Device Provisioning Service". In commands, locations can be specified either in one word or multi-word format; for example: westus, West US, WEST US, etc. The value is not case sensitive.
+Use theaz group createcommand to create an Azure resource group. An Azure resource group is a logical container into which Azure resources are deployed and managed.The following example creates a resource group. We recommend that you use a single group for all resources created in this tutorial. This approach will make clean up easier after you're finished.az group create --name $RESOURCE_GROUP --location $LOCATION
+Use theaz group createcommand to create an Azure resource group. An Azure resource group is a logical container into which Azure resources are deployed and managed.
+The following example creates a resource group. We recommend that you use a single group for all resources created in this tutorial. This approach will make clean up easier after you're finished.
+az group create --name $RESOURCE_GROUP --location $LOCATION
+az group create --name $RESOURCE_GROUP --location $LOCATION
+Use theaz iot dps createcommand to create an instance of the Device Provisioning Service (DPS). The provisioning service is added tocontoso-us-resource-group.az iot dps create --name $DPS --resource-group $RESOURCE_GROUP --location $LOCATIONThis command might take a few minutes to complete.
+Use theaz iot dps createcommand to create an instance of the Device Provisioning Service (DPS). The provisioning service is added tocontoso-us-resource-group.
+az iot dps create --name $DPS --resource-group $RESOURCE_GROUP --location $LOCATION
+az iot dps create --name $DPS --resource-group $RESOURCE_GROUP --location $LOCATION
+This command might take a few minutes to complete.
+Use theaz iot hub createcommand to create theContoso Toasters DivisionIoT hub. The IoT hub is added tocontoso-us-resource-group.az iot hub create --name $TOASTER_HUB --resource-group $RESOURCE_GROUP --location $LOCATION --sku S1This command might take a few minutes to complete.
+Use theaz iot hub createcommand to create theContoso Toasters DivisionIoT hub. The IoT hub is added tocontoso-us-resource-group.
+az iot hub create --name $TOASTER_HUB --resource-group $RESOURCE_GROUP --location $LOCATION --sku S1
+az iot hub create --name $TOASTER_HUB --resource-group $RESOURCE_GROUP --location $LOCATION --sku S1
+This command might take a few minutes to complete.
+Use theaz iot hub createcommand to create theContoso Heat Pumps DivisionIoT hub. This IoT hub also is added tocontoso-us-resource-group.az iot hub create --name $HEATPUMP_HUB --resource-group $RESOURCE_GROUP --location $LOCATION --sku S1This command might take a few minutes to complete.
+Use theaz iot hub createcommand to create theContoso Heat Pumps DivisionIoT hub. This IoT hub also is added tocontoso-us-resource-group.
+az iot hub create --name $HEATPUMP_HUB --resource-group $RESOURCE_GROUP --location $LOCATION --sku S1
+az iot hub create --name $HEATPUMP_HUB --resource-group $RESOURCE_GROUP --location $LOCATION --sku S1
+This command might take a few minutes to complete.
+Run the following two commands to get the connection strings for the hubs you created.az iot hub connection-string show --hub-name $TOASTER_HUB --key primary --query connectionString -o tsv
+az iot hub connection-string show --hub-name $HEATPUMP_HUB --key primary --query connectionString -o tsv
+Run the following two commands to get the connection strings for the hubs you created.
+az iot hub connection-string show --hub-name $TOASTER_HUB --key primary --query connectionString -o tsv
+az iot hub connection-string show --hub-name $HEATPUMP_HUB --key primary --query connectionString -o tsv
+az iot hub connection-string show --hub-name $TOASTER_HUB --key primary --query connectionString -o tsv
+az iot hub connection-string show --hub-name $HEATPUMP_HUB --key primary --query connectionString -o tsv
+Run the following commands to link the hubs to the DPS resource. Replace the placeholders with the hub connection strings from the previous step.az iot dps linked-hub create --dps-name $DPS --resource-group $RESOURCE_GROUP --location $LOCATION --connection-string <toaster_hub_connection_string>
+az iot dps linked-hub create --dps-name $DPS --resource-group $RESOURCE_GROUP --location $LOCATION --connection-string <heatpump_hub_connection_string>
+Run the following commands to link the hubs to the DPS resource. Replace the placeholders with the hub connection strings from the previous step.
+az iot dps linked-hub create --dps-name $DPS --resource-group $RESOURCE_GROUP --location $LOCATION --connection-string <toaster_hub_connection_string>
+az iot dps linked-hub create --dps-name $DPS --resource-group $RESOURCE_GROUP --location $LOCATION --connection-string <heatpump_hub_connection_string>
+az iot dps linked-hub create --dps-name $DPS --resource-group $RESOURCE_GROUP --location $LOCATION --connection-string <toaster_hub_connection_string>
+az iot dps linked-hub create --dps-name $DPS --resource-group $RESOURCE_GROUP --location $LOCATION --connection-string <heatpump_hub_connection_string>
+Create the custom allocation function
+In this section, you create an Azure function that implements your custom allocation policy. This function decides which divisional IoT hub a device should be registered to based on whether its registration ID contains the string-contoso-tstrsd-007or-contoso-hpsd-088. It also sets the initial state of the device twin based on whether the device is a toaster or a heat pump.
+Sign in to theAzure portal.
+Sign in to theAzure portal.
+In the search box, search for and selectFunction App.
+In the search box, search for and selectFunction App.
+SelectCreateorCreate Function App.
+SelectCreateorCreate Function App.
+On theFunction Appcreate page, under theBasicstab, enter the following settings for your new function app and selectReview + create:ParameterValueSubscriptionMake sure that the subscription where you created the resources for this tutorial is selected.Resource GroupSelect the resource group that you created in the previous section. The default provided in the previous section iscontoso-us-resource-group.Function App nameProvide a name for your function app.Do you want to deploy code or container image?CodeRuntime Stack.NETVersionSelect anyin-process modelversion.RegionSelect a region close to you.NoteBy default, Application Insights is enabled. Application Insights is not necessary for this tutorial, but it might help you understand and investigate any issues you encounter with the custom allocation. If you prefer, you can disable Application Insights by selecting theMonitoringtab and then selectingNoforEnable Application Insights.
+On theFunction Appcreate page, under theBasicstab, enter the following settings for your new function app and selectReview + create:
+Note
+By default, Application Insights is enabled. Application Insights is not necessary for this tutorial, but it might help you understand and investigate any issues you encounter with the custom allocation. If you prefer, you can disable Application Insights by selecting theMonitoringtab and then selectingNoforEnable Application Insights.
+
+On theReview + createtab, selectCreateto create the function app.
+On theReview + createtab, selectCreateto create the function app.
+Deployment might take several minutes. When it completes, selectGo to resource.
+Deployment might take several minutes. When it completes, selectGo to resource.
+On the left pane of the function appOverviewpage, selectCreate function.
+On the left pane of the function appOverviewpage, selectCreate function.
+
+On theCreate functionpage, select theHTTP Triggertemplate then selectNext.
+On theCreate functionpage, select theHTTP Triggertemplate then selectNext.
+On theTemplate detailstab, selectAnonymousas theAuthorization levelthen selectCreate.TipIf you keep the authorization level asFunction, then you'll need to configure your DPS enrollments with the function API key. For more information, seeAzure Functions HTTP trigger.
+On theTemplate detailstab, selectAnonymousas theAuthorization levelthen selectCreate.
+
+Tip
+If you keep the authorization level asFunction, then you'll need to configure your DPS enrollments with the function API key. For more information, seeAzure Functions HTTP trigger.
+When theHttpTrigger1function opens, selectCode + Teston the left pane. This allows you to edit the code for the function. Therun.csxcode file should be opened for editing.
+When theHttpTrigger1function opens, selectCode + Teston the left pane. This allows you to edit the code for the function. Therun.csxcode file should be opened for editing.
+Reference required NuGet packages. To create the initial device twin, the custom allocation function uses classes that are defined in two NuGet packages that must be loaded into the hosting environment. With Azure Functions, NuGet packages are referenced using afunction.projfile. In this step, you save and upload afunction.projfile for the required assemblies.  For more information, seeUsing NuGet packages with Azure Functions.Copy the following lines into your favorite editor and save the file on your computer asfunction.proj.<Project Sdk="Microsoft.NET.Sdk">  
+    <PropertyGroup>  
+        <TargetFramework>netstandard2.0</TargetFramework>  
+    </PropertyGroup>  
+    <ItemGroup>  
+        <PackageReference Include="Microsoft.Azure.Devices.Provisioning.Service" Version="1.18.1" />
+        <PackageReference Include="Microsoft.Azure.Devices.Shared" Version="1.30.1" />
+    </ItemGroup>  
+</Project>Select theUploadbutton located above the code editor to upload yourfunction.projfile. After uploading, select the file in the code editor using the drop-down box to verify the contents.Select thefunction.projfile in the code editor and verify its contents. If thefunction.projfile is empty copy the lines above into the file and save it. (Sometimes the upload creates the file without uploading the contents.)
+Reference required NuGet packages. To create the initial device twin, the custom allocation function uses classes that are defined in two NuGet packages that must be loaded into the hosting environment. With Azure Functions, NuGet packages are referenced using afunction.projfile. In this step, you save and upload afunction.projfile for the required assemblies.  For more information, seeUsing NuGet packages with Azure Functions.
+Copy the following lines into your favorite editor and save the file on your computer asfunction.proj.<Project Sdk="Microsoft.NET.Sdk">  
+    <PropertyGroup>  
+        <TargetFramework>netstandard2.0</TargetFramework>  
+    </PropertyGroup>  
+    <ItemGroup>  
+        <PackageReference Include="Microsoft.Azure.Devices.Provisioning.Service" Version="1.18.1" />
+        <PackageReference Include="Microsoft.Azure.Devices.Shared" Version="1.30.1" />
+    </ItemGroup>  
+</Project>
+Copy the following lines into your favorite editor and save the file on your computer asfunction.proj.
+<Project Sdk="Microsoft.NET.Sdk">  
+    <PropertyGroup>  
+        <TargetFramework>netstandard2.0</TargetFramework>  
+    </PropertyGroup>  
+    <ItemGroup>  
+        <PackageReference Include="Microsoft.Azure.Devices.Provisioning.Service" Version="1.18.1" />
+        <PackageReference Include="Microsoft.Azure.Devices.Shared" Version="1.30.1" />
+    </ItemGroup>  
+</Project>
+<Project Sdk="Microsoft.NET.Sdk">  
+    <PropertyGroup>  
+        <TargetFramework>netstandard2.0</TargetFramework>  
+    </PropertyGroup>  
+    <ItemGroup>  
+        <PackageReference Include="Microsoft.Azure.Devices.Provisioning.Service" Version="1.18.1" />
+        <PackageReference Include="Microsoft.Azure.Devices.Shared" Version="1.30.1" />
+    </ItemGroup>  
+</Project>
+Select theUploadbutton located above the code editor to upload yourfunction.projfile. After uploading, select the file in the code editor using the drop-down box to verify the contents.
+Select theUploadbutton located above the code editor to upload yourfunction.projfile. After uploading, select the file in the code editor using the drop-down box to verify the contents.
+Select thefunction.projfile in the code editor and verify its contents. If thefunction.projfile is empty copy the lines above into the file and save it. (Sometimes the upload creates the file without uploading the contents.)
+Select thefunction.projfile in the code editor and verify its contents. If thefunction.projfile is empty copy the lines above into the file and save it. (Sometimes the upload creates the file without uploading the contents.)
+Make surerun.csxforHttpTrigger1is selected in the code editor. Replace the code for theHttpTrigger1function with the following code and selectSave:#r "Newtonsoft.Json"
+
+using System.Net;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Primitives;
+using Newtonsoft.Json;
+
+using Microsoft.Azure.Devices.Shared;               // For TwinCollection
+using Microsoft.Azure.Devices.Provisioning.Service; // For TwinState
+
+public static async Task<IActionResult> Run(HttpRequest req, ILogger log)
+{
+    log.LogInformation("C# HTTP trigger function processed a request.");
+
+    // Get request body
+    string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+    dynamic data = JsonConvert.DeserializeObject(requestBody);
+
+    log.LogInformation("Request.Body:...");
+    log.LogInformation(requestBody);
+
+    // Get registration ID of the device
+    string regId = data?.deviceRuntimeContext?.registrationId;
+
+    string message = "Uncaught error";
+    bool fail = false;
+    ResponseObj obj = new ResponseObj();
+
+    if (regId == null)
+    {
+        message = "Registration ID not provided for the device.";
+        log.LogInformation("Registration ID : NULL");
+        fail = true;
+    }
+    else
+    {
+        string[] hubs = data?.linkedHubs?.ToObject<string[]>();
+
+        // Must have hubs selected on the enrollment
+        if (hubs == null)
+        {
+            message = "No hub group defined for the enrollment.";
+            log.LogInformation("linkedHubs : NULL");
+            fail = true;
+        }
+        else
+        {
+            // This is a Contoso Toaster Model 007
+            if (regId.Contains("-contoso-tstrsd-007"))
+            {
+                //Find the "-toasters-" IoT hub configured on the enrollment
+                foreach(string hubString in hubs)
+                {
+                    if (hubString.Contains("-toasters-"))
+                        obj.iotHubHostName = hubString;
+                }
+
+                if (obj.iotHubHostName == null)
+                {
+                    message = "No toasters hub found for the enrollment.";
+                    log.LogInformation(message);
+                    fail = true;
+                }
+                else
+                {
+                    // Specify the initial tags for the device.
+                    TwinCollection tags = new TwinCollection();
+                    tags["deviceType"] = "toaster";
+
+                    // Specify the initial desired properties for the device.
+                    TwinCollection properties = new TwinCollection();
+                    properties["state"] = "ready";
+                    properties["darknessSetting"] = "medium";
+
+                    // Add the initial twin state to the response.
+                    TwinState twinState = new TwinState(tags, properties);
+                    obj.initialTwin = twinState;
+                }
+            }
+            // This is a Contoso Heat pump Model 008
+            else if (regId.Contains("-contoso-hpsd-088"))
+            {
+                //Find the "-heatpumps-" IoT hub configured on the enrollment
+                foreach(string hubString in hubs)
+                {
+                    if (hubString.Contains("-heatpumps-"))
+                        obj.iotHubHostName = hubString;
+                }
+
+                if (obj.iotHubHostName == null)
+                {
+                    message = "No heat pumps hub found for the enrollment.";
+                    log.LogInformation(message);
+                    fail = true;
+                }
+                else
+                {
+                    // Specify the initial tags for the device.
+                    TwinCollection tags = new TwinCollection();
+                    tags["deviceType"] = "heatpump";
+
+                    // Specify the initial desired properties for the device.
+                    TwinCollection properties = new TwinCollection();
+                    properties["state"] = "on";
+                    properties["temperatureSetting"] = "65";
+
+                    // Add the initial twin state to the response.
+                    TwinState twinState = new TwinState(tags, properties);
+                    obj.initialTwin = twinState;
+                }
+            }
+            // Unrecognized device.
+            else
+            {
+                fail = true;
+                message = "Unrecognized device registration.";
+                log.LogInformation("Unknown device registration");
+            }
+        }
+    }
+
+    log.LogInformation("\nResponse");
+    log.LogInformation((obj.iotHubHostName != null) ? JsonConvert.SerializeObject(obj) : message);
+
+    return (fail)
+        ? new BadRequestObjectResult(message) 
+        : (ActionResult)new OkObjectResult(obj);
+}
+
+public class ResponseObj
+{
+    public string iotHubHostName {get; set;}
+    public TwinState initialTwin {get; set;}
+}
+Make surerun.csxforHttpTrigger1is selected in the code editor. Replace the code for theHttpTrigger1function with the following code and selectSave:
+#r "Newtonsoft.Json"
+
+using System.Net;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Primitives;
+using Newtonsoft.Json;
+
+using Microsoft.Azure.Devices.Shared;               // For TwinCollection
+using Microsoft.Azure.Devices.Provisioning.Service; // For TwinState
+
+public static async Task<IActionResult> Run(HttpRequest req, ILogger log)
+{
+    log.LogInformation("C# HTTP trigger function processed a request.");
+
+    // Get request body
+    string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+    dynamic data = JsonConvert.DeserializeObject(requestBody);
+
+    log.LogInformation("Request.Body:...");
+    log.LogInformation(requestBody);
+
+    // Get registration ID of the device
+    string regId = data?.deviceRuntimeContext?.registrationId;
+
+    string message = "Uncaught error";
+    bool fail = false;
+    ResponseObj obj = new ResponseObj();
+
+    if (regId == null)
+    {
+        message = "Registration ID not provided for the device.";
+        log.LogInformation("Registration ID : NULL");
+        fail = true;
+    }
+    else
+    {
+        string[] hubs = data?.linkedHubs?.ToObject<string[]>();
+
+        // Must have hubs selected on the enrollment
+        if (hubs == null)
+        {
+            message = "No hub group defined for the enrollment.";
+            log.LogInformation("linkedHubs : NULL");
+            fail = true;
+        }
+        else
+        {
+            // This is a Contoso Toaster Model 007
+            if (regId.Contains("-contoso-tstrsd-007"))
+            {
+                //Find the "-toasters-" IoT hub configured on the enrollment
+                foreach(string hubString in hubs)
+                {
+                    if (hubString.Contains("-toasters-"))
+                        obj.iotHubHostName = hubString;
+                }
+
+                if (obj.iotHubHostName == null)
+                {
+                    message = "No toasters hub found for the enrollment.";
+                    log.LogInformation(message);
+                    fail = true;
+                }
+                else
+                {
+                    // Specify the initial tags for the device.
+                    TwinCollection tags = new TwinCollection();
+                    tags["deviceType"] = "toaster";
+
+                    // Specify the initial desired properties for the device.
+                    TwinCollection properties = new TwinCollection();
+                    properties["state"] = "ready";
+                    properties["darknessSetting"] = "medium";
+
+                    // Add the initial twin state to the response.
+                    TwinState twinState = new TwinState(tags, properties);
+                    obj.initialTwin = twinState;
+                }
+            }
+            // This is a Contoso Heat pump Model 008
+            else if (regId.Contains("-contoso-hpsd-088"))
+            {
+                //Find the "-heatpumps-" IoT hub configured on the enrollment
+                foreach(string hubString in hubs)
+                {
+                    if (hubString.Contains("-heatpumps-"))
+                        obj.iotHubHostName = hubString;
+                }
+
+                if (obj.iotHubHostName == null)
+                {
+                    message = "No heat pumps hub found for the enrollment.";
+                    log.LogInformation(message);
+                    fail = true;
+                }
+                else
+                {
+                    // Specify the initial tags for the device.
+                    TwinCollection tags = new TwinCollection();
+                    tags["deviceType"] = "heatpump";
+
+                    // Specify the initial desired properties for the device.
+                    TwinCollection properties = new TwinCollection();
+                    properties["state"] = "on";
+                    properties["temperatureSetting"] = "65";
+
+                    // Add the initial twin state to the response.
+                    TwinState twinState = new TwinState(tags, properties);
+                    obj.initialTwin = twinState;
+                }
+            }
+            // Unrecognized device.
+            else
+            {
+                fail = true;
+                message = "Unrecognized device registration.";
+                log.LogInformation("Unknown device registration");
+            }
+        }
+    }
+
+    log.LogInformation("\nResponse");
+    log.LogInformation((obj.iotHubHostName != null) ? JsonConvert.SerializeObject(obj) : message);
+
+    return (fail)
+        ? new BadRequestObjectResult(message) 
+        : (ActionResult)new OkObjectResult(obj);
+}
+
+public class ResponseObj
+{
+    public string iotHubHostName {get; set;}
+    public TwinState initialTwin {get; set;}
+}
+#r "Newtonsoft.Json"
+
+using System.Net;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Primitives;
+using Newtonsoft.Json;
+
+using Microsoft.Azure.Devices.Shared;               // For TwinCollection
+using Microsoft.Azure.Devices.Provisioning.Service; // For TwinState
+
+public static async Task<IActionResult> Run(HttpRequest req, ILogger log)
+{
+    log.LogInformation("C# HTTP trigger function processed a request.");
+
+    // Get request body
+    string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+    dynamic data = JsonConvert.DeserializeObject(requestBody);
+
+    log.LogInformation("Request.Body:...");
+    log.LogInformation(requestBody);
+
+    // Get registration ID of the device
+    string regId = data?.deviceRuntimeContext?.registrationId;
+
+    string message = "Uncaught error";
+    bool fail = false;
+    ResponseObj obj = new ResponseObj();
+
+    if (regId == null)
+    {
+        message = "Registration ID not provided for the device.";
+        log.LogInformation("Registration ID : NULL");
+        fail = true;
+    }
+    else
+    {
+        string[] hubs = data?.linkedHubs?.ToObject<string[]>();
+
+        // Must have hubs selected on the enrollment
+        if (hubs == null)
+        {
+            message = "No hub group defined for the enrollment.";
+            log.LogInformation("linkedHubs : NULL");
+            fail = true;
+        }
+        else
+        {
+            // This is a Contoso Toaster Model 007
+            if (regId.Contains("-contoso-tstrsd-007"))
+            {
+                //Find the "-toasters-" IoT hub configured on the enrollment
+                foreach(string hubString in hubs)
+                {
+                    if (hubString.Contains("-toasters-"))
+                        obj.iotHubHostName = hubString;
+                }
+
+                if (obj.iotHubHostName == null)
+                {
+                    message = "No toasters hub found for the enrollment.";
+                    log.LogInformation(message);
+                    fail = true;
+                }
+                else
+                {
+                    // Specify the initial tags for the device.
+                    TwinCollection tags = new TwinCollection();
+                    tags["deviceType"] = "toaster";
+
+                    // Specify the initial desired properties for the device.
+                    TwinCollection properties = new TwinCollection();
+                    properties["state"] = "ready";
+                    properties["darknessSetting"] = "medium";
+
+                    // Add the initial twin state to the response.
+                    TwinState twinState = new TwinState(tags, properties);
+                    obj.initialTwin = twinState;
+                }
+            }
+            // This is a Contoso Heat pump Model 008
+            else if (regId.Contains("-contoso-hpsd-088"))
+            {
+                //Find the "-heatpumps-" IoT hub configured on the enrollment
+                foreach(string hubString in hubs)
+                {
+                    if (hubString.Contains("-heatpumps-"))
+                        obj.iotHubHostName = hubString;
+                }
+
+                if (obj.iotHubHostName == null)
+                {
+                    message = "No heat pumps hub found for the enrollment.";
+                    log.LogInformation(message);
+                    fail = true;
+                }
+                else
+                {
+                    // Specify the initial tags for the device.
+                    TwinCollection tags = new TwinCollection();
+                    tags["deviceType"] = "heatpump";
+
+                    // Specify the initial desired properties for the device.
+                    TwinCollection properties = new TwinCollection();
+                    properties["state"] = "on";
+                    properties["temperatureSetting"] = "65";
+
+                    // Add the initial twin state to the response.
+                    TwinState twinState = new TwinState(tags, properties);
+                    obj.initialTwin = twinState;
+                }
+            }
+            // Unrecognized device.
+            else
+            {
+                fail = true;
+                message = "Unrecognized device registration.";
+                log.LogInformation("Unknown device registration");
+            }
+        }
+    }
+
+    log.LogInformation("\nResponse");
+    log.LogInformation((obj.iotHubHostName != null) ? JsonConvert.SerializeObject(obj) : message);
+
+    return (fail)
+        ? new BadRequestObjectResult(message) 
+        : (ActionResult)new OkObjectResult(obj);
+}
+
+public class ResponseObj
+{
+    public string iotHubHostName {get; set;}
+    public TwinState initialTwin {get; set;}
+}
+Create the enrollment
+In this section, you create a new enrollment group that uses the custom allocation policy. For simplicity, this tutorial usesSymmetric key attestationwith the enrollment. For a more secure solution, consider usingX.509 certificate attestationwith a chain of trust.
+Sign in to theAzure portaland navigate to your Device Provisioning Service instance.
+Sign in to theAzure portaland navigate to your Device Provisioning Service instance.
+SelectManage enrollmentsfrom theSettingssection of the navigation menu.
+SelectManage enrollmentsfrom theSettingssection of the navigation menu.
+SelectAdd enrollment group.
+SelectAdd enrollment group.
+On theRegistration + provisioningtab of theAdd enrollment grouppage, provide the following information to configure the enrollment group details:FieldDescriptionAttestationSelectSymmetric keyas theAttestation mechanism.Symmetric key settingsCheck theGenerate symmetric keys automaticallybox.Group nameEntercontoso-custom-allocated-devicesas the group name.Provisioning statusCheck theEnable this enrollmentbox.
+On theRegistration + provisioningtab of theAdd enrollment grouppage, provide the following information to configure the enrollment group details:
+SelectNext: IoT hubs.
+SelectNext: IoT hubs.
+On theIoT hubstab of theAdd enrollment grouppage, provide the following information to determine which IoT hubs the enrollment group can provision devices to:FieldDescriptionTarget IoT hubsSelect one or more of your linked IoT hubs, or add a new link to an IoT hub.Allocation policySelectCustom (use Azure Function). SelectSelect Azure function, then follow the prompts to select the function that you created for this tutorial.
+On theIoT hubstab of theAdd enrollment grouppage, provide the following information to determine which IoT hubs the enrollment group can provision devices to:
+SelectReview + create.
+SelectReview + create.
+On theReview + createtab, verify all of your values then selectCreate.
+On theReview + createtab, verify all of your values then selectCreate.
+After saving the enrollment, reopen it and make a note of thePrimary key. You must save the enrollment first to have the keys generated. This key is used to generate unique device keys for simulated devices in the next section.
+Tip
+When you create an enrollment group in the Azure portal and select a custom allocation policy, the Azure portal automatically retrieves and embeds the function key on your behalf. If you create an enrollment programmatically, you need to provide the key as part of the creation step.
+Derive unique device keys
+Devices don't use the enrollment group's primary symmetric key directly. Instead, you use the primary key to derive a device key for each device. In this section, you create two unique device keys. One key is used for a simulated toaster device. The other key is used for a simulated heat pump device.
+To derive the device key, you use the enrollment groupPrimary Keyyou noted earlier to compute theHMAC-SHA256of the device registration ID for each device and convert the result into Base 64 format. For more information on creating derived device keys with enrollment groups, see the group enrollments section ofSymmetric key attestation.
+For the example in this tutorial, use the following two device registration IDs and compute a device key for both devices. Both registration IDs have a valid suffix to work with the example code for the custom allocation policy:
+breakroom499-contoso-tstrsd-007
+mainbuilding167-contoso-hpsd-088
+The IoT extension for the Azure CLI provides theiot dps enrollment-group compute-device-keycommand for generating derived device keys. This command can be used on Windows-based or Linux systems, from PowerShell or a Bash shell.
+Replace the value of--keyargument with thePrimary Keyfrom your enrollment group.
+--key
+az iot dps enrollment-group compute-device-key --key <ENROLLMENT_GROUP_KEY> --registration-id breakroom499-contoso-tstrsd-007
+az iot dps enrollment-group compute-device-key --key <ENROLLMENT_GROUP_KEY> --registration-id breakroom499-contoso-tstrsd-007
+az iot dps enrollment-group compute-device-key --key <ENROLLMENT_GROUP_KEY> --registration-id mainbuilding167-contoso-hpsd-088
+az iot dps enrollment-group compute-device-key --key <ENROLLMENT_GROUP_KEY> --registration-id mainbuilding167-contoso-hpsd-088
+Note
+You can also supply the enrollment group ID rather than the symmetric key to theiot dps enrollment-group compute-device-keycommand. For example:
+iot dps enrollment-group compute-device-key
+az iot dps enrollment-group compute-device-key -g contoso-us-resource-group --dps-name contoso-provisioning-service-1098 --enrollment-id contoso-custom-allocated-devices --registration-id breakroom499-contoso-tstrsd-007
+az iot dps enrollment-group compute-device-key -g contoso-us-resource-group --dps-name contoso-provisioning-service-1098 --enrollment-id contoso-custom-allocated-devices --registration-id breakroom499-contoso-tstrsd-007
+The simulated devices use the derived device keys with each registration ID to perform symmetric key attestation.
+Prepare an Azure IoT C SDK development environment
+In this section, you prepare the development environment used to build theAzure IoT C SDK. The SDK includes the sample code for the simulated device. This simulated device will attempt provisioning during the device's boot sequence.
+This section is oriented toward a Windows-based workstation. For a Linux example, see the set-up of the VMs inTutorial: Provision for geo latency.
+Download theCMake build system.It's important that the Visual Studio prerequisites (Visual Studio and the 'Desktop development with C++' workload) are installed on your machine,beforestarting theCMakeinstallation. Once the prerequisites are in place, and the download is verified, install the CMake build system.
+Download theCMake build system.
+It's important that the Visual Studio prerequisites (Visual Studio and the 'Desktop development with C++' workload) are installed on your machine,beforestarting theCMakeinstallation. Once the prerequisites are in place, and the download is verified, install the CMake build system.
+CMake
+Find the tag name for thelatest releaseof the SDK.
+Find the tag name for thelatest releaseof the SDK.
+Open a command prompt or Git Bash shell. Run the following commands to clone the latest release of theAzure IoT Device SDK for CGitHub repository. Use the tag you found in the previous step as the value for the-bparameter, for example:lts_01_2023.git clone -b <release-tag> https://github.com/Azure/azure-iot-sdk-c.git
+cd azure-iot-sdk-c
+git submodule update --initYou should expect this operation to take several minutes to complete.
+Open a command prompt or Git Bash shell. Run the following commands to clone the latest release of theAzure IoT Device SDK for CGitHub repository. Use the tag you found in the previous step as the value for the-bparameter, for example:lts_01_2023.
+-b
+lts_01_2023
+git clone -b <release-tag> https://github.com/Azure/azure-iot-sdk-c.git
+cd azure-iot-sdk-c
+git submodule update --init
+git clone -b <release-tag> https://github.com/Azure/azure-iot-sdk-c.git
+cd azure-iot-sdk-c
+git submodule update --init
+You should expect this operation to take several minutes to complete.
+Create acmakesubdirectory in the root directory of the git repository, and navigate to that folder. Run the following commands from theazure-iot-sdk-cdirectory:mkdir cmake
+cd cmake
+Create acmakesubdirectory in the root directory of the git repository, and navigate to that folder. Run the following commands from theazure-iot-sdk-cdirectory:
+cmake
+azure-iot-sdk-c
+mkdir cmake
+cd cmake
+mkdir cmake
+cd cmake
+Run the following command, which builds a version of the SDK specific to your development client platform. A Visual Studio solution for the simulated device will be generated in thecmakedirectory.cmake -Dhsm_type_symm_key:BOOL=ON -Duse_prov_client:BOOL=ON  ..Ifcmakedoesn't find your C++ compiler, you might see build errors while running the command. If that happens, try running the command in theVisual Studio command prompt.Once the build succeeds, the last few output lines look similar to the following output:$ cmake -Dhsm_type_symm_key:BOOL=ON -Duse_prov_client:BOOL=ON  ..
+-- Building for: Visual Studio 15 2017
+-- Selecting Windows SDK version 10.0.16299.0 to target Windows 10.0.17134.
+-- The C compiler identification is MSVC 19.12.25835.0
+-- The CXX compiler identification is MSVC 19.12.25835.0
+
+...
+
+-- Configuring done
+-- Generating done
+-- Build files have been written to: E:/IoT Testing/azure-iot-sdk-c/cmake
+Run the following command, which builds a version of the SDK specific to your development client platform. A Visual Studio solution for the simulated device will be generated in thecmakedirectory.
+cmake
+cmake -Dhsm_type_symm_key:BOOL=ON -Duse_prov_client:BOOL=ON  ..
+cmake -Dhsm_type_symm_key:BOOL=ON -Duse_prov_client:BOOL=ON  ..
+Ifcmakedoesn't find your C++ compiler, you might see build errors while running the command. If that happens, try running the command in theVisual Studio command prompt.
+cmake
+Once the build succeeds, the last few output lines look similar to the following output:
+$ cmake -Dhsm_type_symm_key:BOOL=ON -Duse_prov_client:BOOL=ON  ..
+-- Building for: Visual Studio 15 2017
+-- Selecting Windows SDK version 10.0.16299.0 to target Windows 10.0.17134.
+-- The C compiler identification is MSVC 19.12.25835.0
+-- The CXX compiler identification is MSVC 19.12.25835.0
+
+...
+
+-- Configuring done
+-- Generating done
+-- Build files have been written to: E:/IoT Testing/azure-iot-sdk-c/cmake
+$ cmake -Dhsm_type_symm_key:BOOL=ON -Duse_prov_client:BOOL=ON  ..
+-- Building for: Visual Studio 15 2017
+-- Selecting Windows SDK version 10.0.16299.0 to target Windows 10.0.17134.
+-- The C compiler identification is MSVC 19.12.25835.0
+-- The CXX compiler identification is MSVC 19.12.25835.0
+
+...
+
+-- Configuring done
+-- Generating done
+-- Build files have been written to: E:/IoT Testing/azure-iot-sdk-c/cmake
+Simulate the devices
+In this section, you update a provisioning sample namedprov_dev_client_samplelocated in the Azure IoT C SDK you set up previously.
+This sample code simulates a device boot sequence that sends the provisioning request to your Device Provisioning Service instance. The boot sequence causes the toaster device to be recognized and assigned to the IoT hub using the custom allocation policy.
+In the Azure portal, select theOverviewtab for your Device Provisioning Service and note down theID Scopevalue.
+In the Azure portal, select theOverviewtab for your Device Provisioning Service and note down theID Scopevalue.
+
+In Visual Studio, open theazure_iot_sdks.slnsolution file that was generated by running CMake earlier. The solution file should be in the following location:azure-iot-sdk-c\cmake\azure_iot_sdks.sln.
+In Visual Studio, open theazure_iot_sdks.slnsolution file that was generated by running CMake earlier. The solution file should be in the following location:azure-iot-sdk-c\cmake\azure_iot_sdks.sln.
+azure-iot-sdk-c\cmake\azure_iot_sdks.sln
+In Visual Studio'sSolution Explorerwindow, navigate to theProvision_Samplesfolder. Expand the sample project namedprov_dev_client_sample. ExpandSource Files, and openprov_dev_client_sample.c.
+In Visual Studio'sSolution Explorerwindow, navigate to theProvision_Samplesfolder. Expand the sample project namedprov_dev_client_sample. ExpandSource Files, and openprov_dev_client_sample.c.
+Find theid_scopeconstant, and replace the value with yourID Scopevalue that you copied earlier.static const char* id_scope = "0ne00002193";
+Find theid_scopeconstant, and replace the value with yourID Scopevalue that you copied earlier.
+id_scope
+static const char* id_scope = "0ne00002193";
+static const char* id_scope = "0ne00002193";
+Find the definition for themain()function in the same file. Make sure thehsm_typevariable is set toSECURE_DEVICE_TYPE_SYMMETRIC_KEYas shown below:SECURE_DEVICE_TYPE hsm_type;
+//hsm_type = SECURE_DEVICE_TYPE_TPM;
+//hsm_type = SECURE_DEVICE_TYPE_X509;
+hsm_type = SECURE_DEVICE_TYPE_SYMMETRIC_KEY;
+Find the definition for themain()function in the same file. Make sure thehsm_typevariable is set toSECURE_DEVICE_TYPE_SYMMETRIC_KEYas shown below:
+main()
+hsm_type
+SECURE_DEVICE_TYPE_SYMMETRIC_KEY
+SECURE_DEVICE_TYPE hsm_type;
+//hsm_type = SECURE_DEVICE_TYPE_TPM;
+//hsm_type = SECURE_DEVICE_TYPE_X509;
+hsm_type = SECURE_DEVICE_TYPE_SYMMETRIC_KEY;
+SECURE_DEVICE_TYPE hsm_type;
+//hsm_type = SECURE_DEVICE_TYPE_TPM;
+//hsm_type = SECURE_DEVICE_TYPE_X509;
+hsm_type = SECURE_DEVICE_TYPE_SYMMETRIC_KEY;
+In themain()function, find the call toProv_Device_Register_Device(). Just before that call, add the following lines of code that useProv_Device_Set_Provisioning_Payload()to pass a custom JSON payload during provisioning. This can be used to provide more information to your custom allocation functions. This could also be used to pass the device type instead of examining the registration ID. For more information on sending and receiving custom data payloads with DPS, seeHow to transfer payloads between devices and DPS.// An example custom payload
+const char* custom_json_payload = "{\"MyDeviceFirmwareVersion\":\"12.0.2.5\",\"MyDeviceProvisioningVersion\":\"1.0.0.0\"}";
+
+prov_device_result = Prov_Device_Set_Provisioning_Payload(prov_device_handle, custom_json_payload);
+if (prov_device_result != PROV_DEVICE_RESULT_OK)
+{
+    (void)printf("\r\nFailure setting provisioning payload: %s\r\n", MU_ENUM_TO_STRING(PROV_DEVICE_RESULT, prov_device_result));
+}
+In themain()function, find the call toProv_Device_Register_Device(). Just before that call, add the following lines of code that useProv_Device_Set_Provisioning_Payload()to pass a custom JSON payload during provisioning. This can be used to provide more information to your custom allocation functions. This could also be used to pass the device type instead of examining the registration ID. For more information on sending and receiving custom data payloads with DPS, seeHow to transfer payloads between devices and DPS.
+main()
+Prov_Device_Register_Device()
+Prov_Device_Set_Provisioning_Payload()
+// An example custom payload
+const char* custom_json_payload = "{\"MyDeviceFirmwareVersion\":\"12.0.2.5\",\"MyDeviceProvisioningVersion\":\"1.0.0.0\"}";
+
+prov_device_result = Prov_Device_Set_Provisioning_Payload(prov_device_handle, custom_json_payload);
+if (prov_device_result != PROV_DEVICE_RESULT_OK)
+{
+    (void)printf("\r\nFailure setting provisioning payload: %s\r\n", MU_ENUM_TO_STRING(PROV_DEVICE_RESULT, prov_device_result));
+}
+// An example custom payload
+const char* custom_json_payload = "{\"MyDeviceFirmwareVersion\":\"12.0.2.5\",\"MyDeviceProvisioningVersion\":\"1.0.0.0\"}";
+
+prov_device_result = Prov_Device_Set_Provisioning_Payload(prov_device_handle, custom_json_payload);
+if (prov_device_result != PROV_DEVICE_RESULT_OK)
+{
+    (void)printf("\r\nFailure setting provisioning payload: %s\r\n", MU_ENUM_TO_STRING(PROV_DEVICE_RESULT, prov_device_result));
+}
+Right-click theprov_dev_client_sampleproject and selectSet as Startup Project.
+Right-click theprov_dev_client_sampleproject and selectSet as Startup Project.
+Simulate the Contoso toaster device
+To simulate the toaster device, find the call toprov_dev_set_symmetric_key_info()inprov_dev_client_sample.cwhich is commented out.// Set the symmetric key if using they auth type
+//prov_dev_set_symmetric_key_info("<symm_registration_id>", "<symmetric_Key>");Uncomment the function call and replace the placeholder values (including the angle brackets) with the toaster registration ID and derived device key you generated previously. The key valueJC8F96eayuQwwz+PkE7IzjH2lIAjCUnAa61tDigBnSs=shown below is only given as an example.// Set the symmetric key if using they auth type
+prov_dev_set_symmetric_key_info("breakroom499-contoso-tstrsd-007", "JC8F96eayuQwwz+PkE7IzjH2lIAjCUnAa61tDigBnSs=");Save the file.
+To simulate the toaster device, find the call toprov_dev_set_symmetric_key_info()inprov_dev_client_sample.cwhich is commented out.
+prov_dev_set_symmetric_key_info()
+// Set the symmetric key if using they auth type
+//prov_dev_set_symmetric_key_info("<symm_registration_id>", "<symmetric_Key>");
+// Set the symmetric key if using they auth type
+//prov_dev_set_symmetric_key_info("<symm_registration_id>", "<symmetric_Key>");
+Uncomment the function call and replace the placeholder values (including the angle brackets) with the toaster registration ID and derived device key you generated previously. The key valueJC8F96eayuQwwz+PkE7IzjH2lIAjCUnAa61tDigBnSs=shown below is only given as an example.
+// Set the symmetric key if using they auth type
+prov_dev_set_symmetric_key_info("breakroom499-contoso-tstrsd-007", "JC8F96eayuQwwz+PkE7IzjH2lIAjCUnAa61tDigBnSs=");
+// Set the symmetric key if using they auth type
+prov_dev_set_symmetric_key_info("breakroom499-contoso-tstrsd-007", "JC8F96eayuQwwz+PkE7IzjH2lIAjCUnAa61tDigBnSs=");
+Save the file.
+On the Visual Studio menu, selectDebug>Start without debuggingto run the solution. In the prompt to rebuild the project, selectYes, to rebuild the project before running.The following output is an example of the simulated toaster device successfully booting up and connecting to the provisioning service instance to be assigned to the toasters IoT hub by the custom allocation policy:Provisioning API Version: 1.8.0
+
+Registering Device
+
+Provisioning Status: PROV_DEVICE_REG_STATUS_CONNECTED
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+
+Registration Information received from service: contoso-toasters-hub-1098.azure-devices.net, deviceId: breakroom499-contoso-tstrsd-007
+
+Press enter key to exit:The following output is example logging output from the custom allocation function code running for the toaster device. Notice a hub is successfully selected for a toaster device. Also notice thepayloadproperty that contains the custom JSON content you added to the code. This is available for your code to use within thedeviceRuntimeContext.This logging is available by clickingLogsunder the function code in the portal:2022-08-03T20:34:41.178 [Information] Executing 'Functions.HttpTrigger1' (Reason='This function was programmatically called via the host APIs.', Id=12950752-6d75-4f41-844b-c253a6653d4f)
+2022-08-03T20:34:41.340 [Information] C# HTTP trigger function processed a request.
+2022-08-03T20:34:41.341 [Information] Request.Body:...
+2022-08-03T20:34:41.341 [Information] {"enrollmentGroup":{"enrollmentGroupId":"contoso-custom-allocated-devices","attestation":{"type":"symmetricKey"},"capabilities":{"iotEdge":false},"etag":"\"0000f176-0000-0700-0000-62eaad1e0000\"","provisioningStatus":"enabled","reprovisionPolicy":{"updateHubAssignment":true,"migrateDeviceData":true},"createdDateTimeUtc":"2022-08-03T17:15:10.8464255Z","lastUpdatedDateTimeUtc":"2022-08-03T17:15:10.8464255Z","allocationPolicy":"custom","iotHubs":["contoso-toasters-hub-1098.azure-devices.net","contoso-heatpumps-hub-1098.azure-devices.net"],"customAllocationDefinition":{"webhookUrl":"https://contoso-function-app-1098.azurewebsites.net/api/HttpTrigger1?****","apiVersion":"2021-10-01"}},"deviceRuntimeContext":{"registrationId":"breakroom499-contoso-tstrsd-007","currentIotHubHostName":"contoso-toasters-hub-1098.azure-devices.net","currentDeviceId":"breakroom499-contoso-tstrsd-007","symmetricKey":{},"payload":{"MyDeviceFirmwareVersion":"12.0.2.5","MyDeviceProvisioningVersion":"1.0.0.0"}},"linkedHubs":["contoso-toasters-hub-1098.azure-devices.net","contoso-heatpumps-hub-1098.azure-devices.net"]}
+2022-08-03T20:34:41.382 [Information] Response
+2022-08-03T20:34:41.398 [Information] {"iotHubHostName":"contoso-toasters-hub-1098.azure-devices.net","initialTwin":{"properties":{"desired":{"state":"ready","darknessSetting":"medium"}},"tags":{"deviceType":"toaster"}}}
+2022-08-03T20:34:41.399 [Information] Executed 'Functions.HttpTrigger1' (Succeeded, Id=12950752-6d75-4f41-844b-c253a6653d4f, Duration=227ms)
+On the Visual Studio menu, selectDebug>Start without debuggingto run the solution. In the prompt to rebuild the project, selectYes, to rebuild the project before running.
+The following output is an example of the simulated toaster device successfully booting up and connecting to the provisioning service instance to be assigned to the toasters IoT hub by the custom allocation policy:
+Provisioning API Version: 1.8.0
+
+Registering Device
+
+Provisioning Status: PROV_DEVICE_REG_STATUS_CONNECTED
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+
+Registration Information received from service: contoso-toasters-hub-1098.azure-devices.net, deviceId: breakroom499-contoso-tstrsd-007
+
+Press enter key to exit:
+Provisioning API Version: 1.8.0
+
+Registering Device
+
+Provisioning Status: PROV_DEVICE_REG_STATUS_CONNECTED
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+
+Registration Information received from service: contoso-toasters-hub-1098.azure-devices.net, deviceId: breakroom499-contoso-tstrsd-007
+
+Press enter key to exit:
+The following output is example logging output from the custom allocation function code running for the toaster device. Notice a hub is successfully selected for a toaster device. Also notice thepayloadproperty that contains the custom JSON content you added to the code. This is available for your code to use within thedeviceRuntimeContext.
+payload
+deviceRuntimeContext
+This logging is available by clickingLogsunder the function code in the portal:
+2022-08-03T20:34:41.178 [Information] Executing 'Functions.HttpTrigger1' (Reason='This function was programmatically called via the host APIs.', Id=12950752-6d75-4f41-844b-c253a6653d4f)
+2022-08-03T20:34:41.340 [Information] C# HTTP trigger function processed a request.
+2022-08-03T20:34:41.341 [Information] Request.Body:...
+2022-08-03T20:34:41.341 [Information] {"enrollmentGroup":{"enrollmentGroupId":"contoso-custom-allocated-devices","attestation":{"type":"symmetricKey"},"capabilities":{"iotEdge":false},"etag":"\"0000f176-0000-0700-0000-62eaad1e0000\"","provisioningStatus":"enabled","reprovisionPolicy":{"updateHubAssignment":true,"migrateDeviceData":true},"createdDateTimeUtc":"2022-08-03T17:15:10.8464255Z","lastUpdatedDateTimeUtc":"2022-08-03T17:15:10.8464255Z","allocationPolicy":"custom","iotHubs":["contoso-toasters-hub-1098.azure-devices.net","contoso-heatpumps-hub-1098.azure-devices.net"],"customAllocationDefinition":{"webhookUrl":"https://contoso-function-app-1098.azurewebsites.net/api/HttpTrigger1?****","apiVersion":"2021-10-01"}},"deviceRuntimeContext":{"registrationId":"breakroom499-contoso-tstrsd-007","currentIotHubHostName":"contoso-toasters-hub-1098.azure-devices.net","currentDeviceId":"breakroom499-contoso-tstrsd-007","symmetricKey":{},"payload":{"MyDeviceFirmwareVersion":"12.0.2.5","MyDeviceProvisioningVersion":"1.0.0.0"}},"linkedHubs":["contoso-toasters-hub-1098.azure-devices.net","contoso-heatpumps-hub-1098.azure-devices.net"]}
+2022-08-03T20:34:41.382 [Information] Response
+2022-08-03T20:34:41.398 [Information] {"iotHubHostName":"contoso-toasters-hub-1098.azure-devices.net","initialTwin":{"properties":{"desired":{"state":"ready","darknessSetting":"medium"}},"tags":{"deviceType":"toaster"}}}
+2022-08-03T20:34:41.399 [Information] Executed 'Functions.HttpTrigger1' (Succeeded, Id=12950752-6d75-4f41-844b-c253a6653d4f, Duration=227ms)
+2022-08-03T20:34:41.178 [Information] Executing 'Functions.HttpTrigger1' (Reason='This function was programmatically called via the host APIs.', Id=12950752-6d75-4f41-844b-c253a6653d4f)
+2022-08-03T20:34:41.340 [Information] C# HTTP trigger function processed a request.
+2022-08-03T20:34:41.341 [Information] Request.Body:...
+2022-08-03T20:34:41.341 [Information] {"enrollmentGroup":{"enrollmentGroupId":"contoso-custom-allocated-devices","attestation":{"type":"symmetricKey"},"capabilities":{"iotEdge":false},"etag":"\"0000f176-0000-0700-0000-62eaad1e0000\"","provisioningStatus":"enabled","reprovisionPolicy":{"updateHubAssignment":true,"migrateDeviceData":true},"createdDateTimeUtc":"2022-08-03T17:15:10.8464255Z","lastUpdatedDateTimeUtc":"2022-08-03T17:15:10.8464255Z","allocationPolicy":"custom","iotHubs":["contoso-toasters-hub-1098.azure-devices.net","contoso-heatpumps-hub-1098.azure-devices.net"],"customAllocationDefinition":{"webhookUrl":"https://contoso-function-app-1098.azurewebsites.net/api/HttpTrigger1?****","apiVersion":"2021-10-01"}},"deviceRuntimeContext":{"registrationId":"breakroom499-contoso-tstrsd-007","currentIotHubHostName":"contoso-toasters-hub-1098.azure-devices.net","currentDeviceId":"breakroom499-contoso-tstrsd-007","symmetricKey":{},"payload":{"MyDeviceFirmwareVersion":"12.0.2.5","MyDeviceProvisioningVersion":"1.0.0.0"}},"linkedHubs":["contoso-toasters-hub-1098.azure-devices.net","contoso-heatpumps-hub-1098.azure-devices.net"]}
+2022-08-03T20:34:41.382 [Information] Response
+2022-08-03T20:34:41.398 [Information] {"iotHubHostName":"contoso-toasters-hub-1098.azure-devices.net","initialTwin":{"properties":{"desired":{"state":"ready","darknessSetting":"medium"}},"tags":{"deviceType":"toaster"}}}
+2022-08-03T20:34:41.399 [Information] Executed 'Functions.HttpTrigger1' (Succeeded, Id=12950752-6d75-4f41-844b-c253a6653d4f, Duration=227ms)
+Simulate the Contoso heat pump device
+To simulate the heat pump device, update the call toprov_dev_set_symmetric_key_info()inprov_dev_client_sample.cagain with the heat pump registration ID and derived device key you generated earlier. The key value6uejA9PfkQgmYylj8Zerp3kcbeVrGZ172YLa7VSnJzg=shown below is also only given as an example.// Set the symmetric key if using they auth type
+prov_dev_set_symmetric_key_info("mainbuilding167-contoso-hpsd-088", "6uejA9PfkQgmYylj8Zerp3kcbeVrGZ172YLa7VSnJzg=");Save the file.
+To simulate the heat pump device, update the call toprov_dev_set_symmetric_key_info()inprov_dev_client_sample.cagain with the heat pump registration ID and derived device key you generated earlier. The key value6uejA9PfkQgmYylj8Zerp3kcbeVrGZ172YLa7VSnJzg=shown below is also only given as an example.
+prov_dev_set_symmetric_key_info()
+// Set the symmetric key if using they auth type
+prov_dev_set_symmetric_key_info("mainbuilding167-contoso-hpsd-088", "6uejA9PfkQgmYylj8Zerp3kcbeVrGZ172YLa7VSnJzg=");
+// Set the symmetric key if using they auth type
+prov_dev_set_symmetric_key_info("mainbuilding167-contoso-hpsd-088", "6uejA9PfkQgmYylj8Zerp3kcbeVrGZ172YLa7VSnJzg=");
+Save the file.
+On the Visual Studio menu, selectDebug>Start without debuggingto run the solution. In the prompt to rebuild the project, selectYesto rebuild the project before running.The following output is an example of the simulated heat pump device successfully booting up and connecting to the provisioning service instance to be assigned to the Contoso heat pumps IoT hub by the custom allocation policy:Provisioning API Version: 1.8.0
+
+Registering Device
+
+Provisioning Status: PROV_DEVICE_REG_STATUS_CONNECTED
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+
+Registration Information received from service: contoso-heatpumps-hub-1098.azure-devices.net, deviceId: mainbuilding167-contoso-hpsd-088
+
+Press enter key to exit:
+On the Visual Studio menu, selectDebug>Start without debuggingto run the solution. In the prompt to rebuild the project, selectYesto rebuild the project before running.
+The following output is an example of the simulated heat pump device successfully booting up and connecting to the provisioning service instance to be assigned to the Contoso heat pumps IoT hub by the custom allocation policy:
+Provisioning API Version: 1.8.0
+
+Registering Device
+
+Provisioning Status: PROV_DEVICE_REG_STATUS_CONNECTED
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+
+Registration Information received from service: contoso-heatpumps-hub-1098.azure-devices.net, deviceId: mainbuilding167-contoso-hpsd-088
+
+Press enter key to exit:
+Provisioning API Version: 1.8.0
+
+Registering Device
+
+Provisioning Status: PROV_DEVICE_REG_STATUS_CONNECTED
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+Provisioning Status: PROV_DEVICE_REG_STATUS_ASSIGNING
+
+Registration Information received from service: contoso-heatpumps-hub-1098.azure-devices.net, deviceId: mainbuilding167-contoso-hpsd-088
+
+Press enter key to exit:
+Troubleshoot custom allocation policies
+The following table shows expected scenarios and the results error codes you might receive. Use this table to help troubleshoot custom allocation policy failures with your Azure Functions.
+Clean up resources
+If you plan to continue working with the resources created in this tutorial, you can leave them. If you don't plan to continue using the resources, use the following steps to delete all of the resources created in this tutorial to avoid unnecessary charges.
+The steps here assume you created all resources in this tutorial as instructed in the same resource group namedcontoso-us-resource-group.
+Important
+Deleting a resource group is irreversible. The resource group and all the resources contained in it are permanently deleted. Make sure that you don't accidentally delete the wrong resource group or resources. If you created the IoT Hub inside an existing resource group that contains resources you want to keep, only delete the IoT Hub resource itself instead of deleting the resource group.
+To delete the resource group by name:
+Sign in to theAzure portaland selectResource groups.
+Sign in to theAzure portaland selectResource groups.
+In theFilter by name...textbox, type the name of the resource group containing your resources,contoso-us-resource-group.
+In theFilter by name...textbox, type the name of the resource group containing your resources,contoso-us-resource-group.
+To the right of your resource group in the result list, select...thenDelete resource group.
+To the right of your resource group in the result list, select...thenDelete resource group.
+You'll be asked to confirm the deletion of the resource group. Type the name of your resource group again to confirm, and then selectDelete. After a few moments, the resource group and all of its contained resources are deleted.
+You'll be asked to confirm the deletion of the resource group. Type the name of your resource group again to confirm, and then selectDelete. After a few moments, the resource group and all of its contained resources are deleted.
+Next steps
+To learn more about custom allocation policies, see
+Understand custom allocation policies
+Feedback
+Was this page helpful?
+Additional resources

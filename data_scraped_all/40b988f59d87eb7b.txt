@@ -1,0 +1,479 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Integrate Azure HPC Cache with Azure Kubernetes Service (AKS)
+Article
+2024-08-01
+7 contributors
+In this article
+Azure HPC Cachespeeds access to your data for high-performance computing (HPC) tasks. By caching files in Azure, Azure HPC Cache brings the scalability of cloud computing to your existing workflow. This article shows you how to integrate Azure HPC Cache with Azure Kubernetes Service (AKS).
+Before you begin
+AKS cluster must be in a region thatsupports Azure HPC Cache.
+AKS cluster must be in a region thatsupports Azure HPC Cache.
+You need Azure CLI version 2.7 or later. Runaz --versionto find the version. If you need to install or upgrade, seeInstall Azure CLI.
+You need Azure CLI version 2.7 or later. Runaz --versionto find the version. If you need to install or upgrade, seeInstall Azure CLI.
+az --version
+Register thehpc-cacheextension in your Azure subscription. For more information on using HPC Cache with Azure CLI, see theHPC Cache CLI prerequisites.
+Register thehpc-cacheextension in your Azure subscription. For more information on using HPC Cache with Azure CLI, see theHPC Cache CLI prerequisites.
+hpc-cache
+Review theHPC Cache prerequisites. You need to satisfy the following before you can run an HPC Cache:The cache requires adedicatedsubnet with at least 64 IP addresses available.The subnet must not host other VMs or containers.The subnet must be accessible from the AKS nodes.
+Review theHPC Cache prerequisites. You need to satisfy the following before you can run an HPC Cache:
+The cache requires adedicatedsubnet with at least 64 IP addresses available.
+The subnet must not host other VMs or containers.
+The subnet must be accessible from the AKS nodes.
+If you need to run your application as a user without root access, you may need to disable root squashing by using the change owner (chown) command to change directory ownership to another user. The user without root access needs to own a directory to access the file system. For the user to own a directory, the root user must chown a directory to that user, but if the HPC Cache is squashing root, this operation is denied because the root user (UID 0) is being mapped to the anonymous user. For more information about root squashing and client access policies, seeHPC Cache access policies.
+If you need to run your application as a user without root access, you may need to disable root squashing by using the change owner (chown) command to change directory ownership to another user. The user without root access needs to own a directory to access the file system. For the user to own a directory, the root user must chown a directory to that user, but if the HPC Cache is squashing root, this operation is denied because the root user (UID 0) is being mapped to the anonymous user. For more information about root squashing and client access policies, seeHPC Cache access policies.
+Install thehpc-cacheAzure CLI extension
+hpc-cache
+Important
+AKS preview features are available on a self-service, opt-in basis. Previews are provided "as is" and "as available," and they're excluded from the service-level agreements and limited warranty. AKS previews are partially covered by customer support on a best-effort basis. As such, these features aren't meant for production use. For more information, see the following support articles:
+AKS support policies
+Azure support FAQ
+To install the hpc-cache extension, run the following command:
+az extension add --name hpc-cache
+az extension add --name hpc-cache
+Run the following command to update to the latest version of the extension released:
+az extension update --name hpc-cache
+az extension update --name hpc-cache
+Register the StorageCache feature flag
+Register theMicrosoft.StorageCacheresource provider using theaz provider registercommand.
+az provider register
+az provider register --namespace Microsoft.StorageCache --wait
+az provider register --namespace Microsoft.StorageCache --wait
+It takes a few minutes for the status to showRegistered. Verify the registration status by using theaz feature showcommand:
+az feature show --namespace "Microsoft.StorageCache"
+az feature show --namespace "Microsoft.StorageCache"
+Create the Azure HPC Cache
+Get the node resource group using theaz aks showcommand with the--query nodeResourceGroupquery parameter.az aks show --resource-group myResourceGroup --name myAKSCluster --query nodeResourceGroup -o tsvYour output should look similar to the following example output:MC_myResourceGroup_myAKSCluster_eastus
+Get the node resource group using theaz aks showcommand with the--query nodeResourceGroupquery parameter.
+az aks show
+--query nodeResourceGroup
+az aks show --resource-group myResourceGroup --name myAKSCluster --query nodeResourceGroup -o tsv
+az aks show --resource-group myResourceGroup --name myAKSCluster --query nodeResourceGroup -o tsv
+Your output should look similar to the following example output:
+MC_myResourceGroup_myAKSCluster_eastus
+MC_myResourceGroup_myAKSCluster_eastus
+Create a dedicated HPC Cache subnet using theaz network vnet subnet createcommand. First define the environment variables forRESOURCE_GROUP,VNET_NAME,VNET_ID, andSUBNET_NAME. Copy the output from the previous step forRESOURCE_GROUP, and specify a value forSUBNET_NAME.RESOURCE_GROUP=MC_myResourceGroup_myAKSCluster_eastus
+VNET_NAME=$(az network vnet list --resource-group $RESOURCE_GROUP --query [].name -o tsv)
+VNET_ID=$(az network vnet show --resource-group $RESOURCE_GROUP --name $VNET_NAME --query "id" -o tsv)
+SUBNET_NAME=MyHpcCacheSubnetaz network vnet subnet create \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $VNET_NAME \
+    --name $SUBNET_NAME \
+    --address-prefixes 10.0.0.0/26
+Create a dedicated HPC Cache subnet using theaz network vnet subnet createcommand. First define the environment variables forRESOURCE_GROUP,VNET_NAME,VNET_ID, andSUBNET_NAME. Copy the output from the previous step forRESOURCE_GROUP, and specify a value forSUBNET_NAME.
+az network vnet subnet create
+RESOURCE_GROUP
+VNET_NAME
+VNET_ID
+SUBNET_NAME
+RESOURCE_GROUP
+SUBNET_NAME
+RESOURCE_GROUP=MC_myResourceGroup_myAKSCluster_eastus
+VNET_NAME=$(az network vnet list --resource-group $RESOURCE_GROUP --query [].name -o tsv)
+VNET_ID=$(az network vnet show --resource-group $RESOURCE_GROUP --name $VNET_NAME --query "id" -o tsv)
+SUBNET_NAME=MyHpcCacheSubnet
+RESOURCE_GROUP=MC_myResourceGroup_myAKSCluster_eastus
+VNET_NAME=$(az network vnet list --resource-group $RESOURCE_GROUP --query [].name -o tsv)
+VNET_ID=$(az network vnet show --resource-group $RESOURCE_GROUP --name $VNET_NAME --query "id" -o tsv)
+SUBNET_NAME=MyHpcCacheSubnet
+az network vnet subnet create \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $VNET_NAME \
+    --name $SUBNET_NAME \
+    --address-prefixes 10.0.0.0/26
+az network vnet subnet create \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $VNET_NAME \
+    --name $SUBNET_NAME \
+    --address-prefixes 10.0.0.0/26
+Create an HPC Cache in the same node resource group and region. First define the environment variableSUBNET_ID.SUBNET_ID=$(az network vnet subnet show --resource-group $RESOURCE_GROUP --vnet-name $VNET_NAME --name $SUBNET_NAME --query "id" -o tsv)Create the HPC Cache using theaz hpc-cache createcommand. The following example creates the HPC Cache in the East US region with a Standard 2G cache type namedMyHpcCache. Specify a value for--location,--sku-name, and--name.az hpc-cache create \
+  --resource-group $RESOURCE_GROUP \
+  --cache-size-gb "3072" \
+  --location eastus \
+  --subnet $SUBNET_ID \
+  --sku-name "Standard_2G" \
+  --name MyHpcCacheNoteCreation of the HPC Cache can take up to 20 minutes.
+Create an HPC Cache in the same node resource group and region. First define the environment variableSUBNET_ID.
+SUBNET_ID
+SUBNET_ID=$(az network vnet subnet show --resource-group $RESOURCE_GROUP --vnet-name $VNET_NAME --name $SUBNET_NAME --query "id" -o tsv)
+SUBNET_ID=$(az network vnet subnet show --resource-group $RESOURCE_GROUP --vnet-name $VNET_NAME --name $SUBNET_NAME --query "id" -o tsv)
+Create the HPC Cache using theaz hpc-cache createcommand. The following example creates the HPC Cache in the East US region with a Standard 2G cache type namedMyHpcCache. Specify a value for--location,--sku-name, and--name.
+az hpc-cache create
+az hpc-cache create \
+  --resource-group $RESOURCE_GROUP \
+  --cache-size-gb "3072" \
+  --location eastus \
+  --subnet $SUBNET_ID \
+  --sku-name "Standard_2G" \
+  --name MyHpcCache
+az hpc-cache create \
+  --resource-group $RESOURCE_GROUP \
+  --cache-size-gb "3072" \
+  --location eastus \
+  --subnet $SUBNET_ID \
+  --sku-name "Standard_2G" \
+  --name MyHpcCache
+Note
+Creation of the HPC Cache can take up to 20 minutes.
+Create and configure Azure storage
+Create a storage account using theaz storage account createcommand. First define the environment variableSTORAGE_ACCOUNT_NAME.ImportantYou need to select a unique storage account name. Replaceuniquestorageaccountwith your specified name. Storage account names must bebetween 3 and 24 characters in lengthandcan contain only numbers and lowercase letters.STORAGE_ACCOUNT_NAME=uniquestorageaccountThe following example creates a storage account in the East US region with the Standard_LRS SKU. Specify a value for--locationand--sku.az storage account create \
+  --name $STORAGE_ACCOUNT_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --location eastus \
+  --sku Standard_LRS
+Create a storage account using theaz storage account createcommand. First define the environment variableSTORAGE_ACCOUNT_NAME.
+az storage account create
+STORAGE_ACCOUNT_NAME
+Important
+You need to select a unique storage account name. Replaceuniquestorageaccountwith your specified name. Storage account names must bebetween 3 and 24 characters in lengthandcan contain only numbers and lowercase letters.
+uniquestorageaccount
+STORAGE_ACCOUNT_NAME=uniquestorageaccount
+STORAGE_ACCOUNT_NAME=uniquestorageaccount
+The following example creates a storage account in the East US region with the Standard_LRS SKU. Specify a value for--locationand--sku.
+az storage account create \
+  --name $STORAGE_ACCOUNT_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --location eastus \
+  --sku Standard_LRS
+az storage account create \
+  --name $STORAGE_ACCOUNT_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --location eastus \
+  --sku Standard_LRS
+Assign theStorage Blob Data Contributor Roleon your subscription using theaz role assignment createcommand. First, define the environment variablesSTORAGE_ACCOUNT_IDandAD_USER.STORAGE_ACCOUNT_ID=$(az storage account show --name $STORAGE_ACCOUNT_NAME --query "id" -o tsv)
+AD_USER=$(az ad signed-in-user show --query objectId -o tsv)az role assignment create --role "Storage Blob Data Contributor" --assignee $AD_USER --scope $STORAGE_ACCOUNT_ID
+Assign theStorage Blob Data Contributor Roleon your subscription using theaz role assignment createcommand. First, define the environment variablesSTORAGE_ACCOUNT_IDandAD_USER.
+az role assignment create
+STORAGE_ACCOUNT_ID
+AD_USER
+STORAGE_ACCOUNT_ID=$(az storage account show --name $STORAGE_ACCOUNT_NAME --query "id" -o tsv)
+AD_USER=$(az ad signed-in-user show --query objectId -o tsv)
+STORAGE_ACCOUNT_ID=$(az storage account show --name $STORAGE_ACCOUNT_NAME --query "id" -o tsv)
+AD_USER=$(az ad signed-in-user show --query objectId -o tsv)
+az role assignment create --role "Storage Blob Data Contributor" --assignee $AD_USER --scope $STORAGE_ACCOUNT_ID
+az role assignment create --role "Storage Blob Data Contributor" --assignee $AD_USER --scope $STORAGE_ACCOUNT_ID
+Create the Blob container within the storage account using theaz storage container createcommand. First, define the environment variableCONTAINER_NAMEand replace the name for the Blob container.CONTAINER_NAME=mystoragecontaineraz storage container create --name $CONTAINER_NAME --account-name $STORAGE_ACCOUNT_NAME --auth-mode login
+Create the Blob container within the storage account using theaz storage container createcommand. First, define the environment variableCONTAINER_NAMEand replace the name for the Blob container.
+az storage container create
+CONTAINER_NAME
+CONTAINER_NAME=mystoragecontainer
+CONTAINER_NAME=mystoragecontainer
+az storage container create --name $CONTAINER_NAME --account-name $STORAGE_ACCOUNT_NAME --auth-mode login
+az storage container create --name $CONTAINER_NAME --account-name $STORAGE_ACCOUNT_NAME --auth-mode login
+Provide permissions to the Azure HPC Cache service account to access your storage account and Blob container using theaz role assignmentcommands. First, define the environment variablesHPC_CACHE_USERandHPC_CACHE_ID.HPC_CACHE_USER="StorageCache Resource Provider"
+HPC_CACHE_ID=$(az ad sp list --display-name "${HPC_CACHE_USER}" --query "[].objectId" -o tsv)az role assignment create --role "Storage Account Contributor" --assignee $HPC_CACHE_ID --scope $STORAGE_ACCOUNT_ID
+az role assignment create --role "Storage Blob Data Contributor" --assignee $HPC_CACHE_ID --scope $STORAGE_ACCOUNT_ID
+Provide permissions to the Azure HPC Cache service account to access your storage account and Blob container using theaz role assignmentcommands. First, define the environment variablesHPC_CACHE_USERandHPC_CACHE_ID.
+az role assignment
+HPC_CACHE_USER
+HPC_CACHE_ID
+HPC_CACHE_USER="StorageCache Resource Provider"
+HPC_CACHE_ID=$(az ad sp list --display-name "${HPC_CACHE_USER}" --query "[].objectId" -o tsv)
+HPC_CACHE_USER="StorageCache Resource Provider"
+HPC_CACHE_ID=$(az ad sp list --display-name "${HPC_CACHE_USER}" --query "[].objectId" -o tsv)
+az role assignment create --role "Storage Account Contributor" --assignee $HPC_CACHE_ID --scope $STORAGE_ACCOUNT_ID
+az role assignment create --role "Storage Blob Data Contributor" --assignee $HPC_CACHE_ID --scope $STORAGE_ACCOUNT_ID
+az role assignment create --role "Storage Account Contributor" --assignee $HPC_CACHE_ID --scope $STORAGE_ACCOUNT_ID
+az role assignment create --role "Storage Blob Data Contributor" --assignee $HPC_CACHE_ID --scope $STORAGE_ACCOUNT_ID
+Add the blob container to your HPC Cache as a storage target using theaz hpc-cache blob-storage-target addcommand. The following example creates a blob container namedMyStorageTargetto the HPC CacheMyHpcCache. Specify a value for--name,--cache-name, and--virtual-namespace-path.az hpc-cache blob-storage-target add \
+  --resource-group $RESOURCE_GROUP \
+  --cache-name MyHpcCache \
+  --name MyStorageTarget \
+  --storage-account $STORAGE_ACCOUNT_ID \
+  --container-name $CONTAINER_NAME \
+  --virtual-namespace-path "/myfilepath"
+Add the blob container to your HPC Cache as a storage target using theaz hpc-cache blob-storage-target addcommand. The following example creates a blob container namedMyStorageTargetto the HPC CacheMyHpcCache. Specify a value for--name,--cache-name, and--virtual-namespace-path.
+az hpc-cache blob-storage-target add
+az hpc-cache blob-storage-target add \
+  --resource-group $RESOURCE_GROUP \
+  --cache-name MyHpcCache \
+  --name MyStorageTarget \
+  --storage-account $STORAGE_ACCOUNT_ID \
+  --container-name $CONTAINER_NAME \
+  --virtual-namespace-path "/myfilepath"
+az hpc-cache blob-storage-target add \
+  --resource-group $RESOURCE_GROUP \
+  --cache-name MyHpcCache \
+  --name MyStorageTarget \
+  --storage-account $STORAGE_ACCOUNT_ID \
+  --container-name $CONTAINER_NAME \
+  --virtual-namespace-path "/myfilepath"
+Set up client load balancing
+Create an Azure Private DNS zone for the client-facing IP addresses using theaz network private-dns zone createcommand. First define the environment variablePRIVATE_DNS_ZONEand specify a name for the zone.PRIVATE_DNS_ZONE="myhpccache.local"az network private-dns zone create \
+  --resource-group $RESOURCE_GROUP \
+  --name $PRIVATE_DNS_ZONE
+Create an Azure Private DNS zone for the client-facing IP addresses using theaz network private-dns zone createcommand. First define the environment variablePRIVATE_DNS_ZONEand specify a name for the zone.
+az network private-dns zone create
+PRIVATE_DNS_ZONE
+PRIVATE_DNS_ZONE="myhpccache.local"
+PRIVATE_DNS_ZONE="myhpccache.local"
+az network private-dns zone create \
+  --resource-group $RESOURCE_GROUP \
+  --name $PRIVATE_DNS_ZONE
+az network private-dns zone create \
+  --resource-group $RESOURCE_GROUP \
+  --name $PRIVATE_DNS_ZONE
+Create a DNS link between the Azure Private DNS Zone and the VNet using theaz network private-dns link vnet createcommand. Replace the value for--name.az network private-dns link vnet create \
+  --resource-group $RESOURCE_GROUP \
+  --name MyDNSLink \
+  --zone-name $PRIVATE_DNS_ZONE \
+  --virtual-network $VNET_NAME \
+  --registration-enabled true
+Create a DNS link between the Azure Private DNS Zone and the VNet using theaz network private-dns link vnet createcommand. Replace the value for--name.
+az network private-dns link vnet create
+az network private-dns link vnet create \
+  --resource-group $RESOURCE_GROUP \
+  --name MyDNSLink \
+  --zone-name $PRIVATE_DNS_ZONE \
+  --virtual-network $VNET_NAME \
+  --registration-enabled true
+az network private-dns link vnet create \
+  --resource-group $RESOURCE_GROUP \
+  --name MyDNSLink \
+  --zone-name $PRIVATE_DNS_ZONE \
+  --virtual-network $VNET_NAME \
+  --registration-enabled true
+Create the round-robin DNS name for the client-facing IP addresses using theaz network private-dns record-set a createcommand. First, define the environment variablesDNS_NAME,HPC_MOUNTS0,HPC_MOUNTS1, andHPC_MOUNTS2. Replace the value for the propertyDNS_NAME.DNS_NAME="server"
+HPC_MOUNTS0=$(az hpc-cache show --name "MyHpcCache" --resource-group $RESOURCE_GROUP --query "mountAddresses[0]" -o tsv | tr --delete '\r')
+HPC_MOUNTS1=$(az hpc-cache show --name "MyHpcCache" --resource-group $RESOURCE_GROUP --query "mountAddresses[1]" -o tsv | tr --delete '\r')
+HPC_MOUNTS2=$(az hpc-cache show --name "MyHpcCache" --resource-group $RESOURCE_GROUP --query "mountAddresses[2]" -o tsv | tr --delete '\r')az network private-dns record-set a add-record -g $RESOURCE_GROUP -z $PRIVATE_DNS_ZONE -n $DNS_NAME -a $HPC_MOUNTS0
+
+az network private-dns record-set a add-record -g $RESOURCE_GROUP -z $PRIVATE_DNS_ZONE -n $DNS_NAME -a $HPC_MOUNTS1
+
+az network private-dns record-set a add-record -g $RESOURCE_GROUP -z $PRIVATE_DNS_ZONE -n $DNS_NAME -a $HPC_MOUNTS2
+Create the round-robin DNS name for the client-facing IP addresses using theaz network private-dns record-set a createcommand. First, define the environment variablesDNS_NAME,HPC_MOUNTS0,HPC_MOUNTS1, andHPC_MOUNTS2. Replace the value for the propertyDNS_NAME.
+az network private-dns record-set a create
+DNS_NAME
+HPC_MOUNTS0
+HPC_MOUNTS1
+HPC_MOUNTS2
+DNS_NAME
+DNS_NAME="server"
+HPC_MOUNTS0=$(az hpc-cache show --name "MyHpcCache" --resource-group $RESOURCE_GROUP --query "mountAddresses[0]" -o tsv | tr --delete '\r')
+HPC_MOUNTS1=$(az hpc-cache show --name "MyHpcCache" --resource-group $RESOURCE_GROUP --query "mountAddresses[1]" -o tsv | tr --delete '\r')
+HPC_MOUNTS2=$(az hpc-cache show --name "MyHpcCache" --resource-group $RESOURCE_GROUP --query "mountAddresses[2]" -o tsv | tr --delete '\r')
+DNS_NAME="server"
+HPC_MOUNTS0=$(az hpc-cache show --name "MyHpcCache" --resource-group $RESOURCE_GROUP --query "mountAddresses[0]" -o tsv | tr --delete '\r')
+HPC_MOUNTS1=$(az hpc-cache show --name "MyHpcCache" --resource-group $RESOURCE_GROUP --query "mountAddresses[1]" -o tsv | tr --delete '\r')
+HPC_MOUNTS2=$(az hpc-cache show --name "MyHpcCache" --resource-group $RESOURCE_GROUP --query "mountAddresses[2]" -o tsv | tr --delete '\r')
+az network private-dns record-set a add-record -g $RESOURCE_GROUP -z $PRIVATE_DNS_ZONE -n $DNS_NAME -a $HPC_MOUNTS0
+
+az network private-dns record-set a add-record -g $RESOURCE_GROUP -z $PRIVATE_DNS_ZONE -n $DNS_NAME -a $HPC_MOUNTS1
+
+az network private-dns record-set a add-record -g $RESOURCE_GROUP -z $PRIVATE_DNS_ZONE -n $DNS_NAME -a $HPC_MOUNTS2
+az network private-dns record-set a add-record -g $RESOURCE_GROUP -z $PRIVATE_DNS_ZONE -n $DNS_NAME -a $HPC_MOUNTS0
+
+az network private-dns record-set a add-record -g $RESOURCE_GROUP -z $PRIVATE_DNS_ZONE -n $DNS_NAME -a $HPC_MOUNTS1
+
+az network private-dns record-set a add-record -g $RESOURCE_GROUP -z $PRIVATE_DNS_ZONE -n $DNS_NAME -a $HPC_MOUNTS2
+Create a persistent volume
+Create a file namedpv-nfs.yamlto define apersistent volumeand then paste in the following manifest. Replace the values for the propertyserverandpath.---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-nfs
+spec:
+  capacity:
+    storage: 10000Gi
+  accessModes:
+    - ReadWriteMany
+  mountOptions:
+    - vers=3
+  nfs:
+    server: server.myhpccache.local
+    path: /
+Create a file namedpv-nfs.yamlto define apersistent volumeand then paste in the following manifest. Replace the values for the propertyserverandpath.
+pv-nfs.yaml
+server
+path
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-nfs
+spec:
+  capacity:
+    storage: 10000Gi
+  accessModes:
+    - ReadWriteMany
+  mountOptions:
+    - vers=3
+  nfs:
+    server: server.myhpccache.local
+    path: /
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-nfs
+spec:
+  capacity:
+    storage: 10000Gi
+  accessModes:
+    - ReadWriteMany
+  mountOptions:
+    - vers=3
+  nfs:
+    server: server.myhpccache.local
+    path: /
+Get the credentials for your Kubernetes cluster using theaz aks get-credentialscommand.az aks get-credentials --resource-group myResourceGroup --name myAKSCluster
+Get the credentials for your Kubernetes cluster using theaz aks get-credentialscommand.
+az aks get-credentials
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster
+Create the persistent volume using thekubectl applycommand.kubectl apply -f pv-nfs.yaml
+Create the persistent volume using thekubectl applycommand.
+kubectl apply
+kubectl apply -f pv-nfs.yaml
+kubectl apply -f pv-nfs.yaml
+Verify the status of the persistent volume isAvailableusing thekubectl describecommand.kubectl describe pv pv-nfs
+Verify the status of the persistent volume isAvailableusing thekubectl describecommand.
+kubectl describe
+kubectl describe pv pv-nfs
+kubectl describe pv pv-nfs
+Create the persistent volume claim
+Create a file namedpvc-nfs.yamlto define apersistent volume claim, and then paste the following manifest.apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-nfs
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 100Gi
+Create a file namedpvc-nfs.yamlto define apersistent volume claim, and then paste the following manifest.
+pvc-nfs.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-nfs
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 100Gi
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-nfs
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 100Gi
+Create the persistent volume claim using thekubectl applycommand.kubectl apply -f pvc-nfs.yaml
+Create the persistent volume claim using thekubectl applycommand.
+kubectl apply
+kubectl apply -f pvc-nfs.yaml
+kubectl apply -f pvc-nfs.yaml
+Verify the status of the persistent volume claim isBoundusing thekubectl describecommand.kubectl describe pvc pvc-nfs
+Verify the status of the persistent volume claim isBoundusing thekubectl describecommand.
+kubectl describe
+kubectl describe pvc pvc-nfs
+kubectl describe pvc pvc-nfs
+Mount the HPC Cache with a pod
+Create a file namednginx-nfs.yamlto define a pod that uses the persistent volume claim, and then paste the following manifest.kind: Pod
+apiVersion: v1
+metadata:
+  name: nginx-nfs
+spec:
+  containers:
+ - image: mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine
+    name: nginx-nfs
+    command:
+    - "/bin/sh"
+    - "-c"
+    - while true; do echo $(date) >> /mnt/azure/myfilepath/outfile; sleep 1; done
+    volumeMounts:
+    - name: disk01
+      mountPath: /mnt/azure
+  volumes:
+ - name: disk01
+    persistentVolumeClaim:
+      claimName: pvc-nfs
+Create a file namednginx-nfs.yamlto define a pod that uses the persistent volume claim, and then paste the following manifest.
+nginx-nfs.yaml
+kind: Pod
+apiVersion: v1
+metadata:
+  name: nginx-nfs
+spec:
+  containers:
+ - image: mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine
+    name: nginx-nfs
+    command:
+    - "/bin/sh"
+    - "-c"
+    - while true; do echo $(date) >> /mnt/azure/myfilepath/outfile; sleep 1; done
+    volumeMounts:
+    - name: disk01
+      mountPath: /mnt/azure
+  volumes:
+ - name: disk01
+    persistentVolumeClaim:
+      claimName: pvc-nfs
+kind: Pod
+apiVersion: v1
+metadata:
+  name: nginx-nfs
+spec:
+  containers:
+ - image: mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine
+    name: nginx-nfs
+    command:
+    - "/bin/sh"
+    - "-c"
+    - while true; do echo $(date) >> /mnt/azure/myfilepath/outfile; sleep 1; done
+    volumeMounts:
+    - name: disk01
+      mountPath: /mnt/azure
+  volumes:
+ - name: disk01
+    persistentVolumeClaim:
+      claimName: pvc-nfs
+Create the pod using thekubectl applycommand.kubectl apply -f nginx-nfs.yaml
+Create the pod using thekubectl applycommand.
+kubectl apply
+kubectl apply -f nginx-nfs.yaml
+kubectl apply -f nginx-nfs.yaml
+Verify the pod is running using thekubectl describecommand.kubectl describe pod nginx-nfs
+Verify the pod is running using thekubectl describecommand.
+kubectl describe
+kubectl describe pod nginx-nfs
+kubectl describe pod nginx-nfs
+Verify your volume is mounted in the pod using thekubectl execcommand to connect to the pod.kubectl exec -it nginx-nfs -- shTo check if the volume is mounted, rundfin its human-readable format using the--human-readable(-hfor short) option.df -hThe following example resembles output returned from the command:Filesystem             Size  Used Avail Use% Mounted on
+...
+server.myhpccache.local:/myfilepath 8.0E         0      8.0E   0% /mnt/azure/myfilepath
+...
+Verify your volume is mounted in the pod using thekubectl execcommand to connect to the pod.
+kubectl exec
+kubectl exec -it nginx-nfs -- sh
+kubectl exec -it nginx-nfs -- sh
+To check if the volume is mounted, rundfin its human-readable format using the--human-readable(-hfor short) option.
+df
+--human-readable
+-h
+df -h
+df -h
+The following example resembles output returned from the command:
+Filesystem             Size  Used Avail Use% Mounted on
+...
+server.myhpccache.local:/myfilepath 8.0E         0      8.0E   0% /mnt/azure/myfilepath
+...
+Filesystem             Size  Used Avail Use% Mounted on
+...
+server.myhpccache.local:/myfilepath 8.0E         0      8.0E   0% /mnt/azure/myfilepath
+...
+Next steps
+For more information on Azure HPC Cache, seeHPC Cache overview.
+For more information on using NFS with AKS, seeManually create and use a Network File System (NFS) Linux Server volume with AKS.
+Azure Kubernetes Service
+
+Additional resources

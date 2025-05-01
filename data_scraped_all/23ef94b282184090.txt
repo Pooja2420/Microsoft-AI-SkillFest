@@ -1,0 +1,1775 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Configure Azure File Sync public and private network endpoints
+Article
+2024-06-05
+12 contributors
+In this article
+Azure Files and Azure File Sync provide two main types of endpoints for accessing Azure file shares:
+Public endpoints, which have a public IP address and can be accessed from anywhere in the world.
+Private endpoints, which exist within a virtual network and have a private IP address from within the address space of that virtual network.
+For both Azure Files and Azure File Sync, the Azure management objects (the storage account and the Storage Sync Service) control both the public and private endpoints. The storage account is a management construct that represents a shared pool of storage in which you can deploy multiple file shares, as well as other storage resources, such as blobs or queues. The Storage Sync Service is a management construct that represents registered servers, which are Windows file servers with an established trust relationship with Azure File Sync, and sync groups, which define the topology of the sync relationship.
+This article focuses on how to configure the networking endpoints for both Azure Files and Azure File Sync. To learn more about how to configure networking endpoints for accessing Azure file shares directly, rather than caching on-premises with Azure File Sync, seeConfiguring Azure Files network endpoints.
+We recommend readingAzure File Sync networking considerationsprior to reading this how-to guide.
+Prerequisites
+This article assumes that:
+You have an Azure subscription. If you don't already have a subscription, then create afree accountbefore you begin.
+You've already created an Azure file share in a storage account which you would like to connect to from on-premises. To learn how to create an Azure file share, seeCreate an Azure file share.
+You allow domain traffic to the following endpoints, seeAzure service endpoints:
+Additionally:
+If you intend to use Azure PowerShell,install the latest version.
+If you intend to use the Azure CLI,install the latest version.
+Create the private endpoints
+When you create a private endpoint for an Azure resource, the following resources are deployed:
+A private endpoint: An Azure resource representing either the private endpoint for the storage account or the Storage Sync Service. Think of this as a resource that connects your Azure resource and a network interface.
+A network interface (NIC): The network interface that maintains a private IP address within the specified virtual network/subnet. This is the exact same resource that gets deployed when you deploy a virtual machine (VM), however instead of being assigned to a VM, it's owned by the private endpoint.
+A private DNS zone: If you've never deployed a private endpoint for this virtual network before, a new private DNS zone will be deployed for your virtual network. A DNS A record will also be created for Azure resource in this DNS zone. If you've already deployed a private endpoint in this virtual network, a new A record for Azure resource will be added to the existing DNS zone. Deploying a DNS zone is optional, however highly recommended to simplify the DNS management required.
+Note
+This article uses the DNS suffixes for the Azure Public regions,core.windows.netfor storage accounts andafs.azure.netfor Storage Sync Services. This also applies to Azure Sovereign clouds such as the Azure US Government cloud - just substitute the appropriate suffixes for your environment.
+core.windows.net
+afs.azure.net
+Create the storage account private endpoint
+Portal
+PowerShell
+Azure CLI
+Navigate to the storage account for which you would like to create a private endpoint. From the service menu, underSecurity + networking, selectNetworking,Private endpoint connections, and then+ Private endpointto create a new private endpoint.
+
+The resulting wizard has multiple pages to complete.
+In theBasicsblade, select the desired subscription, resource group, name, network interface name, and region for your private endpoint. These can be whatever you want, they don't have to match the storage account in any way, although you must create the private endpoint in the same region as the virtual network you wish to create the private endpoint in. Then selectNext: Resource.
+
+In theResourceblade, selectfilefor the target sub-resource. Then selectNext: Virtual Network.
+
+TheVirtual Networkblade allows you to select the specific virtual network and subnet you would like to add your private endpoint to. Select dynamic or static IP address allocation for the new private endpoint. If you select static, you'll also need to provide a name and a private IP address. You can also optionally specify an application security group. When you're finished, selectNext: DNS.
+
+TheDNSblade contains the information for integrating your private endpoint with a private DNS zone. Make sure the subscription and resource group are correct, then selectNext: Tags.
+
+You can optionally apply tags to categorize your resources, such as applying the nameEnvironmentand the valueTestto all testing resources. Enter name/value pairs if desired, and then selectNext: Review + create.
+
+SelectCreateto create the private endpoint.
+If you have a VM inside of your virtual network, or you've configured DNS forwarding as described inConfiguring DNS forwarding for Azure Files, you can test that your private endpoint is set up correctly by running the following commands from PowerShell, the command line, or the terminal (works for Windows, Linux, or macOS). You must replace<storage-account-name>with the appropriate storage account name:
+<storage-account-name>
+nslookup <storage-account-name>.file.core.windows.net
+nslookup <storage-account-name>.file.core.windows.net
+If everything works successfully, you should see the following output, where192.168.0.5is the private IP address of the private endpoint in your virtual network (output shown for Windows):
+192.168.0.5
+Server:  UnKnown
+Address:  10.2.4.4
+
+Non-authoritative answer:
+Name:    storageaccount.privatelink.file.core.windows.net
+Address:  192.168.0.5
+Aliases:  storageaccount.file.core.windows.net
+Server:  UnKnown
+Address:  10.2.4.4
+
+Non-authoritative answer:
+Name:    storageaccount.privatelink.file.core.windows.net
+Address:  192.168.0.5
+Aliases:  storageaccount.file.core.windows.net
+To create a private endpoint for your storage account, you first need to get a reference to your storage account and the virtual network subnet to which you want to add the private endpoint. Replace<storage-account-resource-group-name>,<storage-account-name>,<vnet-resource-group-name>,<vnet-name>, and<vnet-subnet-name>below:
+<storage-account-resource-group-name>
+<storage-account-name>
+<vnet-resource-group-name>
+<vnet-name>
+<vnet-subnet-name>
+$storageAccountResourceGroupName = "<storage-account-resource-group-name>"
+$storageAccountName = "<storage-account-name>"
+$virtualNetworkResourceGroupName = "<vnet-resource-group-name>"
+$virtualNetworkName = "<vnet-name>"
+$subnetName = "<vnet-subnet-name>"
+
+# Get storage account reference, and throw error if it doesn't exist
+$storageAccount = Get-AzStorageAccount `
+        -ResourceGroupName $storageAccountResourceGroupName `
+        -Name $storageAccountName `
+        -ErrorAction SilentlyContinue
+
+if ($null -eq $storageAccount) {
+    $errorMessage = "Storage account $storageAccountName not found "
+    $errorMessage += "in resource group $storageAccountResourceGroupName."
+    Write-Error -Message $errorMessage -ErrorAction Stop
+}
+
+# Get virtual network reference, and throw error if it doesn't exist
+$virtualNetwork = Get-AzVirtualNetwork `
+        -ResourceGroupName $virtualNetworkResourceGroupName `
+        -Name $virtualNetworkName `
+        -ErrorAction SilentlyContinue
+
+if ($null -eq $virtualNetwork) {
+    $errorMessage = "Virtual network $virtualNetworkName not found "
+    $errorMessage += "in resource group $virtualNetworkResourceGroupName."
+    Write-Error -Message $errorMessage -ErrorAction Stop
+}
+
+# Get reference to virtual network subnet, and throw error if it doesn't exist
+$subnet = $virtualNetwork | `
+    Select-Object -ExpandProperty Subnets | `
+    Where-Object { $_.Name -eq $subnetName }
+
+if ($null -eq $subnet) {
+    Write-Error `
+            -Message "Subnet $subnetName not found in virtual network $virtualNetworkName." `
+            -ErrorAction Stop
+}
+$storageAccountResourceGroupName = "<storage-account-resource-group-name>"
+$storageAccountName = "<storage-account-name>"
+$virtualNetworkResourceGroupName = "<vnet-resource-group-name>"
+$virtualNetworkName = "<vnet-name>"
+$subnetName = "<vnet-subnet-name>"
+
+# Get storage account reference, and throw error if it doesn't exist
+$storageAccount = Get-AzStorageAccount `
+        -ResourceGroupName $storageAccountResourceGroupName `
+        -Name $storageAccountName `
+        -ErrorAction SilentlyContinue
+
+if ($null -eq $storageAccount) {
+    $errorMessage = "Storage account $storageAccountName not found "
+    $errorMessage += "in resource group $storageAccountResourceGroupName."
+    Write-Error -Message $errorMessage -ErrorAction Stop
+}
+
+# Get virtual network reference, and throw error if it doesn't exist
+$virtualNetwork = Get-AzVirtualNetwork `
+        -ResourceGroupName $virtualNetworkResourceGroupName `
+        -Name $virtualNetworkName `
+        -ErrorAction SilentlyContinue
+
+if ($null -eq $virtualNetwork) {
+    $errorMessage = "Virtual network $virtualNetworkName not found "
+    $errorMessage += "in resource group $virtualNetworkResourceGroupName."
+    Write-Error -Message $errorMessage -ErrorAction Stop
+}
+
+# Get reference to virtual network subnet, and throw error if it doesn't exist
+$subnet = $virtualNetwork | `
+    Select-Object -ExpandProperty Subnets | `
+    Where-Object { $_.Name -eq $subnetName }
+
+if ($null -eq $subnet) {
+    Write-Error `
+            -Message "Subnet $subnetName not found in virtual network $virtualNetworkName." `
+            -ErrorAction Stop
+}
+To create a private endpoint, you must create a private link service connection to the storage account. The private link service connection is an input to the creation of the private endpoint.
+# Disable private endpoint network policies
+$subnet.PrivateEndpointNetworkPolicies = "Disabled"
+$virtualNetwork = $virtualNetwork | `
+    Set-AzVirtualNetwork -ErrorAction Stop
+
+# Create a private link service connection to the storage account.
+$privateEndpointConnection = New-AzPrivateLinkServiceConnection `
+        -Name "$storageAccountName-Connection" `
+        -PrivateLinkServiceId $storageAccount.Id `
+        -GroupId "file" `
+        -ErrorAction Stop
+
+# Create a new private endpoint.
+$privateEndpoint = New-AzPrivateEndpoint `
+        -ResourceGroupName $storageAccountResourceGroupName `
+        -Name "$storageAccountName-PrivateEndpoint" `
+        -Location $virtualNetwork.Location `
+        -Subnet $subnet `
+        -PrivateLinkServiceConnection $privateEndpointConnection `
+        -ErrorAction Stop
+# Disable private endpoint network policies
+$subnet.PrivateEndpointNetworkPolicies = "Disabled"
+$virtualNetwork = $virtualNetwork | `
+    Set-AzVirtualNetwork -ErrorAction Stop
+
+# Create a private link service connection to the storage account.
+$privateEndpointConnection = New-AzPrivateLinkServiceConnection `
+        -Name "$storageAccountName-Connection" `
+        -PrivateLinkServiceId $storageAccount.Id `
+        -GroupId "file" `
+        -ErrorAction Stop
+
+# Create a new private endpoint.
+$privateEndpoint = New-AzPrivateEndpoint `
+        -ResourceGroupName $storageAccountResourceGroupName `
+        -Name "$storageAccountName-PrivateEndpoint" `
+        -Location $virtualNetwork.Location `
+        -Subnet $subnet `
+        -PrivateLinkServiceConnection $privateEndpointConnection `
+        -ErrorAction Stop
+Creating an Azure private DNS zone enables the original name of the storage account, such asstorageaccount.file.core.windows.netto resolve to the private IP inside of the virtual network. Although optional from the perspective of creating a private endpoint, it is explicitly required for mounting the Azure file share directly using an AD user principal or accessing via the REST API.
+storageaccount.file.core.windows.net
+# Get the desired storage account suffix (core.windows.net for public cloud).
+# This is done like this so this script will seamlessly work for non-public Azure.
+$storageAccountSuffix = Get-AzContext | `
+    Select-Object -ExpandProperty Environment | `
+    Select-Object -ExpandProperty StorageEndpointSuffix
+
+# For public cloud, this will generate the following DNS suffix:
+# privatelink.file.core.windows.net.
+$dnsZoneName = "privatelink.file.$storageAccountSuffix"
+
+# Find a DNS zone matching desired name attached to this virtual network.
+$dnsZone = Get-AzPrivateDnsZone | `
+    Where-Object { $_.Name -eq $dnsZoneName } | `
+    Where-Object {
+        $privateDnsLink = Get-AzPrivateDnsVirtualNetworkLink `
+                -ResourceGroupName $_.ResourceGroupName `
+                -ZoneName $_.Name `
+                -ErrorAction SilentlyContinue
+        
+        $privateDnsLink.VirtualNetworkId -eq $virtualNetwork.Id
+    }
+
+if ($null -eq $dnsZone) {
+    # No matching DNS zone attached to virtual network, so create new one.
+    $dnsZone = New-AzPrivateDnsZone `
+            -ResourceGroupName $virtualNetworkResourceGroupName `
+            -Name $dnsZoneName `
+            -ErrorAction Stop
+
+    $privateDnsLink = New-AzPrivateDnsVirtualNetworkLink `
+            -ResourceGroupName $virtualNetworkResourceGroupName `
+            -ZoneName $dnsZoneName `
+            -Name "$virtualNetworkName-DnsLink" `
+            -VirtualNetworkId $virtualNetwork.Id `
+            -ErrorAction Stop
+}
+# Get the desired storage account suffix (core.windows.net for public cloud).
+# This is done like this so this script will seamlessly work for non-public Azure.
+$storageAccountSuffix = Get-AzContext | `
+    Select-Object -ExpandProperty Environment | `
+    Select-Object -ExpandProperty StorageEndpointSuffix
+
+# For public cloud, this will generate the following DNS suffix:
+# privatelink.file.core.windows.net.
+$dnsZoneName = "privatelink.file.$storageAccountSuffix"
+
+# Find a DNS zone matching desired name attached to this virtual network.
+$dnsZone = Get-AzPrivateDnsZone | `
+    Where-Object { $_.Name -eq $dnsZoneName } | `
+    Where-Object {
+        $privateDnsLink = Get-AzPrivateDnsVirtualNetworkLink `
+                -ResourceGroupName $_.ResourceGroupName `
+                -ZoneName $_.Name `
+                -ErrorAction SilentlyContinue
+        
+        $privateDnsLink.VirtualNetworkId -eq $virtualNetwork.Id
+    }
+
+if ($null -eq $dnsZone) {
+    # No matching DNS zone attached to virtual network, so create new one.
+    $dnsZone = New-AzPrivateDnsZone `
+            -ResourceGroupName $virtualNetworkResourceGroupName `
+            -Name $dnsZoneName `
+            -ErrorAction Stop
+
+    $privateDnsLink = New-AzPrivateDnsVirtualNetworkLink `
+            -ResourceGroupName $virtualNetworkResourceGroupName `
+            -ZoneName $dnsZoneName `
+            -Name "$virtualNetworkName-DnsLink" `
+            -VirtualNetworkId $virtualNetwork.Id `
+            -ErrorAction Stop
+}
+Now that you have a reference to the private DNS zone, you must create an A record for your storage account.
+$privateEndpointIP = $privateEndpoint | `
+    Select-Object -ExpandProperty NetworkInterfaces | `
+    Select-Object @{ 
+        Name = "NetworkInterfaces"; 
+        Expression = { Get-AzNetworkInterface -ResourceId $_.Id } 
+    } | `
+    Select-Object -ExpandProperty NetworkInterfaces | `
+    Select-Object -ExpandProperty IpConfigurations | `
+    Select-Object -ExpandProperty PrivateIpAddress
+
+$privateDnsRecordConfig = New-AzPrivateDnsRecordConfig `
+        -IPv4Address $privateEndpointIP
+
+New-AzPrivateDnsRecordSet `
+        -ResourceGroupName $virtualNetworkResourceGroupName `
+        -Name $storageAccountName `
+        -RecordType A `
+        -ZoneName $dnsZoneName `
+        -Ttl 600 `
+        -PrivateDnsRecords $privateDnsRecordConfig `
+        -ErrorAction Stop | `
+    Out-Null
+$privateEndpointIP = $privateEndpoint | `
+    Select-Object -ExpandProperty NetworkInterfaces | `
+    Select-Object @{ 
+        Name = "NetworkInterfaces"; 
+        Expression = { Get-AzNetworkInterface -ResourceId $_.Id } 
+    } | `
+    Select-Object -ExpandProperty NetworkInterfaces | `
+    Select-Object -ExpandProperty IpConfigurations | `
+    Select-Object -ExpandProperty PrivateIpAddress
+
+$privateDnsRecordConfig = New-AzPrivateDnsRecordConfig `
+        -IPv4Address $privateEndpointIP
+
+New-AzPrivateDnsRecordSet `
+        -ResourceGroupName $virtualNetworkResourceGroupName `
+        -Name $storageAccountName `
+        -RecordType A `
+        -ZoneName $dnsZoneName `
+        -Ttl 600 `
+        -PrivateDnsRecords $privateDnsRecordConfig `
+        -ErrorAction Stop | `
+    Out-Null
+If you have a VM inside of your virtual network, or you've configured DNS forwarding as described inConfiguring DNS forwarding for Azure Files, you can test that your private endpoint is set up correctly with the following commands:
+$storageAccountHostName = [System.Uri]::new($storageAccount.PrimaryEndpoints.file) | `
+    Select-Object -ExpandProperty Host
+
+Resolve-DnsName -Name $storageAccountHostName
+$storageAccountHostName = [System.Uri]::new($storageAccount.PrimaryEndpoints.file) | `
+    Select-Object -ExpandProperty Host
+
+Resolve-DnsName -Name $storageAccountHostName
+If everything works successfully, you should see the following output, where192.168.0.5is the private IP address of the private endpoint in your virtual network:
+192.168.0.5
+Name                             Type   TTL   Section    NameHost
+----                             ----   ---   -------    --------
+storageaccount.file.core.windows CNAME  60    Answer     storageaccount.privatelink.file.core.windows.net
+.net
+
+Name       : storageaccount.privatelink.file.core.windows.net
+QueryType  : A
+TTL        : 600
+Section    : Answer
+IP4Address : 192.168.0.5
+Name                             Type   TTL   Section    NameHost
+----                             ----   ---   -------    --------
+storageaccount.file.core.windows CNAME  60    Answer     storageaccount.privatelink.file.core.windows.net
+.net
+
+Name       : storageaccount.privatelink.file.core.windows.net
+QueryType  : A
+TTL        : 600
+Section    : Answer
+IP4Address : 192.168.0.5
+To create a private endpoint for your storage account, you first need to get a reference to your storage account and the virtual network subnet to which you want to add the private endpoint. Replace<storage-account-resource-group-name>,<storage-account-name>,<vnet-resource-group-name>,<vnet-name>, and<vnet-subnet-name>below:
+<storage-account-resource-group-name>
+<storage-account-name>
+<vnet-resource-group-name>
+<vnet-name>
+<vnet-subnet-name>
+storageAccountResourceGroupName="<storage-account-resource-group-name>"
+storageAccountName="<storage-account-name>"
+virtualNetworkResourceGroupName="<vnet-resource-group-name>"
+virtualNetworkName="<vnet-name>"
+subnetName="<vnet-subnet-name>"
+
+# Get storage account ID 
+storageAccount=$(az storage account show \
+        --resource-group $storageAccountResourceGroupName \
+        --name $storageAccountName \
+        --query "id" | \
+    tr -d '"')
+
+# Get virtual network ID
+virtualNetwork=$(az network vnet show \
+        --resource-group $virtualNetworkResourceGroupName \
+        --name $virtualNetworkName \
+        --query "id" | \
+    tr -d '"')
+
+# Get subnet ID
+subnet=$(az network vnet subnet show \
+        --resource-group $virtualNetworkResourceGroupName \
+        --vnet-name $virtualNetworkName \
+        --name $subnetName \
+        --query "id" | \
+    tr -d '"')
+storageAccountResourceGroupName="<storage-account-resource-group-name>"
+storageAccountName="<storage-account-name>"
+virtualNetworkResourceGroupName="<vnet-resource-group-name>"
+virtualNetworkName="<vnet-name>"
+subnetName="<vnet-subnet-name>"
+
+# Get storage account ID 
+storageAccount=$(az storage account show \
+        --resource-group $storageAccountResourceGroupName \
+        --name $storageAccountName \
+        --query "id" | \
+    tr -d '"')
+
+# Get virtual network ID
+virtualNetwork=$(az network vnet show \
+        --resource-group $virtualNetworkResourceGroupName \
+        --name $virtualNetworkName \
+        --query "id" | \
+    tr -d '"')
+
+# Get subnet ID
+subnet=$(az network vnet subnet show \
+        --resource-group $virtualNetworkResourceGroupName \
+        --vnet-name $virtualNetworkName \
+        --name $subnetName \
+        --query "id" | \
+    tr -d '"')
+To create a private endpoint, you must first ensure that the subnet's private endpoint network policy is set to disabled. Then you can create a private endpoint with theaz network private-endpoint createcommand.
+az network private-endpoint create
+# Disable private endpoint network policies
+az network vnet subnet update \
+        --ids $subnet \
+        --disable-private-endpoint-network-policies \
+        --output none
+
+# Get virtual network location
+region=$(az network vnet show \
+        --ids $virtualNetwork \
+        --query "location" | \
+    tr -d '"')
+
+# Create a private endpoint
+privateEndpoint=$(az network private-endpoint create \
+        --resource-group $storageAccountResourceGroupName \
+        --name "$storageAccountName-PrivateEndpoint" \
+        --location $region \
+        --subnet $subnet \
+        --private-connection-resource-id $storageAccount \
+        --group-id "file" \
+        --connection-name "$storageAccountName-Connection" \
+        --query "id" | \
+    tr -d '"')
+# Disable private endpoint network policies
+az network vnet subnet update \
+        --ids $subnet \
+        --disable-private-endpoint-network-policies \
+        --output none
+
+# Get virtual network location
+region=$(az network vnet show \
+        --ids $virtualNetwork \
+        --query "location" | \
+    tr -d '"')
+
+# Create a private endpoint
+privateEndpoint=$(az network private-endpoint create \
+        --resource-group $storageAccountResourceGroupName \
+        --name "$storageAccountName-PrivateEndpoint" \
+        --location $region \
+        --subnet $subnet \
+        --private-connection-resource-id $storageAccount \
+        --group-id "file" \
+        --connection-name "$storageAccountName-Connection" \
+        --query "id" | \
+    tr -d '"')
+Creating an Azure private DNS zone enables the original name of the storage account, such asstorageaccount.file.core.windows.netto resolve to the private IP inside of the virtual network. Although optional from the perspective of creating a private endpoint, it is explicitly required for mounting the Azure file share using an AD user principal or accessing via the REST API.
+storageaccount.file.core.windows.net
+# Get the desired storage account suffix (core.windows.net for public cloud).
+# This is done like this so this script will seamlessly work for non-public Azure.
+storageAccountSuffix=$(az cloud show \
+        --query "suffixes.storageEndpoint" | \
+    tr -d '"')
+
+# For public cloud, this will generate the following DNS suffix:
+# privatelink.file.core.windows.net.
+dnsZoneName="privatelink.file.$storageAccountSuffix"
+
+# Find a DNS zone matching desired name attached to this virtual network.
+possibleDnsZones=""
+possibleDnsZones=$(az network private-dns zone list \
+        --query "[?name == '$dnsZoneName'].id" \
+        --output tsv)
+
+dnsZone=""
+possibleDnsZone=""
+for possibleDnsZone in $possibleDnsZones
+do
+    possibleResourceGroupName=$(az resource show \
+            --ids $possibleDnsZone \
+            --query "resourceGroup" | \
+        tr -d '"')
+    
+    link=$(az network private-dns link vnet list \
+            --resource-group $possibleResourceGroupName \
+            --zone-name $dnsZoneName \
+            --query "[?virtualNetwork.id == '$virtualNetwork'].id" \
+            --output tsv)
+    
+    if [ -z $link ]
+    then
+        echo "1" > /dev/null
+    else 
+        dnsZoneResourceGroup=$possibleResourceGroupName
+        dnsZone=$possibleDnsZone
+        break
+    fi  
+done
+
+if [ -z $dnsZone ]
+then
+    # No matching DNS zone attached to virtual network, so create a new one
+    dnsZone=$(az network private-dns zone create \
+            --resource-group $virtualNetworkResourceGroupName \
+            --name $dnsZoneName \
+            --query "id" | \
+        tr -d '"')
+    
+    az network private-dns link vnet create \
+            --resource-group $virtualNetworkResourceGroupName \
+            --zone-name $dnsZoneName \
+            --name "$virtualNetworkName-DnsLink" \
+            --virtual-network $virtualNetwork \
+            --registration-enabled false \
+            --output none
+    
+    dnsZoneResourceGroup=$virtualNetworkResourceGroupName
+fi
+# Get the desired storage account suffix (core.windows.net for public cloud).
+# This is done like this so this script will seamlessly work for non-public Azure.
+storageAccountSuffix=$(az cloud show \
+        --query "suffixes.storageEndpoint" | \
+    tr -d '"')
+
+# For public cloud, this will generate the following DNS suffix:
+# privatelink.file.core.windows.net.
+dnsZoneName="privatelink.file.$storageAccountSuffix"
+
+# Find a DNS zone matching desired name attached to this virtual network.
+possibleDnsZones=""
+possibleDnsZones=$(az network private-dns zone list \
+        --query "[?name == '$dnsZoneName'].id" \
+        --output tsv)
+
+dnsZone=""
+possibleDnsZone=""
+for possibleDnsZone in $possibleDnsZones
+do
+    possibleResourceGroupName=$(az resource show \
+            --ids $possibleDnsZone \
+            --query "resourceGroup" | \
+        tr -d '"')
+    
+    link=$(az network private-dns link vnet list \
+            --resource-group $possibleResourceGroupName \
+            --zone-name $dnsZoneName \
+            --query "[?virtualNetwork.id == '$virtualNetwork'].id" \
+            --output tsv)
+    
+    if [ -z $link ]
+    then
+        echo "1" > /dev/null
+    else 
+        dnsZoneResourceGroup=$possibleResourceGroupName
+        dnsZone=$possibleDnsZone
+        break
+    fi  
+done
+
+if [ -z $dnsZone ]
+then
+    # No matching DNS zone attached to virtual network, so create a new one
+    dnsZone=$(az network private-dns zone create \
+            --resource-group $virtualNetworkResourceGroupName \
+            --name $dnsZoneName \
+            --query "id" | \
+        tr -d '"')
+    
+    az network private-dns link vnet create \
+            --resource-group $virtualNetworkResourceGroupName \
+            --zone-name $dnsZoneName \
+            --name "$virtualNetworkName-DnsLink" \
+            --virtual-network $virtualNetwork \
+            --registration-enabled false \
+            --output none
+    
+    dnsZoneResourceGroup=$virtualNetworkResourceGroupName
+fi
+Now that you have a reference to the private DNS zone, you must create an A record for your storage account.
+privateEndpointNIC=$(az network private-endpoint show \
+        --ids $privateEndpoint \
+        --query "networkInterfaces[0].id" | \
+    tr -d '"')
+
+privateEndpointIP=$(az network nic show \
+        --ids $privateEndpointNIC \
+        --query "ipConfigurations[0].privateIPAddress" | \
+    tr -d '"')
+
+az network private-dns record-set a create \
+        --resource-group $dnsZoneResourceGroup \
+        --zone-name $dnsZoneName \
+        --name $storageAccountName \
+        --output none
+
+az network private-dns record-set a add-record \
+        --resource-group $dnsZoneResourceGroup \
+        --zone-name $dnsZoneName \
+        --record-set-name $storageAccountName \
+        --ipv4-address $privateEndpointIP \
+        --output none
+privateEndpointNIC=$(az network private-endpoint show \
+        --ids $privateEndpoint \
+        --query "networkInterfaces[0].id" | \
+    tr -d '"')
+
+privateEndpointIP=$(az network nic show \
+        --ids $privateEndpointNIC \
+        --query "ipConfigurations[0].privateIPAddress" | \
+    tr -d '"')
+
+az network private-dns record-set a create \
+        --resource-group $dnsZoneResourceGroup \
+        --zone-name $dnsZoneName \
+        --name $storageAccountName \
+        --output none
+
+az network private-dns record-set a add-record \
+        --resource-group $dnsZoneResourceGroup \
+        --zone-name $dnsZoneName \
+        --record-set-name $storageAccountName \
+        --ipv4-address $privateEndpointIP \
+        --output none
+If you have a VM inside of your virtual network, or you've configured DNS forwarding as described inConfiguring DNS forwarding for Azure Files, you can test that your private endpoint is set up correctly with the following commands:
+httpEndpoint=$(az storage account show \
+        --resource-group $storageAccountResourceGroupName \
+        --name $storageAccountName \
+        --query "primaryEndpoints.file" | \
+    tr -d '"')
+
+hostName=$(echo $httpEndpoint | cut -c7-$(expr length $httpEndpoint) | tr -d "/")
+nslookup $hostName
+httpEndpoint=$(az storage account show \
+        --resource-group $storageAccountResourceGroupName \
+        --name $storageAccountName \
+        --query "primaryEndpoints.file" | \
+    tr -d '"')
+
+hostName=$(echo $httpEndpoint | cut -c7-$(expr length $httpEndpoint) | tr -d "/")
+nslookup $hostName
+If everything works successfully, you should see the following output, where192.168.0.5is the private IP address of the private endpoint in your virtual network:
+192.168.0.5
+Server:         127.0.0.53
+Address:        127.0.0.53#53
+
+Non-authoritative answer:
+storageaccount.file.core.windows.net      canonical name = storageaccount.privatelink.file.core.windows.net.
+Name:   storageaccount.privatelink.file.core.windows.net
+Address: 192.168.0.5
+Server:         127.0.0.53
+Address:        127.0.0.53#53
+
+Non-authoritative answer:
+storageaccount.file.core.windows.net      canonical name = storageaccount.privatelink.file.core.windows.net.
+Name:   storageaccount.privatelink.file.core.windows.net
+Address: 192.168.0.5
+Create the Storage Sync Service private endpoint
+Portal
+PowerShell
+Azure CLI
+Navigate to thePrivate Link Centerby typingPrivate Linkinto the search bar at the top of the Azure portal. In the table of contents for the Private Link Center, selectPrivate endpoints, and then+ Addto create a new private endpoint.
+
+The resulting wizard has multiple pages to complete.
+In theBasicsblade, select the desired resource group, name, and region for your private endpoint. These can be whatever you want, they don't have to match the Storage Sync Service in any way, although you must create the private endpoint in the same region as the virtual network you wish to create the private endpoint in.
+
+In theResourceblade, select the radio button forConnect to an Azure resource in my directory. Under theResource type, selectMicrosoft.StorageSync/storageSyncServicesfor the resource type.
+TheConfigurationblade allows you to select the specific virtual network and subnet you would like to add your private endpoint to. Select the same virtual network as the one you used for the storage account above. The Configuration blade also contains the information for creating/updating the private DNS zone.
+SelectReview + createto create the private endpoint.
+You can test that your private endpoint is set up correctly by running the following PowerShell commands.
+$privateEndpointResourceGroupName = "<your-private-endpoint-resource-group>"
+$privateEndpointName = "<your-private-endpoint-name>"
+
+Get-AzPrivateEndpoint `
+        -ResourceGroupName $privateEndpointResourceGroupName `
+        -Name $privateEndpointName `
+        -ErrorAction Stop | `
+    Select-Object -ExpandProperty NetworkInterfaces | `
+    Select-Object -ExpandProperty Id | `
+    ForEach-Object { Get-AzNetworkInterface -ResourceId $_ } | `
+    Select-Object -ExpandProperty IpConfigurations | `
+    Select-Object -ExpandProperty PrivateLinkConnectionProperties | `
+    Select-Object -ExpandProperty Fqdns | `
+    ForEach-Object { Resolve-DnsName -Name $_ } | `
+    Format-List
+$privateEndpointResourceGroupName = "<your-private-endpoint-resource-group>"
+$privateEndpointName = "<your-private-endpoint-name>"
+
+Get-AzPrivateEndpoint `
+        -ResourceGroupName $privateEndpointResourceGroupName `
+        -Name $privateEndpointName `
+        -ErrorAction Stop | `
+    Select-Object -ExpandProperty NetworkInterfaces | `
+    Select-Object -ExpandProperty Id | `
+    ForEach-Object { Get-AzNetworkInterface -ResourceId $_ } | `
+    Select-Object -ExpandProperty IpConfigurations | `
+    Select-Object -ExpandProperty PrivateLinkConnectionProperties | `
+    Select-Object -ExpandProperty Fqdns | `
+    ForEach-Object { Resolve-DnsName -Name $_ } | `
+    Format-List
+If everything works correctly, you should see the following output where192.168.1.4,192.168.1.5,192.168.1.6, and192.168.1.7are the private IP addresses assigned to the private endpoint:
+192.168.1.4
+192.168.1.5
+192.168.1.6
+192.168.1.7
+Name     : mysssmanagement.westus2.afs.azure.net
+Type     : CNAME
+TTL      : 60
+Section  : Answer
+NameHost : mysssmanagement.westus2.privatelink.afs.azure.net
+
+
+Name       : mysssmanagement.westus2.privatelink.afs.azure.net
+QueryType  : A
+TTL        : 60
+Section    : Answer
+IP4Address : 192.168.1.4
+
+Name     : myssssyncp.westus2.afs.azure.net
+Type     : CNAME
+TTL      : 60
+Section  : Answer
+NameHost : myssssyncp.westus2.privatelink.afs.azure.net
+
+
+Name       : myssssyncp.westus2.privatelink.afs.azure.net
+QueryType  : A
+TTL        : 60
+Section    : Answer
+IP4Address : 192.168.1.5
+
+Name     : myssssyncs.westus2.afs.azure.net
+Type     : CNAME
+TTL      : 60
+Section  : Answer
+NameHost : myssssyncs.westus2.privatelink.afs.azure.net
+
+
+Name       : myssssyncs.westus2.privatelink.afs.azure.net
+QueryType  : A
+TTL        : 60
+Section    : Answer
+IP4Address : 192.168.1.6
+
+Name     : mysssmonitoring.westus2.afs.azure.net
+Type     : CNAME
+TTL      : 60
+Section  : Answer
+NameHost : mysssmonitoring.westus2.privatelink.afs.azure.net
+
+
+Name       : mysssmonitoring.westus2.privatelink.afs.azure.net
+QueryType  : A
+TTL        : 60
+Section    : Answer
+IP4Address : 192.168.1.7
+Name     : mysssmanagement.westus2.afs.azure.net
+Type     : CNAME
+TTL      : 60
+Section  : Answer
+NameHost : mysssmanagement.westus2.privatelink.afs.azure.net
+
+
+Name       : mysssmanagement.westus2.privatelink.afs.azure.net
+QueryType  : A
+TTL        : 60
+Section    : Answer
+IP4Address : 192.168.1.4
+
+Name     : myssssyncp.westus2.afs.azure.net
+Type     : CNAME
+TTL      : 60
+Section  : Answer
+NameHost : myssssyncp.westus2.privatelink.afs.azure.net
+
+
+Name       : myssssyncp.westus2.privatelink.afs.azure.net
+QueryType  : A
+TTL        : 60
+Section    : Answer
+IP4Address : 192.168.1.5
+
+Name     : myssssyncs.westus2.afs.azure.net
+Type     : CNAME
+TTL      : 60
+Section  : Answer
+NameHost : myssssyncs.westus2.privatelink.afs.azure.net
+
+
+Name       : myssssyncs.westus2.privatelink.afs.azure.net
+QueryType  : A
+TTL        : 60
+Section    : Answer
+IP4Address : 192.168.1.6
+
+Name     : mysssmonitoring.westus2.afs.azure.net
+Type     : CNAME
+TTL      : 60
+Section  : Answer
+NameHost : mysssmonitoring.westus2.privatelink.afs.azure.net
+
+
+Name       : mysssmonitoring.westus2.privatelink.afs.azure.net
+QueryType  : A
+TTL        : 60
+Section    : Answer
+IP4Address : 192.168.1.7
+To create a private endpoint for your Storage Sync Service, first you'll need to get a reference to your Storage Sync Service. Remember to replace<storage-sync-service-resource-group>and<storage-sync-service>with the correct values for your environment. The following PowerShell commands assume that you've already populated the virtual network information.
+<storage-sync-service-resource-group>
+<storage-sync-service>
+$storageSyncServiceResourceGroupName = "<storage-sync-service-resource-group>"
+$storageSyncServiceName = "<storage-sync-service>"
+
+$storageSyncService = Get-AzStorageSyncService `
+        -ResourceGroupName $storageSyncServiceResourceGroupName `
+        -Name $storageSyncServiceName `
+        -ErrorAction SilentlyContinue
+
+if ($null -eq $storageSyncService) {
+    $errorMessage = "Storage Sync Service $storageSyncServiceName not found "
+    $errorMessage += "in resource group $storageSyncServiceResourceGroupName."
+    Write-Error -Message $errorMessage -ErrorAction Stop
+}
+$storageSyncServiceResourceGroupName = "<storage-sync-service-resource-group>"
+$storageSyncServiceName = "<storage-sync-service>"
+
+$storageSyncService = Get-AzStorageSyncService `
+        -ResourceGroupName $storageSyncServiceResourceGroupName `
+        -Name $storageSyncServiceName `
+        -ErrorAction SilentlyContinue
+
+if ($null -eq $storageSyncService) {
+    $errorMessage = "Storage Sync Service $storageSyncServiceName not found "
+    $errorMessage += "in resource group $storageSyncServiceResourceGroupName."
+    Write-Error -Message $errorMessage -ErrorAction Stop
+}
+To create a private endpoint, you must create a private link service connection to the Storage Sync Service. The private link connection is an input to the creation of the private endpoint.
+# Disable private endpoint network policies
+$subnet.PrivateEndpointNetworkPolicies = "Disabled"
+$virtualNetwork = $virtualNetwork | `
+    Set-AzVirtualNetwork -ErrorAction Stop
+
+# Create a private link service connection to the storage account.
+$privateEndpointConnection = New-AzPrivateLinkServiceConnection `
+        -Name "$storageSyncServiceName-Connection" `
+        -PrivateLinkServiceId $storageSyncService.ResourceId `
+        -GroupId "Afs" `
+        -ErrorAction Stop
+
+# Create a new private endpoint.
+$privateEndpoint = New-AzPrivateEndpoint `
+        -ResourceGroupName $storageSyncServiceResourceGroupName `
+        -Name "$storageSyncServiceName-PrivateEndpoint" `
+        -Location $virtualNetwork.Location `
+        -Subnet $subnet `
+        -PrivateLinkServiceConnection $privateEndpointConnection `
+        -ErrorAction Stop
+# Disable private endpoint network policies
+$subnet.PrivateEndpointNetworkPolicies = "Disabled"
+$virtualNetwork = $virtualNetwork | `
+    Set-AzVirtualNetwork -ErrorAction Stop
+
+# Create a private link service connection to the storage account.
+$privateEndpointConnection = New-AzPrivateLinkServiceConnection `
+        -Name "$storageSyncServiceName-Connection" `
+        -PrivateLinkServiceId $storageSyncService.ResourceId `
+        -GroupId "Afs" `
+        -ErrorAction Stop
+
+# Create a new private endpoint.
+$privateEndpoint = New-AzPrivateEndpoint `
+        -ResourceGroupName $storageSyncServiceResourceGroupName `
+        -Name "$storageSyncServiceName-PrivateEndpoint" `
+        -Location $virtualNetwork.Location `
+        -Subnet $subnet `
+        -PrivateLinkServiceConnection $privateEndpointConnection `
+        -ErrorAction Stop
+Creating an Azure private DNS zone enables the host names for the Storage Sync Service, such asmysssmanagement.westus2.afs.azure.net, to resolve to the correct private IPs for the Storage Sync Service inside of the virtual network. Although optional from the perspective of creating a private endpoint, it's explicitly required for the Azure File Sync agent to access the Storage Sync Service.
+mysssmanagement.westus2.afs.azure.net
+# Get the desired Storage Sync Service suffix (afs.azure.net for public cloud).
+# This is done like this so this script will seamlessly work for non-public Azure.
+$azureEnvironment = Get-AzContext | `
+    Select-Object -ExpandProperty Environment | `
+    Select-Object -ExpandProperty Name
+
+switch($azureEnvironment) {
+    "AzureCloud" {
+        $storageSyncSuffix = "afs.azure.net"
+    }
+
+    "AzureUSGovernment" {
+        $storageSyncSuffix = "afs.azure.us"
+    }
+
+   "AzureChinaCloud" {
+        $storageSyncSuffix = "afs.azure.cn"
+    }
+
+    default {
+        Write-Error
+                -Message "The Azure environment $_ is not currently supported by Azure File Sync." `
+                -ErrorAction Stop
+    }
+}
+
+# For public cloud, this will generate the following DNS suffix:
+# privatelink.afs.azure.net
+$dnsZoneName = "privatelink.$storageSyncSuffix"
+
+# Find a DNS zone matching desired name attached to this virtual network.
+$dnsZone = Get-AzPrivateDnsZone | `
+    Where-Object { $_.Name -eq $dnsZoneName } | `
+    Where-Object {
+        $privateDnsLink = Get-AzPrivateDnsVirtualNetworkLink `
+                -ResourceGroupName $_.ResourceGroupName `
+                -ZoneName $_.Name `
+                -ErrorAction SilentlyContinue
+
+        $privateDnsLink.VirtualNetworkId -eq $virtualNetwork.Id
+    }
+
+if ($null -eq $dnsZone) {
+    # No matching DNS zone attached to virtual network, so create new one.
+    $dnsZone = New-AzPrivateDnsZone `
+            -ResourceGroupName $virtualNetworkResourceGroupName `
+            -Name $dnsZoneName `
+            -ErrorAction Stop
+
+    $privateDnsLink = New-AzPrivateDnsVirtualNetworkLink `
+            -ResourceGroupName $virtualNetworkResourceGroupName `
+            -ZoneName $dnsZoneName `
+            -Name "$virtualNetworkName-DnsLink" `
+            -VirtualNetworkId $virtualNetwork.Id `
+            -ErrorAction Stop
+}
+# Get the desired Storage Sync Service suffix (afs.azure.net for public cloud).
+# This is done like this so this script will seamlessly work for non-public Azure.
+$azureEnvironment = Get-AzContext | `
+    Select-Object -ExpandProperty Environment | `
+    Select-Object -ExpandProperty Name
+
+switch($azureEnvironment) {
+    "AzureCloud" {
+        $storageSyncSuffix = "afs.azure.net"
+    }
+
+    "AzureUSGovernment" {
+        $storageSyncSuffix = "afs.azure.us"
+    }
+
+   "AzureChinaCloud" {
+        $storageSyncSuffix = "afs.azure.cn"
+    }
+
+    default {
+        Write-Error
+                -Message "The Azure environment $_ is not currently supported by Azure File Sync." `
+                -ErrorAction Stop
+    }
+}
+
+# For public cloud, this will generate the following DNS suffix:
+# privatelink.afs.azure.net
+$dnsZoneName = "privatelink.$storageSyncSuffix"
+
+# Find a DNS zone matching desired name attached to this virtual network.
+$dnsZone = Get-AzPrivateDnsZone | `
+    Where-Object { $_.Name -eq $dnsZoneName } | `
+    Where-Object {
+        $privateDnsLink = Get-AzPrivateDnsVirtualNetworkLink `
+                -ResourceGroupName $_.ResourceGroupName `
+                -ZoneName $_.Name `
+                -ErrorAction SilentlyContinue
+
+        $privateDnsLink.VirtualNetworkId -eq $virtualNetwork.Id
+    }
+
+if ($null -eq $dnsZone) {
+    # No matching DNS zone attached to virtual network, so create new one.
+    $dnsZone = New-AzPrivateDnsZone `
+            -ResourceGroupName $virtualNetworkResourceGroupName `
+            -Name $dnsZoneName `
+            -ErrorAction Stop
+
+    $privateDnsLink = New-AzPrivateDnsVirtualNetworkLink `
+            -ResourceGroupName $virtualNetworkResourceGroupName `
+            -ZoneName $dnsZoneName `
+            -Name "$virtualNetworkName-DnsLink" `
+            -VirtualNetworkId $virtualNetwork.Id `
+            -ErrorAction Stop
+}
+Now that you have a reference to the private DNS zone, you must create an A record for your Storage Sync Service.
+$privateEndpointIpFqdnMappings = $privateEndpoint | `
+    Select-Object -ExpandProperty NetworkInterfaces | `
+    Select-Object -ExpandProperty Id | `
+    ForEach-Object { Get-AzNetworkInterface -ResourceId $_ } | `
+    Select-Object -ExpandProperty IpConfigurations | `
+    ForEach-Object {
+        $privateIpAddress = $_.PrivateIpAddress;
+        $_ | `
+            Select-Object -ExpandProperty PrivateLinkConnectionProperties | `
+            Select-Object -ExpandProperty Fqdns | `
+            Select-Object `
+                @{
+                    Name = "PrivateIpAddress";
+                    Expression = { $privateIpAddress }
+                }, `
+                @{
+                    Name = "FQDN";
+                    Expression = { $_ }
+                }
+    }
+
+foreach($ipFqdn in $privateEndpointIpFqdnMappings) {
+    $privateDnsRecordConfig = New-AzPrivateDnsRecordConfig `
+        -IPv4Address $ipFqdn.PrivateIpAddress
+
+    $dnsEntry = $ipFqdn.FQDN.Substring(0,
+        $ipFqdn.FQDN.IndexOf(".", $ipFqdn.FQDN.IndexOf(".") + 1))
+
+    New-AzPrivateDnsRecordSet `
+            -ResourceGroupName $virtualNetworkResourceGroupName `
+            -Name $dnsEntry `
+            -RecordType A `
+            -ZoneName $dnsZoneName `
+            -Ttl 600 `
+            -PrivateDnsRecords $privateDnsRecordConfig `
+            -ErrorAction Stop | `
+        Out-Null
+}
+$privateEndpointIpFqdnMappings = $privateEndpoint | `
+    Select-Object -ExpandProperty NetworkInterfaces | `
+    Select-Object -ExpandProperty Id | `
+    ForEach-Object { Get-AzNetworkInterface -ResourceId $_ } | `
+    Select-Object -ExpandProperty IpConfigurations | `
+    ForEach-Object {
+        $privateIpAddress = $_.PrivateIpAddress;
+        $_ | `
+            Select-Object -ExpandProperty PrivateLinkConnectionProperties | `
+            Select-Object -ExpandProperty Fqdns | `
+            Select-Object `
+                @{
+                    Name = "PrivateIpAddress";
+                    Expression = { $privateIpAddress }
+                }, `
+                @{
+                    Name = "FQDN";
+                    Expression = { $_ }
+                }
+    }
+
+foreach($ipFqdn in $privateEndpointIpFqdnMappings) {
+    $privateDnsRecordConfig = New-AzPrivateDnsRecordConfig `
+        -IPv4Address $ipFqdn.PrivateIpAddress
+
+    $dnsEntry = $ipFqdn.FQDN.Substring(0,
+        $ipFqdn.FQDN.IndexOf(".", $ipFqdn.FQDN.IndexOf(".") + 1))
+
+    New-AzPrivateDnsRecordSet `
+            -ResourceGroupName $virtualNetworkResourceGroupName `
+            -Name $dnsEntry `
+            -RecordType A `
+            -ZoneName $dnsZoneName `
+            -Ttl 600 `
+            -PrivateDnsRecords $privateDnsRecordConfig `
+            -ErrorAction Stop | `
+        Out-Null
+}
+To create a private endpoint for your Storage Sync Service, first you'll need to get a reference to your Storage Sync Service. Remember to replace<storage-sync-service-resource-group>and<storage-sync-service>with the correct values for your environment. The following CLI commands assume that you've already populated the virtual network information.
+<storage-sync-service-resource-group>
+<storage-sync-service>
+storageSyncServiceResourceGroupName="<storage-sync-service-resource-group>"
+storageSyncServiceName="<storage-sync-service>"
+
+storageSyncService=$(az resource show \
+        --resource-group $storageSyncServiceResourceGroupName \
+        --name $storageSyncServiceName \
+        --resource-type "Microsoft.StorageSync/storageSyncServices" \
+        --query "id" | \
+    tr -d '"')
+
+storageSyncServiceRegion=$(az resource show \
+        --resource-group $storageSyncServiceResourceGroupName \
+        --name $storageSyncServiceName \
+        --resource-type "Microsoft.StorageSync/storageSyncServices" \
+        --query "location" | \
+    tr -d '"')
+storageSyncServiceResourceGroupName="<storage-sync-service-resource-group>"
+storageSyncServiceName="<storage-sync-service>"
+
+storageSyncService=$(az resource show \
+        --resource-group $storageSyncServiceResourceGroupName \
+        --name $storageSyncServiceName \
+        --resource-type "Microsoft.StorageSync/storageSyncServices" \
+        --query "id" | \
+    tr -d '"')
+
+storageSyncServiceRegion=$(az resource show \
+        --resource-group $storageSyncServiceResourceGroupName \
+        --name $storageSyncServiceName \
+        --resource-type "Microsoft.StorageSync/storageSyncServices" \
+        --query "location" | \
+    tr -d '"')
+To create a private endpoint, you must first ensure that the subnet's private endpoint network policy is set to disabled. Then you can create a private endpoint with theaz network private-endpoint createcommand.
+az network private-endpoint create
+# Disable private endpoint network policies
+az network vnet subnet update \
+        --ids $subnet \
+        --disable-private-endpoint-network-policies \
+        --output none
+
+# Get virtual network location
+region=$(az network vnet show \
+        --ids $virtualNetwork \
+        --query "location" | \
+    tr -d '"')
+
+# Create a private endpoint
+privateEndpoint=$(az network private-endpoint create \
+        --resource-group $storageSyncServiceResourceGroupName \
+        --name "$storageSyncServiceName-PrivateEndpoint" \
+        --location $region \
+        --subnet $subnet \
+        --private-connection-resource-id $storageSyncService \
+        --group-id "Afs" \
+        --connection-name "$storageSyncServiceName-Connection" \
+        --query "id" | \
+    tr -d '"')
+# Disable private endpoint network policies
+az network vnet subnet update \
+        --ids $subnet \
+        --disable-private-endpoint-network-policies \
+        --output none
+
+# Get virtual network location
+region=$(az network vnet show \
+        --ids $virtualNetwork \
+        --query "location" | \
+    tr -d '"')
+
+# Create a private endpoint
+privateEndpoint=$(az network private-endpoint create \
+        --resource-group $storageSyncServiceResourceGroupName \
+        --name "$storageSyncServiceName-PrivateEndpoint" \
+        --location $region \
+        --subnet $subnet \
+        --private-connection-resource-id $storageSyncService \
+        --group-id "Afs" \
+        --connection-name "$storageSyncServiceName-Connection" \
+        --query "id" | \
+    tr -d '"')
+Creating an Azure private DNS zone enables the host names for the Storage Sync Service, such asmysssmanagement.westus2.afs.azure.net, to resolve to the correct private IPs for the Storage Sync Service inside of the virtual network. Although optional from the perspective of creating a private endpoint, it's explicitly required for the Azure File Sync agent to access the Storage Sync Service.
+mysssmanagement.westus2.afs.azure.net
+# Get the desired storage account suffix (afs.azure.net for public cloud).
+# This is done like this so this script will seamlessly work for non-public Azure.
+azureEnvironment=$(az cloud show \
+        --query "name" |
+    tr -d '"')
+
+storageSyncSuffix=""
+if [ $azureEnvironment == "AzureCloud" ]
+then
+    storageSyncSuffix="afs.azure.net"
+elif [ $azureEnvironment == "AzureUSGovernment" ]
+then
+    storageSyncSuffix="afs.azure.us"
+else
+    echo "Unsupported Azure environment $azureEnvironment."
+fi
+
+# For public cloud, this will generate the following DNS suffix:
+# privatelinke.afs.azure.net.
+dnsZoneName="privatelink.$storageSyncSuffix"
+
+# Find a DNS zone matching desired name attached to this virtual network.
+possibleDnsZones=""
+possibleDnsZones=$(az network private-dns zone list \
+        --query "[?name == '$dnsZoneName'].id" \
+        --output tsv)
+
+dnsZone=""
+possibleDnsZone=""
+for possibleDnsZone in $possibleDnsZones
+do
+    possibleResourceGroupName=$(az resource show \
+            --ids $possibleDnsZone \
+            --query "resourceGroup" | \
+        tr -d '"')
+
+    link=$(az network private-dns link vnet list \
+            --resource-group $possibleResourceGroupName \
+            --zone-name $dnsZoneName \
+            --query "[?virtualNetwork.id == '$virtualNetwork'].id" \
+            --output tsv)
+
+    if [ -z $link ]
+    then
+        echo "1" > /dev/null
+    else
+        dnsZoneResourceGroup=$possibleResourceGroupName
+        dnsZone=$possibleDnsZone
+        break
+    fi
+done
+
+if [ -z $dnsZone ]
+then
+    # No matching DNS zone attached to virtual network, so create a new one
+    dnsZone=$(az network private-dns zone create \
+            --resource-group $virtualNetworkResourceGroupName \
+            --name $dnsZoneName \
+            --query "id" | \
+        tr -d '"')
+
+    az network private-dns link vnet create \
+            --resource-group $virtualNetworkResourceGroupName \
+            --zone-name $dnsZoneName \
+            --name "$virtualNetworkName-DnsLink" \
+            --virtual-network $virtualNetwork \
+            --registration-enabled false \
+            --output none
+
+    dnsZoneResourceGroup=$virtualNetworkResourceGroupName
+fi
+# Get the desired storage account suffix (afs.azure.net for public cloud).
+# This is done like this so this script will seamlessly work for non-public Azure.
+azureEnvironment=$(az cloud show \
+        --query "name" |
+    tr -d '"')
+
+storageSyncSuffix=""
+if [ $azureEnvironment == "AzureCloud" ]
+then
+    storageSyncSuffix="afs.azure.net"
+elif [ $azureEnvironment == "AzureUSGovernment" ]
+then
+    storageSyncSuffix="afs.azure.us"
+else
+    echo "Unsupported Azure environment $azureEnvironment."
+fi
+
+# For public cloud, this will generate the following DNS suffix:
+# privatelinke.afs.azure.net.
+dnsZoneName="privatelink.$storageSyncSuffix"
+
+# Find a DNS zone matching desired name attached to this virtual network.
+possibleDnsZones=""
+possibleDnsZones=$(az network private-dns zone list \
+        --query "[?name == '$dnsZoneName'].id" \
+        --output tsv)
+
+dnsZone=""
+possibleDnsZone=""
+for possibleDnsZone in $possibleDnsZones
+do
+    possibleResourceGroupName=$(az resource show \
+            --ids $possibleDnsZone \
+            --query "resourceGroup" | \
+        tr -d '"')
+
+    link=$(az network private-dns link vnet list \
+            --resource-group $possibleResourceGroupName \
+            --zone-name $dnsZoneName \
+            --query "[?virtualNetwork.id == '$virtualNetwork'].id" \
+            --output tsv)
+
+    if [ -z $link ]
+    then
+        echo "1" > /dev/null
+    else
+        dnsZoneResourceGroup=$possibleResourceGroupName
+        dnsZone=$possibleDnsZone
+        break
+    fi
+done
+
+if [ -z $dnsZone ]
+then
+    # No matching DNS zone attached to virtual network, so create a new one
+    dnsZone=$(az network private-dns zone create \
+            --resource-group $virtualNetworkResourceGroupName \
+            --name $dnsZoneName \
+            --query "id" | \
+        tr -d '"')
+
+    az network private-dns link vnet create \
+            --resource-group $virtualNetworkResourceGroupName \
+            --zone-name $dnsZoneName \
+            --name "$virtualNetworkName-DnsLink" \
+            --virtual-network $virtualNetwork \
+            --registration-enabled false \
+            --output none
+
+    dnsZoneResourceGroup=$virtualNetworkResourceGroupName
+fi
+Now that you have a reference to the private DNS zone, you must create an A record for your Storage Sync Service.
+privateEndpointNIC=$(az network private-endpoint show \
+        --ids $privateEndpoint \
+        --query "networkInterfaces[0].id" | \
+    tr -d '"')
+
+privateIpAddresses=$(az network nic show \
+        --ids $privateEndpointNIC \
+        --query "ipConfigurations[].privateIpAddress" \
+        --output tsv)
+
+hostNames=$(az network nic show \
+        --ids $privateEndpointNIC \
+        --query "ipConfigurations[].privateLinkConnectionProperties.fqdns[]" \
+        --output tsv)
+
+i=0
+for privateIpAddress in $privateIpAddresses
+do
+    j=0
+    targetHostName=""
+    for hostName in $hostNames
+    do
+        if [ $i == $j ]
+        then
+            targetHostName=$hostName
+            break
+        fi
+
+        j=$(expr $j + 1)
+    done
+
+    endpointName=$(echo $targetHostName | \
+        cut -c1-$(expr $(expr index $targetHostName ".") - 1))
+
+    az network private-dns record-set a create \
+        --resource-group $dnsZoneResourceGroup \
+        --zone-name $dnsZoneName \
+        --name "$endpointName.$storageSyncServiceRegion" \
+        --output none
+
+    az network private-dns record-set a add-record \
+        --resource-group $dnsZoneResourceGroup \
+        --zone-name $dnsZoneName \
+        --record-set-name "$endpointName.$storageSyncServiceRegion" \
+        --ipv4-address $privateIpAddress \
+        --output none
+
+    i=$(expr $i + 1)
+done
+privateEndpointNIC=$(az network private-endpoint show \
+        --ids $privateEndpoint \
+        --query "networkInterfaces[0].id" | \
+    tr -d '"')
+
+privateIpAddresses=$(az network nic show \
+        --ids $privateEndpointNIC \
+        --query "ipConfigurations[].privateIpAddress" \
+        --output tsv)
+
+hostNames=$(az network nic show \
+        --ids $privateEndpointNIC \
+        --query "ipConfigurations[].privateLinkConnectionProperties.fqdns[]" \
+        --output tsv)
+
+i=0
+for privateIpAddress in $privateIpAddresses
+do
+    j=0
+    targetHostName=""
+    for hostName in $hostNames
+    do
+        if [ $i == $j ]
+        then
+            targetHostName=$hostName
+            break
+        fi
+
+        j=$(expr $j + 1)
+    done
+
+    endpointName=$(echo $targetHostName | \
+        cut -c1-$(expr $(expr index $targetHostName ".") - 1))
+
+    az network private-dns record-set a create \
+        --resource-group $dnsZoneResourceGroup \
+        --zone-name $dnsZoneName \
+        --name "$endpointName.$storageSyncServiceRegion" \
+        --output none
+
+    az network private-dns record-set a add-record \
+        --resource-group $dnsZoneResourceGroup \
+        --zone-name $dnsZoneName \
+        --record-set-name "$endpointName.$storageSyncServiceRegion" \
+        --ipv4-address $privateIpAddress \
+        --output none
+
+    i=$(expr $i + 1)
+done
+Restrict access to the public endpoints
+You can restrict access to the public endpoints of both the storage account and the Storage Sync Services. Restricting access to the public endpoint provides additional security by ensuring that network packets are only accepted from approved locations.
+Restrict access to the storage account public endpoint
+Access restriction to the public endpoint is done using the storage account firewall settings. In general, most firewall policies for a storage account will restrict networking access to one or more virtual networks. There are two approaches to restricting access to a storage account to a virtual network:
+Create one or more private endpoints for the storage accountand disable access to the public endpoint. This ensures that only traffic originating from within the desired virtual networks can access the Azure file shares within the storage account.
+Restrict the public endpoint to one or more virtual networks. This works by using a capability of the virtual network calledservice endpoints. When you restrict the traffic to a storage account via a service endpoint, you're still accessing the storage account via the public IP address.
+Note
+TheAllow Azure services on the trusted services list to access this storage accountexception must be selected on your storage account to allow trusted first party Microsoft services such as Azure File Sync to access the storage account. To learn more, seeGrant access to trusted Azure services.
+When access to the public endpoint is disabled, the storage account can still be accessed through its private endpoints. Otherwise valid requests to the storage account's public endpoint will be rejected.
+Portal
+PowerShell
+Azure CLI
+Navigate to the storage account for which you would like to restrict all access to the public endpoint. In the table of contents for the storage account, selectNetworking.
+At the top of the page, select theEnabled from selected virtual networks and IP addressesradio button. This will un-hide a number of settings for controlling the restriction of the public endpoint. SelectAllow Azure services on the trusted services list to access this storage accountto allow trusted first party Microsoft services such as Azure File Sync to access the storage account.
+
+The following PowerShell command will deny all traffic to the storage account's public endpoint. Note that this command has the-Bypassparameter set toAzureServices. This will allow trusted first party services such as Azure File Sync to access the storage account via the public endpoint.
+-Bypass
+AzureServices
+# This assumes $storageAccount is still defined from the beginning of this of this guide.
+$storageAccount | Update-AzStorageAccountNetworkRuleSet `
+        -DefaultAction Deny `
+        -Bypass AzureServices `
+        -WarningAction SilentlyContinue `
+        -ErrorAction Stop | `
+    Out-Null
+# This assumes $storageAccount is still defined from the beginning of this of this guide.
+$storageAccount | Update-AzStorageAccountNetworkRuleSet `
+        -DefaultAction Deny `
+        -Bypass AzureServices `
+        -WarningAction SilentlyContinue `
+        -ErrorAction Stop | `
+    Out-Null
+The following CLI command will deny all traffic to the storage account's public endpoint. Note that this command has the-bypassparameter set toAzureServices. This will allow trusted first party services such as Azure File Sync to access the storage account via the public endpoint.
+-bypass
+AzureServices
+# This assumes $storageAccountResourceGroupName and $storageAccountName 
+# are still defined from the beginning of this guide.
+az storage account update \
+    --resource-group $storageAccountResourceGroupName \
+    --name $storageAccountName \
+    --bypass "AzureServices" \
+    --default-action "Deny" \
+    --output none
+# This assumes $storageAccountResourceGroupName and $storageAccountName 
+# are still defined from the beginning of this guide.
+az storage account update \
+    --resource-group $storageAccountResourceGroupName \
+    --name $storageAccountName \
+    --bypass "AzureServices" \
+    --default-action "Deny" \
+    --output none
+When you restrict the storage account to specific virtual networks, you're allowing requests to the public endpoint from within the specified virtual networks. This works by using a capability of the virtual network calledservice endpoints. This can be used with or without private endpoints.
+Portal
+PowerShell
+Azure CLI
+Navigate to the storage account for which you would like to restrict the public endpoint to specific virtual networks. In the table of contents for the storage account, selectNetworking.
+At the top of the page, select theEnabled from selected virtual networks and IP addressesradio button. This will un-hide a number of settings for controlling the restriction of the public endpoint. Select+Add existing virtual networkto select the specific virtual network that should be allowed to access the storage account via the public endpoint. Select a virtual network and a subnet for that virtual network, and then selectEnable.
+SelectAllow Azure services on the trusted services list to access this storage accountto allow trusted first party Microsoft services such as Azure File Sync to access the storage account.
+
+To restrict access to the storage account's public endpoint to specific virtual networks using service endpoints, we first need to collect information about the storage account and virtual network. Fill in<storage-account-resource-group>,<storage-account-name>,<vnet-resource-group-name>,<vnet-name>, and<subnet-name>to collect this information.
+<storage-account-resource-group>
+<storage-account-name>
+<vnet-resource-group-name>
+<vnet-name>
+<subnet-name>
+$storageAccountResourceGroupName = "<storage-account-resource-group>"
+$storageAccountName = "<storage-account-name>"
+$restrictToVirtualNetworkResourceGroupName = "<vnet-resource-group-name>"
+$restrictToVirtualNetworkName = "<vnet-name>"
+$subnetName = "<subnet-name>"
+
+$storageAccount = Get-AzStorageAccount `
+        -ResourceGroupName $storageAccountResourceGroupName `
+        -Name $storageAccountName `
+        -ErrorAction Stop
+
+$virtualNetwork = Get-AzVirtualNetwork `
+        -ResourceGroupName $restrictToVirtualNetworkResourceGroupName `
+        -Name $restrictToVirtualNetworkName `
+        -ErrorAction Stop
+
+$subnet = $virtualNetwork | `
+    Select-Object -ExpandProperty Subnets | `
+    Where-Object { $_.Name -eq $subnetName }
+
+if ($null -eq $subnet) {
+    Write-Error `
+            -Message "Subnet $subnetName not found in virtual network $restrictToVirtualNetworkName." `
+            -ErrorAction Stop
+}
+$storageAccountResourceGroupName = "<storage-account-resource-group>"
+$storageAccountName = "<storage-account-name>"
+$restrictToVirtualNetworkResourceGroupName = "<vnet-resource-group-name>"
+$restrictToVirtualNetworkName = "<vnet-name>"
+$subnetName = "<subnet-name>"
+
+$storageAccount = Get-AzStorageAccount `
+        -ResourceGroupName $storageAccountResourceGroupName `
+        -Name $storageAccountName `
+        -ErrorAction Stop
+
+$virtualNetwork = Get-AzVirtualNetwork `
+        -ResourceGroupName $restrictToVirtualNetworkResourceGroupName `
+        -Name $restrictToVirtualNetworkName `
+        -ErrorAction Stop
+
+$subnet = $virtualNetwork | `
+    Select-Object -ExpandProperty Subnets | `
+    Where-Object { $_.Name -eq $subnetName }
+
+if ($null -eq $subnet) {
+    Write-Error `
+            -Message "Subnet $subnetName not found in virtual network $restrictToVirtualNetworkName." `
+            -ErrorAction Stop
+}
+In order for traffic from the virtual network to be allowed by the Azure network fabric to get to the storage account public endpoint, the virtual network's subnet must have theMicrosoft.Storageservice endpoint exposed. The following PowerShell commands will add theMicrosoft.Storageservice endpoint to the subnet if it's not already there.
+Microsoft.Storage
+Microsoft.Storage
+$serviceEndpoints = $subnet | `
+    Select-Object -ExpandProperty ServiceEndpoints | `
+    Select-Object -ExpandProperty Service
+
+if ($serviceEndpoints -notcontains "Microsoft.Storage") {
+    if ($null -eq $serviceEndpoints) {
+        $serviceEndpoints = @("Microsoft.Storage")
+    } elseif ($serviceEndpoints -is [string]) {
+        $serviceEndpoints = @($serviceEndpoints, "Microsoft.Storage")
+    } else {
+        $serviceEndpoints += "Microsoft.Storage"
+    }
+
+    $virtualNetwork = $virtualNetwork | Set-AzVirtualNetworkSubnetConfig `
+            -Name $subnetName `
+            -AddressPrefix $subnet.AddressPrefix `
+            -ServiceEndpoint $serviceEndpoints `
+            -WarningAction SilentlyContinue `
+            -ErrorAction Stop | `
+        Set-AzVirtualNetwork `
+            -ErrorAction Stop
+}
+$serviceEndpoints = $subnet | `
+    Select-Object -ExpandProperty ServiceEndpoints | `
+    Select-Object -ExpandProperty Service
+
+if ($serviceEndpoints -notcontains "Microsoft.Storage") {
+    if ($null -eq $serviceEndpoints) {
+        $serviceEndpoints = @("Microsoft.Storage")
+    } elseif ($serviceEndpoints -is [string]) {
+        $serviceEndpoints = @($serviceEndpoints, "Microsoft.Storage")
+    } else {
+        $serviceEndpoints += "Microsoft.Storage"
+    }
+
+    $virtualNetwork = $virtualNetwork | Set-AzVirtualNetworkSubnetConfig `
+            -Name $subnetName `
+            -AddressPrefix $subnet.AddressPrefix `
+            -ServiceEndpoint $serviceEndpoints `
+            -WarningAction SilentlyContinue `
+            -ErrorAction Stop | `
+        Set-AzVirtualNetwork `
+            -ErrorAction Stop
+}
+The final step in restricting traffic to the storage account is to create a networking rule and add to the storage account's network rule set.
+$networkRule = $storageAccount | Add-AzStorageAccountNetworkRule `
+    -VirtualNetworkResourceId $subnet.Id `
+    -ErrorAction Stop
+
+$storageAccount | Update-AzStorageAccountNetworkRuleSet `
+        -DefaultAction Deny `
+        -Bypass AzureServices `
+        -VirtualNetworkRule $networkRule `
+        -WarningAction SilentlyContinue `
+        -ErrorAction Stop | `
+    Out-Null
+$networkRule = $storageAccount | Add-AzStorageAccountNetworkRule `
+    -VirtualNetworkResourceId $subnet.Id `
+    -ErrorAction Stop
+
+$storageAccount | Update-AzStorageAccountNetworkRuleSet `
+        -DefaultAction Deny `
+        -Bypass AzureServices `
+        -VirtualNetworkRule $networkRule `
+        -WarningAction SilentlyContinue `
+        -ErrorAction Stop | `
+    Out-Null
+To restrict access to the storage account's public endpoint to specific virtual networks using service endpoints, we first need to collect information about the storage account and virtual network. Fill in<storage-account-resource-group>,<storage-account-name>,<vnet-resource-group-name>,<vnet-name>, and<subnet-name>to collect this information.
+<storage-account-resource-group>
+<storage-account-name>
+<vnet-resource-group-name>
+<vnet-name>
+<subnet-name>
+storageAccountResourceGroupName="<storage-account-resource-group>"
+storageAccountName="<storage-account-name>"
+restrictToVirtualNetworkResourceGroupName="<vnet-resource-group-name>"
+restrictToVirtualNetworkName="<vnet-name>"
+subnetName="<subnet-name>"
+
+storageAccount=$(az storage account show \
+        --resource-group $storageAccountResourceGroupName \
+        --name $storageAccountName \
+        --query "id" | \
+    tr -d '"')
+
+virtualNetwork=$(az network vnet show \
+        --resource-group $restrictToVirtualNetworkResourceGroupName \
+        --name $restrictToVirtualNetworkName \
+        --query "id" | \
+    tr -d '"')
+
+subnet=$(az network vnet subnet show \
+        --resource-group $restrictToVirtualNetworkResourceGroupName \
+        --vnet-name $restrictToVirtualNetworkName \
+        --name $subnetName \
+        --query "id" | \
+    tr -d '"')
+storageAccountResourceGroupName="<storage-account-resource-group>"
+storageAccountName="<storage-account-name>"
+restrictToVirtualNetworkResourceGroupName="<vnet-resource-group-name>"
+restrictToVirtualNetworkName="<vnet-name>"
+subnetName="<subnet-name>"
+
+storageAccount=$(az storage account show \
+        --resource-group $storageAccountResourceGroupName \
+        --name $storageAccountName \
+        --query "id" | \
+    tr -d '"')
+
+virtualNetwork=$(az network vnet show \
+        --resource-group $restrictToVirtualNetworkResourceGroupName \
+        --name $restrictToVirtualNetworkName \
+        --query "id" | \
+    tr -d '"')
+
+subnet=$(az network vnet subnet show \
+        --resource-group $restrictToVirtualNetworkResourceGroupName \
+        --vnet-name $restrictToVirtualNetworkName \
+        --name $subnetName \
+        --query "id" | \
+    tr -d '"')
+In order for traffic from the virtual network to be allowed by the Azure network fabric to get to the storage account public endpoint, the virtual network's subnet must have theMicrosoft.Storageservice endpoint exposed. The following CLI commands will add theMicrosoft.Storageservice endpoint to the subnet if it's not already there.
+Microsoft.Storage
+Microsoft.Storage
+serviceEndpoints=$(az network vnet subnet show \
+        --resource-group $restrictToVirtualNetworkResourceGroupName \
+        --vnet-name $restrictToVirtualNetworkName \
+        --name $subnetName \
+        --query "serviceEndpoints[].service" \
+        --output tsv)
+
+foundStorageServiceEndpoint=false
+for serviceEndpoint in $serviceEndpoints
+do
+    if [ $serviceEndpoint = "Microsoft.Storage" ]
+    then
+        foundStorageServiceEndpoint=true
+    fi
+done
+
+if [ $foundStorageServiceEndpoint = false ] 
+then
+    serviceEndpointList=""
+
+    for serviceEndpoint in $serviceEndpoints
+    do
+        serviceEndpointList+=$serviceEndpoint
+        serviceEndpointList+=" "
+    done
+    
+    serviceEndpointList+="Microsoft.Storage"
+
+    az network vnet subnet update \
+            --ids $subnet \
+            --service-endpoints $serviceEndpointList \
+            --output none
+fi
+serviceEndpoints=$(az network vnet subnet show \
+        --resource-group $restrictToVirtualNetworkResourceGroupName \
+        --vnet-name $restrictToVirtualNetworkName \
+        --name $subnetName \
+        --query "serviceEndpoints[].service" \
+        --output tsv)
+
+foundStorageServiceEndpoint=false
+for serviceEndpoint in $serviceEndpoints
+do
+    if [ $serviceEndpoint = "Microsoft.Storage" ]
+    then
+        foundStorageServiceEndpoint=true
+    fi
+done
+
+if [ $foundStorageServiceEndpoint = false ] 
+then
+    serviceEndpointList=""
+
+    for serviceEndpoint in $serviceEndpoints
+    do
+        serviceEndpointList+=$serviceEndpoint
+        serviceEndpointList+=" "
+    done
+    
+    serviceEndpointList+="Microsoft.Storage"
+
+    az network vnet subnet update \
+            --ids $subnet \
+            --service-endpoints $serviceEndpointList \
+            --output none
+fi
+The final step in restricting traffic to the storage account is to create a networking rule and add to the storage account's network rule set.
+az storage account network-rule add \
+        --resource-group $storageAccountResourceGroupName \
+        --account-name $storageAccountName \
+        --subnet $subnet \
+        --output none
+
+az storage account update \
+        --resource-group $storageAccountResourceGroupName \
+        --name $storageAccountName \
+        --bypass "AzureServices" \
+        --default-action "Deny" \
+        --output none
+az storage account network-rule add \
+        --resource-group $storageAccountResourceGroupName \
+        --account-name $storageAccountName \
+        --subnet $subnet \
+        --output none
+
+az storage account update \
+        --resource-group $storageAccountResourceGroupName \
+        --name $storageAccountName \
+        --bypass "AzureServices" \
+        --default-action "Deny" \
+        --output none
+Disable access to the Storage Sync Service public endpoint
+Azure File Sync enables you to restrict access to specific virtual networks through private endpoints only; Azure File Sync doesn't support service endpoints for restricting access to the public endpoint to specific virtual networks. This means that the two states for the Storage Sync Service's public endpoint areenabledanddisabled.
+Important
+You must create a private endpoint before disabling access to the public endpoint. If the public endpoint is disabled and there's no private endpoint configured, sync can't work.
+Portal
+PowerShell
+Azure CLI
+To disable access to the Storage Sync Service's public endpoint, follow these steps:
+Sign in to theAzure portal.
+Navigate to the Storage Sync Service and selectSettings>Networkfrom the left navigation.
+UnderAllow access from, selectPrivate endpoints only.
+Select a private endpoint from thePrivate endpoint connectionslist.
+To disable access to the Storage Sync Service's public endpoint, set theincomingTrafficPolicyproperty on the Storage Sync Service toAllowVirtualNetworksOnly. If you want to enable access to the Storage Sync Service's public endpoint, setincomingTrafficPolicytoAllowAllTrafficinstead. Remember to replace<storage-sync-service-resource-group>and<storage-sync-service>with your own values.
+incomingTrafficPolicy
+AllowVirtualNetworksOnly
+incomingTrafficPolicy
+AllowAllTraffic
+<storage-sync-service-resource-group>
+<storage-sync-service>
+$storageSyncServiceResourceGroupName = "<storage-sync-service-resource-group>"
+$storageSyncServiceName = "<storage-sync-service>"
+
+Set-AzStorageSyncService `
+    -ResourceGroupName $storageSyncServiceResourceGroupName `
+    -Name $storageSyncServiceName `
+    -IncomingTrafficPolicy AllowVirtualNetworksOnly
+$storageSyncServiceResourceGroupName = "<storage-sync-service-resource-group>"
+$storageSyncServiceName = "<storage-sync-service>"
+
+Set-AzStorageSyncService `
+    -ResourceGroupName $storageSyncServiceResourceGroupName `
+    -Name $storageSyncServiceName `
+    -IncomingTrafficPolicy AllowVirtualNetworksOnly
+Azure CLI doesn't support setting theincomingTrafficPolicyproperty on the Storage Sync Service. Please select the Azure PowerShell tab to get instructions on how to disable the Storage Sync Service public endpoint.
+incomingTrafficPolicy
+Azure Policy
+Azure Policy helps enforce organization standards and assess compliance against those standards at scale. Azure Files and Azure File Sync expose several useful audit and remediation network policies that help you monitor and automate your deployment.
+Policies audit your environment and alert you if your storage accounts or Storage Sync Services diverge from the defined behavior. For example, if a public endpoint is enabled when your policy was set to have the public endpoints disabled. Modify/deploy policies take things a step further and proactively modify a resource (such as the Storage Sync Service) or deploy resources (such as private endpoints) to align with the policies.
+The following pre-defined policies are available for Azure Files and Azure File Sync:
+Set up a private endpoint deployment policy
+To set up a private endpoint deployment policy, go to theAzure portal, and search forPolicy. The Azure Policy center should be a top result. Navigate toAuthoring>Definitionsin the Policy center's table of contents. The resultingDefinitionspane contains the pre-defined policies across all Azure services. To find the specific policy, select theStoragecategory in the category filter, or search forConfigure Azure File Sync with private endpoints. Select...andAssignto create a new policy from the definition.
+TheBasicsblade of theAssign policywizard enables you to set a scope, resource or resource group exclusion list, and to give your policy a friendly name to help you distinguish it. You don't need to modify these for the policy to work, but you can if you want to make modifications. SelectNextto advance to theParameterspage.
+On theParametersblade, select the...next to theprivateEndpointSubnetIddrop down list to select the virtual network and subnet where the private endpoints for your Storage Sync Service resources should be deployed. The resulting wizard may take several seconds to load the available virtual networks in your subscription. Select the appropriate virtual network/subnet for your environment and clickSelect. SelectNextto advance to theRemediationblade.
+In order for the private endpoint to be deployed when a Storage Sync Service without a private endpoint is identified, you must select theCreate a remediation taskon theRemediationpage. Finally, selectReview + createto review the policy assignment andCreateto create it.
+The resulting policy assignment will be executed on a periodic basis and might not run immediately after being created.
+See also
+Planning for an Azure File Sync deployment
+Deploy Azure File Sync
+Feedback
+Was this page helpful?
+Additional resources

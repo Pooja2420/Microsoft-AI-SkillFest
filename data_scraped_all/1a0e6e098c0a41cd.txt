@@ -1,0 +1,164 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Migrate WebLogic Server applications to JBoss EAP on Azure App Service
+Article
+2024-09-09
+7 contributors
+In this article
+This guide describes what you should be aware of when you want to migrate an existing WebLogic Server application to run on Azure App Service using JBoss EAP.
+Pre-migration
+To ensure a successful migration, before you start, complete the assessment and inventory steps described in the following sections.
+If you can't meet any of these pre-migration requirements, see the companion migration guide to migrate your applications to Virtual Machines instead:Migrate WebLogic Server applications to Azure Virtual Machines
+Inventory server capacity
+Document the hardware (memory, CPU, disk) of the current production server(s) and the average and peak request counts and resource utilization. You'll need this information regardless of the migration path you choose. It's useful, for example, to help guide selection of the App Service Plan.
+Thelist of available App Service Plan tiersshows the memory, CPU cores, storage, and pricing information. Note that JBoss EAP on App Service is only available on thePremium V3andIsolated V2App Service Plan tiers.
+Inventory all secrets
+Before the advent of "configuration as a service" technologies such as Azure Key Vault, there wasn't a well-defined concept of "secrets". Instead, you had a disparate set of configuration settings that effectively functioned as what we now call "secrets". With app servers such as WebLogic Server, these secrets are in many different config files and configuration stores. Check all properties and configuration files on the production server(s) for any secrets and passwords. Be sure to checkweblogic.xmlin your WARs. Configuration files containing passwords or credentials may also be found inside your application. For more information, seeAzure Key Vault basic concepts.
+Inventory all certificates
+Document all the certificates used for public SSL endpoints. You can view all certificates on the production server(s) by running the following command:
+keytool -list -v -keystore <path to keystore>
+keytool -list -v -keystore <path to keystore>
+Inventory JNDI resources
+Inventory all JNDI resources. For example, datasources such as databases may have an associated JNDI name that allows JPA to correctly bind instances ofEntityManagerto a particular database. For more information on JNDI resources and databases, seeWebLogic Server Data Sourcesin the Oracle documentation. Other JNDI-related resources, such as JMS message brokers, may require migration or reconfiguration. For more information on JMS configuration seeOracle WebLogic Server 12.2.1.4.0.
+EntityManager
+Inspect your domain configuration
+The main configuration unit in WebLogic Server is the domain. As such, theconfig.xmlfile contains a wealth of configuration that you must carefully consider for migration. The file includes references to additional XML files that are stored in subdirectories. Oracle advises that you should normally use theAdministration Consoleto configure WebLogic Server's manageable objects and services and allow WebLogic Server to maintain theconfig.xmlfile. For more information, seeDomain Configuration Files.
+Inspect theWEB-INF/weblogic.xmlfile and/or theWEB-INF/web.xmlfile.
+Determine whether session replication is used
+If your application relies on session replication, with or without Oracle Coherence*Web, you have two options:
+Refactor your application to use a database for session management.
+Refactor your application to externalize the session to Azure Redis Service. For more information, seeAzure Cache for Redis.
+For all of these options, it's a good idea to master how WebLogic does HTTP Session State Replication. For more information, seeHTTP Session State Replicationin the Oracle documentation.
+Document datasources
+If your application uses any databases, you need to capture the following information:
+What is the datasource name?
+What is the connection pool configuration?
+Where can I find the JDBC driver JAR file?
+For more information on JDBC drivers in WebLogic, seeUsing JDBC Drivers with WebLogic Server.
+Determine whether WebLogic has been customized
+Determine which of the following customizations have been made, and capture what's been done.
+Have the startup scripts been changed? Such scripts includesetDomainEnv,commEnv,startWebLogic, andstopWebLogic.
+Are there any specific parameters passed to the JVM?
+Are there JARs added to the server classpath?
+Determine whether a connection to on-premises is needed
+If your application needs to access any of your on-premises services, you'll need to provision one of Azure's connectivity services. For more information, seeConnect an on-premises network to Azure. Alternatively, you'll need to refactor your application to use publicly available APIs that your on-premises resources expose.
+Determine whether Java Message Service (JMS) Queues or Topics are in use
+If your application is using JMS Queues or Topics, you'll need to migrate them to an externally hosted JMS server. Azure Service Bus and the Advanced Message Queuing Protocol (AMQP) can be a great migration strategy for those using JMS. For more information, seeUse Java Message Service 1.1 with Azure Service Bus standard and AMQP 1.0.
+If JMS persistent stores have been configured, you must capture their configuration and apply it after the migration.
+Determine whether you are using your own custom created Shared Java EE Libraries
+If you're using the Shared Java EE library feature, you have two options:
+Refactor your application code to remove all dependencies on your libraries, and instead incorporate the functionality directly into your application.
+Add the libraries to the server classpath.
+Determine whether OSGi bundles are used
+If you used OSGi bundles added to the WebLogic server, you'll need to add the equivalent JAR files directly to your web application.
+Determine whether your application contains OS-specific code
+If your application contains any code with dependencies on the host OS, then you need to refactor it to remove those dependencies. For example, you may need to replace any use of/or\in file system paths withFile.SeparatororPaths.getif your application is running on Windows.
+/
+\
+File.Separator
+Paths.get
+Determine whether Oracle Service Bus is in use
+If your application is using Oracle Service Bus (OSB), you'll need to capture how OSB is configured. For more information, seeAbout the Oracle Service Bus Installation.
+Determine whether your application is composed of multiple WARs
+If your application is composed of multiple WARs, you should treat each of those WARs as separate applications and go through this guide for each of them.
+Determine whether your application is packaged as an EAR
+If your application is packaged as an EAR file, be sure to examine theapplication.xmlandweblogic-application.xmlfiles and capture their configurations.
+Identify all outside processes and daemons running on the production servers
+If you have any processes running outside the application server, such as monitoring daemons, you'll need to eliminate them or migrate them elsewhere.
+Validate that the supported Java version works correctly
+JBoss EAP on Azure App Service supports Java 8 and 11. Therefore, you'll need to validate that your application is able to run correctly using that supported version. This validation is especially important if your current server is using a supported JDK (such as Oracle JDK or IBM OpenJ9).
+To obtain your current Java version, sign in to your production server and run the following command:
+java -version
+java -version
+Determine whether your application relies on scheduled jobs
+Scheduled jobs, such as Quartz Scheduler tasks or Unix cron jobs, should NOT be used with Azure App Service. Azure App Service will not prevent you from deploying an application containing scheduled tasks internally. However, if your application is scaled out, the same scheduled job may run more than once per scheduled period. This situation can lead to unintended consequences.
+To execute scheduled jobs on Azure, consider using Azure Functions with a Timer Trigger. For more information, seeTimer trigger for Azure Functions. You don't need to migrate the job code itself into a function. The function can simply invoke a URL in your application to trigger the job.
+Note
+To prevent malicious use, you'll likely need to ensure that the job invocation endpoint requires credentials. In this case, the trigger function will need to provide the credentials.
+Determine whether WebLogic Scripting Tool (WLST) is used
+If you currently use WLST to perform the deployment, you will need to assess what it is doing. If WLST is changing any (runtime) parameters of your application as part of the deployment, you will need to make sure those parameters conform to one of the following options:
+They are externalized as app settings.
+They are embedded in your application.
+They are using the JBoss CLI during deployment.
+If WLST is doing more than what is mentioned above, you will have some additional work to do during migration.
+Determine whether your application uses WebLogic-specific APIs
+If your application uses WebLogic-specific APIs, you will need to refactor your application to NOT use them. For example, if you have used a class mentioned in theJava API Reference for Oracle WebLogic Server, you have used a WebLogic-specific API in your application. TheRed Hat Migration Toolkit for Appscan assist with removing and refactoring these dependencies.
+Determine whether your application uses Entity Beans or EJB 2.x-style CMP Beans
+If your application uses Entity Beans or EJB 2.x style CMP beans, you will need to refactor your application to NOT use them.
+Determine whether the Java EE Application Client feature is used
+If you have client applications that connect to your (server) application using the Java EE Application Client feature, you will need to refactor both your client applications and your (server) application to use HTTP APIs.
+Determine whether a deployment plan was used
+If a deployment plan was used to perform the deployment, you'll need to assess what the deployment plan is doing. If the deployment plan is a straight deploy, then you'll be able to deploy your web application without any changes. If the deployment plan is more elaborate, you'll need to determine whether you can use the JBoss CLI to properly configure your application as part of the deployment. If it isn't possible to use the JBoss CLI, you'll need to refactor your application in such a way that a deployment plan is no longer needed.
+Determine whether EJB timers are in use
+If your application uses EJB timers, you'll need to validate that the EJB timer code can be triggered by each JBoss EAP instance independently. This validation is needed because when your App Service is scaled our horizontally, each EJB timer will be triggered on its own JBoss EAP instance.
+Validate if and how the file system is used
+Any usage of the file system on the application server will require reconfiguration or, in rare cases, architectural changes. File system may be used by WebLogic shared modules or by your application code. You may identify some or all of the following scenarios.
+If your application currently serves static content, an alternate location for that static content will be required. You may wish to consider movingstatic content to Azure Blob Storageandadding Azure CDNfor lightning-fast downloads globally.
+If your application allows for static content that is uploaded/produced by your application but is immutable after its creation, you can use Azure Blob Storage and Azure CDN as described above, with an Azure Function to handle uploads and CDN refresh. We have provideda sample implementation for your use.
+For files that are frequently written and read by your application (such as temporary data files), or static files that are visible only to your application, Azure Storage can bemounted into the App Service file system.
+Determine whether JCA connectors are used
+If your application uses JCA connectors you'll have to validate the JCA connector can be used on JBoss EAP. If the JCA implementation is tied to WebLogic, you'll have to refactor your application to NOT use the JCA connector. If it can be used, then you'll need to add the JARs to the server classpath and put the necessary configuration files in the correct location in the JBoss EAP server directories for it to be available.
+If your application needs a Resource Adapter (RA), it needs to be compatible with JBoss EAP. Determine whether the RA works fine on a standalone instance of JBoss EAP by deploying it to the server and properly configuring it. If the RA works properly, you'll need to add the JARs to the server classpath of the App Service instance and put the necessary configuration files in the correct location in the JBoss EAP server directories for it to be available.
+Determine whether JAAS is used
+If your application is using JAAS, then you'll need to capture how JAAS is configured. If it's using a database, you can convert it to a JAAS domain on JBoss EAP. If it's a custom implementation, you'll need to validate that it can be used on JBoss EAP.
+Determine whether WebLogic clustering is used
+Most likely, you've deployed your application on multiple WebLogic servers to achieve high availability. Azure App Service is capable of scaling, but if you've used the WebLogic Cluster API, you'll need to refactor your code to eliminate the use of that API.
+Migration
+Red Hat Migration Toolkit for Apps
+TheRed Hat Migration Toolkit for Applicationsis a free extension for Visual Studio Code. This extension analyzes your application code and configuration to provide recommendations for migrating your Jakarta EE applications to JBoss EAP from other app servers, such as removing dependencies on proprietary APIs. The extension will also provide recommendations if you're migrating to the cloud from on-premises. For more information, seeMigration Toolkit for Applications overview.
+The contents of this guide will help you address the other components of the migration journey, such as choosing the correct App Service Plan type, externalizing your session state, and using Azure to manage your EAP instances instead of the JBoss Management interface.
+Provision an App Service plan
+From thelist of available service plans, select the plan whose specifications meet or exceed the specifications of the current production hardware.
+Note
+If you plan to run staging/canary deployments or usedeployment slots, the App Service plan must include that additional capacity. We recommend using Premium or higher plans for Java applications.
+Create the App Service plan.
+Create and Deploy Web App(s)
+You'll need to create a Web App on your App Service Plan for every WAR file deployed to your JBoss EAP server.
+Note
+While it's possible to deploy multiple WAR files to a single web app, this is highly undesirable. Deploying multiple WAR files to a single web app prevents each application from scaling according to its own usage demands. It also adds complexity to subsequent deployment pipelines. If multiple applications need to be available on a single URL, consider using a routing solution such asAzure Application Gateway.
+If your application is built from a Maven POM file, use the Webapp plugin for Maven to create the Web App and deploy your application. For more information, see theConfigure the Maven pluginsection ofQuickstart: Create a Java app on Azure App Service.
+If you can't use the Maven plugin, you'll need to provision the Web App through other mechanisms, such as:
+Azure portal
+Azure CLI
+Azure PowerShell
+After you've created the web app, use one of the available deployment mechanisms to deploy your application. For more information, seeDeploy files to App Service.
+Migrate JVM runtime options
+If your application requires specific runtime options, use the most appropriate mechanism to specify them. For more information, see theSet Java runtime optionssection ofConfigure a Java app for Azure App Service.
+Migrate externalized parameters
+If you need to use external parameters, you'll need to set them as app settings. For more information, seeConfigure app settings.
+Migrate startup scripts
+If the original application used a custom startup script, you'll need to migrate it to a Bash script. For more information, seeCustomize application server configuration.
+Populate secrets
+Use Application Settings to store any secrets specific to your application. If you intend to use the same secret or secrets among multiple applications, or you require fine-grained access policies and audit capabilities, use Azure Key Vault references instead. For more information, see theUse KeyVault Referencessection ofConfigure a Java app for Azure App Service.
+Configure Custom Domain and SSL
+If your application will be visible on a custom domain, you'll need to map your web application to it. For more information, seeTutorial: Map an existing custom DNS name to Azure App Service.
+You'll then need to bind the TLS/SSL certificate for that domain to your App Service Web App. For more information, seeSecure a custom DNS name with a TLS/SSL binding in Azure App Service.
+Migrate data sources, libraries, and JNDI resources
+To migrate data sources, follow the steps in theConfigure data sourcessection ofConfigure a Java app for Azure App Service.
+Migrate any additional server-level classpath dependencies by following the instructions in theJBoss EAPsection ofConfigure a Java app for Azure App Service.
+Migrate any additional shared server-level JDNI resources. For more information, see theJBoss EAPsection ofConfigure a Java app for Azure App Service.
+Migrate JCA connectors and JAAS modules
+Migrate any JCA connectors and JAAS modules by following the instructions atInstall modules and dependencies.
+Note
+If you're following the recommended architecture of one WAR per application, consider migrating server-level classpath libraries and JNDI resources into your application. Doing so will significantly simplify component governance and change management. If you want to deploy more than one WAR per application, you should review one of our companion guides mentioned at the beginning of this guide.
+Migrate scheduled jobs
+At a minimum, you should move your scheduled jobs to an Azure VM so they're no longer part of your application. Alternately, you can opt to modernize them into event driven Java using Azure services such as Azure Functions, SQL Database, and Event Hubs.
+Restart and smoke-test
+Finally, you'll need to restart your Web App to apply all configuration changes. Upon completion of the restart, verify that your application is running correctly.
+Post-migration
+Now that you've migrated your application to Azure App Service, you should verify that it works as you expect. Once you've done that, we have some recommendations for you that can make your application more cloud-native.
+Recommendations
+If you opted to use the/homedirectory for file storage, consider replacing it with Azure Storage. For more information, seeMount Azure Storage as a local share in a custom container in App Service.
+If you opted to use the/homedirectory for file storage, consider replacing it with Azure Storage. For more information, seeMount Azure Storage as a local share in a custom container in App Service.
+If you have configuration in the/homedirectory that contains connection strings, SSL keys, and other secret information, consider using a combination of Azure Key Vault and parameter injection with application settings where possible. For more information, seeUse Key Vault references for App Service and Azure FunctionsandConfigure an App Service app.
+If you have configuration in the/homedirectory that contains connection strings, SSL keys, and other secret information, consider using a combination of Azure Key Vault and parameter injection with application settings where possible. For more information, seeUse Key Vault references for App Service and Azure FunctionsandConfigure an App Service app.
+Consider using deployment slots for reliable deployments with zero downtime. For more information, seeSet up staging environments in Azure App Service.
+Consider using deployment slots for reliable deployments with zero downtime. For more information, seeSet up staging environments in Azure App Service.
+Design and implement a DevOps strategy. In order to maintain reliability while increasing your development velocity, consider automating deployments and testing with Azure Pipelines. For more information, seeBuild & deploy to Java web app. If you're using deployment slots, you can automate deployment to a slot and the subsequent slot swap. For more information, see theExample: Deploy to a slotsection ofDeploy to App Service using Azure Pipelines.
+Design and implement a DevOps strategy. In order to maintain reliability while increasing your development velocity, consider automating deployments and testing with Azure Pipelines. For more information, seeBuild & deploy to Java web app. If you're using deployment slots, you can automate deployment to a slot and the subsequent slot swap. For more information, see theExample: Deploy to a slotsection ofDeploy to App Service using Azure Pipelines.
+Design and implement a business continuity and disaster recovery strategy. For mission-critical applications, consider a multi-region deployment architecture. For more information, seeHighly available multi-region web application.
+Design and implement a business continuity and disaster recovery strategy. For mission-critical applications, consider a multi-region deployment architecture. For more information, seeHighly available multi-region web application.
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,1551 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Azure Functions HTTP trigger
+Article
+2024-07-18
+23 contributors
+In this article
+The HTTP trigger lets you invoke a function with an HTTP request. You can use an HTTP trigger to build serverless APIs and respond to webhooks.
+The default return value for an HTTP-triggered function is:
+HTTP 204 No Contentwith an empty body in Functions 2.x and higher
+HTTP 204 No Content
+HTTP 200 OKwith an empty body in Functions 1.x
+HTTP 200 OK
+To modify the HTTP response, configure anoutput binding.
+For more information about HTTP bindings, see theoverviewandoutput binding reference.
+Tip
+If you plan to use the HTTP or WebHook bindings, plan to avoid port exhaustion that can be caused by improper instantiation ofHttpClient. For more information, seeHow to manage connections in Azure Functions.
+HttpClient
+Important
+This article uses tabs to support multiple versions of the Node.js programming model. The v4 model is generally available and is designed to have a more flexible and intuitive experience for JavaScript and TypeScript developers. For more details about how the v4 model works, refer to theAzure Functions Node.js developer guide. To learn more about the differences between v3 and v4, refer to themigration guide.
+Azure Functions supports two programming models for Python. The way that you define your bindings depends on your chosen programming model.
+v2
+v1
+The Python v2 programming model lets you define bindings using decorators directly in your Python function code. For more information, see thePython developer guide.
+The Python v1 programming model requires you to define bindings in a separatefunction.jsonfile in the function folder. For more information, see thePython developer guide.
+This article supports both programming models.
+Example
+A C# function can be created by using one of the following C# modes:
+Isolated worker model: Compiled C# function that runs in a worker process that's isolated from the runtime. Isolated worker process is required to support C# functions running on LTS and non-LTS versions .NET and the .NET Framework. Extensions for isolated worker process functions useMicrosoft.Azure.Functions.Worker.Extensions.*namespaces.
+Microsoft.Azure.Functions.Worker.Extensions.*
+In-process model: Compiled C# function that runs in the same process as the Functions runtime. In a variation of this model, Functions can be run usingC# scripting, which is supported primarily for C# portal editing. Extensions for in-process functions useMicrosoft.Azure.WebJobs.Extensions.*namespaces.
+Microsoft.Azure.WebJobs.Extensions.*
+Important
+Support will end for the in-process model on November 10, 2026. We highly recommend that youmigrate your apps to the isolated worker modelfor full support.
+The code in this article defaults to .NET Core syntax, used in Functions version 2.x and higher. For information on the 1.x syntax, see the1.x functions templates.
+Isolated worker model
+In-process model
+The following example shows an HTTP trigger that returns a "hello, world" response as anIActionResult, usingASP.NET Core integration in .NET Isolated:
+[Function("HttpFunction")]
+public IActionResult Run(
+    [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequest req)
+{
+    return new OkObjectResult($"Welcome to Azure Functions, {req.Query["name"]}!");
+}
+[Function("HttpFunction")]
+public IActionResult Run(
+    [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequest req)
+{
+    return new OkObjectResult($"Welcome to Azure Functions, {req.Query["name"]}!");
+}
+The following example shows an HTTP trigger that returns a "hello world" response as anHttpResponseDataobject:
+[Function(nameof(HttpFunction))]
+public static HttpResponseData Run([HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = null)] HttpRequestData req,
+    FunctionContext executionContext)
+{
+    var logger = executionContext.GetLogger(nameof(HttpFunction));
+    logger.LogInformation("message logged");
+
+    var response = req.CreateResponse(HttpStatusCode.OK);
+    response.Headers.Add("Content-Type", "text/plain; charset=utf-8");
+    response.WriteString("Welcome to .NET isolated worker !!");
+
+    return response;
+}
+[Function(nameof(HttpFunction))]
+public static HttpResponseData Run([HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = null)] HttpRequestData req,
+    FunctionContext executionContext)
+{
+    var logger = executionContext.GetLogger(nameof(HttpFunction));
+    logger.LogInformation("message logged");
+
+    var response = req.CreateResponse(HttpStatusCode.OK);
+    response.Headers.Add("Content-Type", "text/plain; charset=utf-8");
+    response.WriteString("Welcome to .NET isolated worker !!");
+
+    return response;
+}
+The following example shows aC# functionthat looks for anameparameter either in the query string or the body of the HTTP request. Notice that the return value is used for the output binding, but a return value attribute isn't required.
+name
+[FunctionName("HttpTriggerCSharp")]
+public static async Task<IActionResult> Run(
+    [HttpTrigger(AuthorizationLevel.Function, "get", "post", Route = null)]
+    HttpRequest req, ILogger log)
+{
+    log.LogInformation("C# HTTP trigger function processed a request.");
+
+    string name = req.Query["name"];
+
+    string requestBody = String.Empty;
+    using (StreamReader streamReader =  new  StreamReader(req.Body))
+    {
+        requestBody = await streamReader.ReadToEndAsync();
+    }
+    dynamic data = JsonConvert.DeserializeObject(requestBody);
+    name = name ?? data?.name;
+
+    return name != null
+        ? (ActionResult)new OkObjectResult($"Hello, {name}")
+        : new BadRequestObjectResult("Please pass a name on the query string or in the request body");
+}
+[FunctionName("HttpTriggerCSharp")]
+public static async Task<IActionResult> Run(
+    [HttpTrigger(AuthorizationLevel.Function, "get", "post", Route = null)]
+    HttpRequest req, ILogger log)
+{
+    log.LogInformation("C# HTTP trigger function processed a request.");
+
+    string name = req.Query["name"];
+
+    string requestBody = String.Empty;
+    using (StreamReader streamReader =  new  StreamReader(req.Body))
+    {
+        requestBody = await streamReader.ReadToEndAsync();
+    }
+    dynamic data = JsonConvert.DeserializeObject(requestBody);
+    name = name ?? data?.name;
+
+    return name != null
+        ? (ActionResult)new OkObjectResult($"Hello, {name}")
+        : new BadRequestObjectResult("Please pass a name on the query string or in the request body");
+}
+This section contains the following examples:
+Read parameter from the query string
+Read body from a POST request
+Read parameter from a route
+Read POJO body from a POST request
+The following examples show the HTTP trigger binding.
+This example reads a parameter, namedid, from the query string, and uses it to build a JSON document returned to the client, with content typeapplication/json.
+id
+application/json
+@FunctionName("TriggerStringGet")
+public HttpResponseMessage run(
+        @HttpTrigger(name = "req", 
+            methods = {HttpMethod.GET}, 
+            authLevel = AuthorizationLevel.ANONYMOUS)
+        HttpRequestMessage<Optional<String>> request,
+        final ExecutionContext context) {
+
+    // Item list
+    context.getLogger().info("GET parameters are: " + request.getQueryParameters());
+
+    // Get named parameter
+    String id = request.getQueryParameters().getOrDefault("id", "");
+
+    // Convert and display
+    if (id.isEmpty()) {
+        return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
+                        .body("Document not found.")
+                        .build();
+    } 
+    else {
+        // return JSON from to the client
+        // Generate document
+        final String name = "fake_name";
+        final String jsonDocument = "{\"id\":\"" + id + "\", " + 
+                                        "\"description\": \"" + name + "\"}";
+        return request.createResponseBuilder(HttpStatus.OK)
+                        .header("Content-Type", "application/json")
+                        .body(jsonDocument)
+                        .build();
+    }
+}
+@FunctionName("TriggerStringGet")
+public HttpResponseMessage run(
+        @HttpTrigger(name = "req", 
+            methods = {HttpMethod.GET}, 
+            authLevel = AuthorizationLevel.ANONYMOUS)
+        HttpRequestMessage<Optional<String>> request,
+        final ExecutionContext context) {
+
+    // Item list
+    context.getLogger().info("GET parameters are: " + request.getQueryParameters());
+
+    // Get named parameter
+    String id = request.getQueryParameters().getOrDefault("id", "");
+
+    // Convert and display
+    if (id.isEmpty()) {
+        return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
+                        .body("Document not found.")
+                        .build();
+    } 
+    else {
+        // return JSON from to the client
+        // Generate document
+        final String name = "fake_name";
+        final String jsonDocument = "{\"id\":\"" + id + "\", " + 
+                                        "\"description\": \"" + name + "\"}";
+        return request.createResponseBuilder(HttpStatus.OK)
+                        .header("Content-Type", "application/json")
+                        .body(jsonDocument)
+                        .build();
+    }
+}
+This example reads the body of a POST request, as aString, and uses it to build a JSON document returned to the client, with content typeapplication/json.
+String
+application/json
+@FunctionName("TriggerStringPost")
+    public HttpResponseMessage run(
+            @HttpTrigger(name = "req", 
+              methods = {HttpMethod.POST}, 
+              authLevel = AuthorizationLevel.ANONYMOUS)
+            HttpRequestMessage<Optional<String>> request,
+            final ExecutionContext context) {
+
+        // Item list
+        context.getLogger().info("Request body is: " + request.getBody().orElse(""));
+
+        // Check request body
+        if (!request.getBody().isPresent()) {
+            return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
+                          .body("Document not found.")
+                          .build();
+        } 
+        else {
+            // return JSON from to the client
+            // Generate document
+            final String body = request.getBody().get();
+            final String jsonDocument = "{\"id\":\"123456\", " + 
+                                         "\"description\": \"" + body + "\"}";
+            return request.createResponseBuilder(HttpStatus.OK)
+                          .header("Content-Type", "application/json")
+                          .body(jsonDocument)
+                          .build();
+        }
+    }
+@FunctionName("TriggerStringPost")
+    public HttpResponseMessage run(
+            @HttpTrigger(name = "req", 
+              methods = {HttpMethod.POST}, 
+              authLevel = AuthorizationLevel.ANONYMOUS)
+            HttpRequestMessage<Optional<String>> request,
+            final ExecutionContext context) {
+
+        // Item list
+        context.getLogger().info("Request body is: " + request.getBody().orElse(""));
+
+        // Check request body
+        if (!request.getBody().isPresent()) {
+            return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
+                          .body("Document not found.")
+                          .build();
+        } 
+        else {
+            // return JSON from to the client
+            // Generate document
+            final String body = request.getBody().get();
+            final String jsonDocument = "{\"id\":\"123456\", " + 
+                                         "\"description\": \"" + body + "\"}";
+            return request.createResponseBuilder(HttpStatus.OK)
+                          .header("Content-Type", "application/json")
+                          .body(jsonDocument)
+                          .build();
+        }
+    }
+This example reads a mandatory parameter, namedid, and an optional parameternamefrom the route path, and uses them to build a JSON document returned to the client, with content typeapplication/json.
+id
+name
+application/json
+@FunctionName("TriggerStringRoute")
+public HttpResponseMessage run(
+        @HttpTrigger(name = "req", 
+            methods = {HttpMethod.GET}, 
+            authLevel = AuthorizationLevel.ANONYMOUS,
+            route = "trigger/{id}/{name=EMPTY}") // name is optional and defaults to EMPTY
+        HttpRequestMessage<Optional<String>> request,
+        @BindingName("id") String id,
+        @BindingName("name") String name,
+        final ExecutionContext context) {
+
+    // Item list
+    context.getLogger().info("Route parameters are: " + id);
+
+    // Convert and display
+    if (id == null) {
+        return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
+                        .body("Document not found.")
+                        .build();
+    } 
+    else {
+        // return JSON from to the client
+        // Generate document
+        final String jsonDocument = "{\"id\":\"" + id + "\", " + 
+                                        "\"description\": \"" + name + "\"}";
+        return request.createResponseBuilder(HttpStatus.OK)
+                        .header("Content-Type", "application/json")
+                        .body(jsonDocument)
+                        .build();
+    }
+}
+@FunctionName("TriggerStringRoute")
+public HttpResponseMessage run(
+        @HttpTrigger(name = "req", 
+            methods = {HttpMethod.GET}, 
+            authLevel = AuthorizationLevel.ANONYMOUS,
+            route = "trigger/{id}/{name=EMPTY}") // name is optional and defaults to EMPTY
+        HttpRequestMessage<Optional<String>> request,
+        @BindingName("id") String id,
+        @BindingName("name") String name,
+        final ExecutionContext context) {
+
+    // Item list
+    context.getLogger().info("Route parameters are: " + id);
+
+    // Convert and display
+    if (id == null) {
+        return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
+                        .body("Document not found.")
+                        .build();
+    } 
+    else {
+        // return JSON from to the client
+        // Generate document
+        final String jsonDocument = "{\"id\":\"" + id + "\", " + 
+                                        "\"description\": \"" + name + "\"}";
+        return request.createResponseBuilder(HttpStatus.OK)
+                        .header("Content-Type", "application/json")
+                        .body(jsonDocument)
+                        .build();
+    }
+}
+Here's the code for theToDoItemclass, referenced in this example:
+ToDoItem
+public class ToDoItem {
+
+  private String id;
+  private String description;  
+
+  public ToDoItem(String id, String description) {
+    this.id = id;
+    this.description = description;
+  }
+
+  public String getId() {
+    return id;
+  }
+
+  public String getDescription() {
+    return description;
+  }
+
+  @Override
+  public String toString() {
+    return "ToDoItem={id=" + id + ",description=" + description + "}";
+  }
+}
+public class ToDoItem {
+
+  private String id;
+  private String description;  
+
+  public ToDoItem(String id, String description) {
+    this.id = id;
+    this.description = description;
+  }
+
+  public String getId() {
+    return id;
+  }
+
+  public String getDescription() {
+    return description;
+  }
+
+  @Override
+  public String toString() {
+    return "ToDoItem={id=" + id + ",description=" + description + "}";
+  }
+}
+This example reads the body of a POST request. The request body gets automatically de-serialized into aToDoItemobject, and is returned to the client, with content typeapplication/json. TheToDoItemparameter is serialized by the Functions runtime as it is assigned to thebodyproperty of theHttpMessageResponse.Builderclass.
+ToDoItem
+application/json
+ToDoItem
+body
+HttpMessageResponse.Builder
+@FunctionName("TriggerPojoPost")
+public HttpResponseMessage run(
+        @HttpTrigger(name = "req", 
+            methods = {HttpMethod.POST}, 
+            authLevel = AuthorizationLevel.ANONYMOUS)
+        HttpRequestMessage<Optional<ToDoItem>> request,
+        final ExecutionContext context) {
+
+    // Item list
+    context.getLogger().info("Request body is: " + request.getBody().orElse(null));
+
+    // Check request body
+    if (!request.getBody().isPresent()) {
+        return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
+                        .body("Document not found.")
+                        .build();
+    } 
+    else {
+        // return JSON from to the client
+        // Generate document
+        final ToDoItem body = request.getBody().get();
+        return request.createResponseBuilder(HttpStatus.OK)
+                        .header("Content-Type", "application/json")
+                        .body(body)
+                        .build();
+    }
+}
+@FunctionName("TriggerPojoPost")
+public HttpResponseMessage run(
+        @HttpTrigger(name = "req", 
+            methods = {HttpMethod.POST}, 
+            authLevel = AuthorizationLevel.ANONYMOUS)
+        HttpRequestMessage<Optional<ToDoItem>> request,
+        final ExecutionContext context) {
+
+    // Item list
+    context.getLogger().info("Request body is: " + request.getBody().orElse(null));
+
+    // Check request body
+    if (!request.getBody().isPresent()) {
+        return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
+                        .body("Document not found.")
+                        .build();
+    } 
+    else {
+        // return JSON from to the client
+        // Generate document
+        final ToDoItem body = request.getBody().get();
+        return request.createResponseBuilder(HttpStatus.OK)
+                        .header("Content-Type", "application/json")
+                        .body(body)
+                        .build();
+    }
+}
+Model v4
+Model v3
+The following example shows an HTTP triggerTypeScript function. The function looks for anameparameter either in the query string or the body of the HTTP request.
+name
+import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
+
+export async function httpTrigger1(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
+    context.log(`Http function processed request for url "${request.url}"`);
+
+    const name = request.query.get('name') || (await request.text()) || 'world';
+
+    return { body: `Hello, ${name}!` };
+}
+
+app.http('httpTrigger1', {
+    methods: ['GET', 'POST'],
+    authLevel: 'anonymous',
+    handler: httpTrigger1,
+});
+import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
+
+export async function httpTrigger1(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
+    context.log(`Http function processed request for url "${request.url}"`);
+
+    const name = request.query.get('name') || (await request.text()) || 'world';
+
+    return { body: `Hello, ${name}!` };
+}
+
+app.http('httpTrigger1', {
+    methods: ['GET', 'POST'],
+    authLevel: 'anonymous',
+    handler: httpTrigger1,
+});
+TypeScript samples aren't documented for model v3.
+Model v4
+Model v3
+The following example shows an HTTP triggerJavaScript function. The function looks for anameparameter either in the query string or the body of the HTTP request.
+name
+const { app } = require('@azure/functions');
+
+app.http('httpTrigger1', {
+    methods: ['GET', 'POST'],
+    authLevel: 'anonymous',
+    handler: async (request, context) => {
+        context.log(`Http function processed request for url "${request.url}"`);
+
+        const name = request.query.get('name') || (await request.text()) || 'world';
+
+        return { body: `Hello, ${name}!` };
+    },
+});
+const { app } = require('@azure/functions');
+
+app.http('httpTrigger1', {
+    methods: ['GET', 'POST'],
+    authLevel: 'anonymous',
+    handler: async (request, context) => {
+        context.log(`Http function processed request for url "${request.url}"`);
+
+        const name = request.query.get('name') || (await request.text()) || 'world';
+
+        return { body: `Hello, ${name}!` };
+    },
+});
+The following example shows a trigger binding in afunction.jsonfile and aJavaScript functionthat uses the binding. The function looks for anameparameter either in the query string or the body of the HTTP request.
+name
+Here's thefunction.jsonfile:
+{
+    "disabled": false,    
+    "bindings": [
+        {
+            "authLevel": "function",
+            "type": "httpTrigger",
+            "direction": "in",
+            "name": "req"
+        },
+        {
+            "type": "http",
+            "direction": "out",
+            "name": "res"
+        }
+    ]
+}
+{
+    "disabled": false,    
+    "bindings": [
+        {
+            "authLevel": "function",
+            "type": "httpTrigger",
+            "direction": "in",
+            "name": "req"
+        },
+        {
+            "type": "http",
+            "direction": "out",
+            "name": "res"
+        }
+    ]
+}
+Theconfigurationsection explains these properties.
+Here's the JavaScript code:
+module.exports = async function(context, req) {
+    context.log('Node.js HTTP trigger function processed a request. RequestUri=%s', req.originalUrl);
+
+    if (req.query.name || (req.body && req.body.name)) {
+        context.res = {
+            // status defaults to 200 */
+            body: "Hello " + (req.query.name || req.body.name)
+        };
+    }
+    else {
+        context.res = {
+            status: 400,
+            body: "Please pass a name on the query string or in the request body"
+        };
+    }
+};
+module.exports = async function(context, req) {
+    context.log('Node.js HTTP trigger function processed a request. RequestUri=%s', req.originalUrl);
+
+    if (req.query.name || (req.body && req.body.name)) {
+        context.res = {
+            // status defaults to 200 */
+            body: "Hello " + (req.query.name || req.body.name)
+        };
+    }
+    else {
+        context.res = {
+            status: 400,
+            body: "Please pass a name on the query string or in the request body"
+        };
+    }
+};
+The following example shows a trigger binding in afunction.jsonfile and aPowerShell function. The function looks for anameparameter either in the query string or the body of the HTTP request.
+name
+{
+  "bindings": [
+    {
+      "authLevel": "function",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "Request",
+      "methods": [
+        "get",
+        "post"
+      ]
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "Response"
+    }
+  ]
+}
+{
+  "bindings": [
+    {
+      "authLevel": "function",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "Request",
+      "methods": [
+        "get",
+        "post"
+      ]
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "Response"
+    }
+  ]
+}
+using namespace System.Net
+
+# Input bindings are passed in via param block.
+param($Request, $TriggerMetadata)
+
+# Write to the Azure Functions log stream.
+Write-Host "PowerShell HTTP trigger function processed a request."
+
+# Interact with query parameters or the body of the request.
+$name = $Request.Query.Name
+if (-not $name) {
+    $name = $Request.Body.Name
+}
+
+$body = "This HTTP triggered function executed successfully. Pass a name in the query string or in the request body for a personalized response."
+
+if ($name) {
+    $body = "Hello, $name. This HTTP triggered function executed successfully."
+}
+
+# Associate values to output bindings by calling 'Push-OutputBinding'.
+Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    StatusCode = [HttpStatusCode]::OK
+    Body       = $body
+})
+using namespace System.Net
+
+# Input bindings are passed in via param block.
+param($Request, $TriggerMetadata)
+
+# Write to the Azure Functions log stream.
+Write-Host "PowerShell HTTP trigger function processed a request."
+
+# Interact with query parameters or the body of the request.
+$name = $Request.Query.Name
+if (-not $name) {
+    $name = $Request.Body.Name
+}
+
+$body = "This HTTP triggered function executed successfully. Pass a name in the query string or in the request body for a personalized response."
+
+if ($name) {
+    $body = "Hello, $name. This HTTP triggered function executed successfully."
+}
+
+# Associate values to output bindings by calling 'Push-OutputBinding'.
+Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    StatusCode = [HttpStatusCode]::OK
+    Body       = $body
+})
+v2
+v1
+This example usesHTTP streamsto return chunked response data.
+import time
+
+import azure.functions as func
+from azurefunctions.extensions.http.fastapi import Request, StreamingResponse
+
+app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+
+
+def generate_sensor_data():
+    """Generate real-time sensor data."""
+    for i in range(10):
+        # Simulate temperature and humidity readings
+        temperature = 20 + i
+        humidity = 50 + i
+        yield f"data: {{'temperature': {temperature}, 'humidity': {humidity}}}\n\n"
+        time.sleep(1)
+
+
+@app.route(route="stream", methods=[func.HttpMethod.GET])
+async def stream_sensor_data(req: Request) -> StreamingResponse:
+    """Endpoint to stream real-time sensor data."""
+    return StreamingResponse(generate_sensor_data(), media_type="text/event-stream")
+import time
+
+import azure.functions as func
+from azurefunctions.extensions.http.fastapi import Request, StreamingResponse
+
+app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+
+
+def generate_sensor_data():
+    """Generate real-time sensor data."""
+    for i in range(10):
+        # Simulate temperature and humidity readings
+        temperature = 20 + i
+        humidity = 50 + i
+        yield f"data: {{'temperature': {temperature}, 'humidity': {humidity}}}\n\n"
+        time.sleep(1)
+
+
+@app.route(route="stream", methods=[func.HttpMethod.GET])
+async def stream_sensor_data(req: Request) -> StreamingResponse:
+    """Endpoint to stream real-time sensor data."""
+    return StreamingResponse(generate_sensor_data(), media_type="text/event-stream")
+To learn more, including how to enable HTTP streams in your project, seeHTTP streams.
+This example shows a trigger binding and a Python function that uses the binding. The function looks for anameparameter either in the query string or the body of the HTTP request.
+name
+import azure.functions as func
+import logging
+
+app = func.FunctionApp()
+
+@app.function_name(name="HttpTrigger1")
+@app.route(route="hello", auth_level=func.AuthLevel.ANONYMOUS)
+def test_function(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Python HTTP trigger function processed a request.')
+    return func.HttpResponse(
+        "This HTTP triggered function executed successfully.",
+        status_code=200
+        )
+import azure.functions as func
+import logging
+
+app = func.FunctionApp()
+
+@app.function_name(name="HttpTrigger1")
+@app.route(route="hello", auth_level=func.AuthLevel.ANONYMOUS)
+def test_function(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Python HTTP trigger function processed a request.')
+    return func.HttpResponse(
+        "This HTTP triggered function executed successfully.",
+        status_code=200
+        )
+This example shows a trigger binding and a Python function that uses the binding. The function looks for anameparameter either in the query string or the body of the HTTP request.
+name
+Here's thefunction.jsonfile:
+{
+    "scriptFile": "__init__.py",
+    "disabled": false,    
+    "bindings": [
+        {
+            "authLevel": "function",
+            "type": "httpTrigger",
+            "direction": "in",
+            "name": "req"
+        },
+        {
+            "type": "http",
+            "direction": "out",
+            "name": "$return"
+        }
+    ]
+}
+{
+    "scriptFile": "__init__.py",
+    "disabled": false,    
+    "bindings": [
+        {
+            "authLevel": "function",
+            "type": "httpTrigger",
+            "direction": "in",
+            "name": "req"
+        },
+        {
+            "type": "http",
+            "direction": "out",
+            "name": "$return"
+        }
+    ]
+}
+Theconfigurationsection explains these properties.
+Here's the Python code:
+import logging
+import azure.functions as func
+
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Python HTTP trigger function processed a request.')
+
+    name = req.params.get('name')
+    if not name:
+        try:
+            req_body = req.get_json()
+        except ValueError:
+            pass
+        else:
+            name = req_body.get('name')
+
+    if name:
+        return func.HttpResponse(f"Hello {name}!")
+    else:
+        return func.HttpResponse(
+            "Please pass a name on the query string or in the request body",
+            status_code=400
+        )
+import logging
+import azure.functions as func
+
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Python HTTP trigger function processed a request.')
+
+    name = req.params.get('name')
+    if not name:
+        try:
+            req_body = req.get_json()
+        except ValueError:
+            pass
+        else:
+            name = req_body.get('name')
+
+    if name:
+        return func.HttpResponse(f"Hello {name}!")
+    else:
+        return func.HttpResponse(
+            "Please pass a name on the query string or in the request body",
+            status_code=400
+        )
+Attributes
+Both theisolated worker modeland thein-process modeluse theHttpTriggerAttributeto define the trigger binding. C# script instead uses a function.json configuration file as described in theC# scripting guide.
+HttpTriggerAttribute
+Isolated worker model
+In-process model
+Inisolated worker modelfunction apps, theHttpTriggerAttributesupports the following parameters:
+HttpTriggerAttribute
+<functionname>
+Inin-process functions, theHttpTriggerAttributesupports the following parameters:
+HttpTriggerAttribute
+<functionname>
+Decorators
+Applies only to the Python v2 programming model.
+For Python v2 functions defined using a decorator, the following properties for a trigger are defined in theroutedecorator, which adds HttpTrigger and HttpOutput binding:
+route
+route
+trigger_arg_name
+binding_arg_name
+methods
+auth_level
+For Python functions defined by usingfunction.json, see theConfigurationsection.
+Annotations
+In theJava functions runtime library, use theHttpTriggerannotation, which supports the following settings:
+authLevel
+dataType
+methods
+name
+route
+Configuration
+Applies only to the Python v1 programming model.
+Model v4
+Model v3
+The following table explains the properties that you can set on theoptionsobject passed to theapp.http()method.
+options
+app.http()
+<functionname>
+The following table explains the binding configuration properties that you set in thefunction.jsonfile.
+httpTrigger
+in
+<functionname>
+The following table explains the trigger configuration properties that you set in thefunction.jsonfile, which differs by runtime version.
+Functions 2.x+
+Functions 1.x
+The following table explains the binding configuration properties that you set in thefunction.jsonfile.
+httpTrigger
+in
+<functionname>
+The following table explains the binding configuration properties that you set in thefunction.jsonfile.
+httpTrigger
+in
+<functionname>
+Usage
+This section details how to configure your HTTP trigger function binding.
+TheHttpTriggerannotation should be applied to a method parameter of one of the following types:
+HttpRequestMessage<T>.
+Any native Java types such as int, String, byte[].
+Nullable values using Optional.
+Any plain-old Java object (POJO) type.
+Payload
+Isolated worker model
+In-process model
+The trigger input type is declared as one of the following types:
+When the trigger parameter is of typeHttpRequestDataorHttpRequest, custom types can also be bound to other parameters usingMicrosoft.Azure.Functions.Worker.Http.FromBodyAttribute. Use of this attribute requiresMicrosoft.Azure.Functions.Worker.Extensions.Httpversion 3.1.0 or later. This is a different type than the similar attribute inMicrosoft.AspNetCore.Mvc. When using ASP.NET Core integration, you need a fully qualified reference orusingstatement. This example shows how to use the attribute to get just the body contents while still having access to the fullHttpRequest, using ASP.NET Core integration:
+HttpRequestData
+HttpRequest
+Microsoft.Azure.Functions.Worker.Http.FromBodyAttribute
+Microsoft.Azure.Functions.Worker.Extensions.Http
+Microsoft.AspNetCore.Mvc
+using
+HttpRequest
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Azure.Functions.Worker;
+using FromBodyAttribute = Microsoft.Azure.Functions.Worker.Http.FromBodyAttribute;
+
+namespace AspNetIntegration
+{
+    public class BodyBindingHttpTrigger
+    {
+        [Function(nameof(BodyBindingHttpTrigger))]
+        public IActionResult Run([HttpTrigger(AuthorizationLevel.Anonymous, "post")] HttpRequest req,
+            [FromBody] Person person)
+        {
+            return new OkObjectResult(person);
+        }
+    }
+
+    public record Person(string Name, int Age);
+}
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Azure.Functions.Worker;
+using FromBodyAttribute = Microsoft.Azure.Functions.Worker.Http.FromBodyAttribute;
+
+namespace AspNetIntegration
+{
+    public class BodyBindingHttpTrigger
+    {
+        [Function(nameof(BodyBindingHttpTrigger))]
+        public IActionResult Run([HttpTrigger(AuthorizationLevel.Anonymous, "post")] HttpRequest req,
+            [FromBody] Person person)
+        {
+            return new OkObjectResult(person);
+        }
+    }
+
+    public record Person(string Name, int Age);
+}
+The trigger input type is declared as eitherHttpRequestor a custom type. If you chooseHttpRequest, you get full access to the request object. For a custom type, the runtime tries to parse the JSON request body to set the object properties.
+HttpRequest
+HttpRequest
+Customize the HTTP endpoint
+By default when you create a function for an HTTP trigger, the function is addressable with a route of the form:
+https://<APP_NAME>.azurewebsites.net/api/<FUNCTION_NAME>
+https://<APP_NAME>.azurewebsites.net/api/<FUNCTION_NAME>
+You can customize this route using the optionalrouteproperty on the HTTP trigger's input binding. You can use anyWeb API Route Constraintwith your parameters.
+route
+Isolated worker model
+In-process model
+The following function code accepts two parameterscategoryandidin the route and writes a response using both parameters.
+category
+id
+[Function("HttpTrigger1")]
+public static HttpResponseData Run([HttpTrigger(AuthorizationLevel.Function, "get", "post",
+Route = "products/{category:alpha}/{id:int?}")] HttpRequestData req, string category, int? id,
+FunctionContext executionContext)
+{
+    var logger = executionContext.GetLogger("HttpTrigger1");
+    logger.LogInformation("C# HTTP trigger function processed a request.");
+
+    var message = String.Format($"Category: {category}, ID: {id}");
+    var response = req.CreateResponse(HttpStatusCode.OK);
+    response.Headers.Add("Content-Type", "text/plain; charset=utf-8");
+    response.WriteString(message);
+
+    return response;
+}
+[Function("HttpTrigger1")]
+public static HttpResponseData Run([HttpTrigger(AuthorizationLevel.Function, "get", "post",
+Route = "products/{category:alpha}/{id:int?}")] HttpRequestData req, string category, int? id,
+FunctionContext executionContext)
+{
+    var logger = executionContext.GetLogger("HttpTrigger1");
+    logger.LogInformation("C# HTTP trigger function processed a request.");
+
+    var message = String.Format($"Category: {category}, ID: {id}");
+    var response = req.CreateResponse(HttpStatusCode.OK);
+    response.Headers.Add("Content-Type", "text/plain; charset=utf-8");
+    response.WriteString(message);
+
+    return response;
+}
+The following C# function code accepts two parameterscategoryandidin the route and writes a response using both parameters.
+category
+id
+[FunctionName("Function1")]
+public static IActionResult Run(
+[HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "products/{category:alpha}/{id:int?}")] HttpRequest req,
+string category, int? id, ILogger log)
+{
+    log.LogInformation("C# HTTP trigger function processed a request.");
+
+    var message = String.Format($"Category: {category}, ID: {id}");
+    return (ActionResult)new OkObjectResult(message);
+}
+[FunctionName("Function1")]
+public static IActionResult Run(
+[HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "products/{category:alpha}/{id:int?}")] HttpRequest req,
+string category, int? id, ILogger log)
+{
+    log.LogInformation("C# HTTP trigger function processed a request.");
+
+    var message = String.Format($"Category: {category}, ID: {id}");
+    return (ActionResult)new OkObjectResult(message);
+}
+Route parameters are defined using theroutesetting of theHttpTriggerannotation. The following function code accepts two parameterscategoryandidin the route and writes a response using both parameters.
+route
+HttpTrigger
+category
+id
+package com.function;
+
+import java.util.*;
+import com.microsoft.azure.functions.annotation.*;
+import com.microsoft.azure.functions.*;
+
+public class HttpTriggerJava {
+    public HttpResponseMessage<String> HttpTrigger(
+            @HttpTrigger(name = "req",
+                         methods = {"get"},
+                         authLevel = AuthorizationLevel.FUNCTION,
+                         route = "products/{category:alpha}/{id:int}") HttpRequestMessage<String> request,
+            @BindingName("category") String category,
+            @BindingName("id") int id,
+            final ExecutionContext context) {
+
+        String message = String.format("Category  %s, ID: %d", category, id);
+        return request.createResponseBuilder(HttpStatus.OK).body(message).build();
+    }
+}
+package com.function;
+
+import java.util.*;
+import com.microsoft.azure.functions.annotation.*;
+import com.microsoft.azure.functions.*;
+
+public class HttpTriggerJava {
+    public HttpResponseMessage<String> HttpTrigger(
+            @HttpTrigger(name = "req",
+                         methods = {"get"},
+                         authLevel = AuthorizationLevel.FUNCTION,
+                         route = "products/{category:alpha}/{id:int}") HttpRequestMessage<String> request,
+            @BindingName("category") String category,
+            @BindingName("id") int id,
+            final ExecutionContext context) {
+
+        String message = String.format("Category  %s, ID: %d", category, id);
+        return request.createResponseBuilder(HttpStatus.OK).body(message).build();
+    }
+}
+Model v4
+Model v3
+As an example, the following TypeScript code defines arouteproperty for an HTTP trigger with two parameters,categoryandid. The example reads the parameters from the request and returns their values in the response.
+route
+category
+id
+import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
+
+export async function httpTrigger1(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
+    const category = request.params.category;
+    const id = request.params.id;
+
+    return { body: `Category: ${category}, ID: ${id}` };
+}
+
+app.http('httpTrigger1', {
+    methods: ['GET'],
+    authLevel: 'anonymous',
+    route: 'products/{category:alpha}/{id:int?}',
+    handler: httpTrigger1,
+});
+import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
+
+export async function httpTrigger1(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
+    const category = request.params.category;
+    const id = request.params.id;
+
+    return { body: `Category: ${category}, ID: ${id}` };
+}
+
+app.http('httpTrigger1', {
+    methods: ['GET'],
+    authLevel: 'anonymous',
+    route: 'products/{category:alpha}/{id:int?}',
+    handler: httpTrigger1,
+});
+TypeScript samples aren't documented for model v3.
+Model v4
+Model v3
+As an example, the following JavaScript code defines arouteproperty for an HTTP trigger with two parameters,categoryandid. The example reads the parameters from the request and returns their values in the response.
+route
+category
+id
+const { app } = require('@azure/functions');
+
+app.http('httpTrigger1', {
+    methods: ['GET'],
+    authLevel: 'anonymous',
+    route: 'products/{category:alpha}/{id:int?}',
+    handler: async (request, context) => {
+        const category = request.params.category;
+        const id = request.params.id;
+
+        return { body: `Category: ${category}, ID: ${id}` };
+    },
+});
+const { app } = require('@azure/functions');
+
+app.http('httpTrigger1', {
+    methods: ['GET'],
+    authLevel: 'anonymous',
+    route: 'products/{category:alpha}/{id:int?}',
+    handler: async (request, context) => {
+        const category = request.params.category;
+        const id = request.params.id;
+
+        return { body: `Category: ${category}, ID: ${id}` };
+    },
+});
+As an example, the followingfunction.jsonfile defines arouteproperty for an HTTP trigger with two parameters,categoryandid:
+route
+category
+id
+{
+    "bindings": [
+    {
+        "type": "httpTrigger",
+        "name": "req",
+        "direction": "in",
+        "methods": [ "get" ],
+        "route": "products/{category:alpha}/{id:int?}"
+    },
+    {
+        "type": "http",
+        "name": "res",
+        "direction": "out"
+    }
+    ]
+}
+{
+    "bindings": [
+    {
+        "type": "httpTrigger",
+        "name": "req",
+        "direction": "in",
+        "methods": [ "get" ],
+        "route": "products/{category:alpha}/{id:int?}"
+    },
+    {
+        "type": "http",
+        "name": "res",
+        "direction": "out"
+    }
+    ]
+}
+The Functions runtime provides the request body from thecontextobject. The following example shows how to read route parameters fromcontext.bindingData.
+context
+context.bindingData
+module.exports = async function (context, req) {
+
+    var category = context.bindingData.category;
+    var id = context.bindingData.id;
+    var message = `Category: ${category}, ID: ${id}`;
+
+    context.res = {
+        body: message;
+    }
+}
+module.exports = async function (context, req) {
+
+    var category = context.bindingData.category;
+    var id = context.bindingData.id;
+    var message = `Category: ${category}, ID: ${id}`;
+
+    context.res = {
+        body: message;
+    }
+}
+As an example, the following code defines arouteproperty for an HTTP trigger with two parameters,categoryandid:
+route
+category
+id
+v2
+v1
+@app.function_name(name="httpTrigger")
+@app.route(route="products/{category:alpha}/{id:int?}")
+@app.function_name(name="httpTrigger")
+@app.route(route="products/{category:alpha}/{id:int?}")
+In thefunction.jsonfile:
+{
+    "bindings": [
+    {
+        "type": "httpTrigger",
+        "name": "req",
+        "direction": "in",
+        "methods": [ "get" ],
+        "route": "products/{category:alpha}/{id:int?}"
+    },
+    {
+        "type": "http",
+        "name": "res",
+        "direction": "out"
+    }
+    ]
+}
+{
+    "bindings": [
+    {
+        "type": "httpTrigger",
+        "name": "req",
+        "direction": "in",
+        "methods": [ "get" ],
+        "route": "products/{category:alpha}/{id:int?}"
+    },
+    {
+        "type": "http",
+        "name": "res",
+        "direction": "out"
+    }
+    ]
+}
+Route parameters declared in thefunction.jsonfile are accessible as a property of the$Request.Paramsobject.
+$Request.Params
+$Category = $Request.Params.category
+$Id = $Request.Params.id
+
+$Message = "Category:" + $Category + ", ID: " + $Id
+
+Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    StatusCode = [HttpStatusCode]::OK
+    Body = $Message
+})
+$Category = $Request.Params.category
+$Id = $Request.Params.id
+
+$Message = "Category:" + $Category + ", ID: " + $Id
+
+Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    StatusCode = [HttpStatusCode]::OK
+    Body = $Message
+})
+The function execution context is exposed via a parameter declared asfunc.HttpRequest. This instance allows a function to access data route parameters, query string values and methods that allow you to return HTTP responses.
+func.HttpRequest
+Once defined, the route parameters are available to the function by calling theroute_paramsmethod.
+route_params
+import logging
+
+import azure.functions as func
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+
+    category = req.route_params.get('category')
+    id = req.route_params.get('id')
+    message = f"Category: {category}, ID: {id}"
+
+    return func.HttpResponse(message)
+import logging
+
+import azure.functions as func
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+
+    category = req.route_params.get('category')
+    id = req.route_params.get('id')
+    message = f"Category: {category}, ID: {id}"
+
+    return func.HttpResponse(message)
+Using this configuration, the function is now addressable with the following route instead of the original route.
+https://<APP_NAME>.azurewebsites.net/api/products/electronics/357
+https://<APP_NAME>.azurewebsites.net/api/products/electronics/357
+This configuration allows the function code to support two parameters in the address,categoryandID. For more information on how route parameters are tokenized in a URL, seeRouting in ASP.NET Core.
+By default, all function routes are prefixed withapi. You can also customize or remove the prefix using theextensions.http.routePrefixproperty in yourhost.jsonfile. The following example removes theapiroute prefix by using an empty string for the prefix in thehost.jsonfile.
+api
+extensions.http.routePrefix
+api
+{
+    "extensions": {
+        "http": {
+            "routePrefix": ""
+        }
+    }
+}
+{
+    "extensions": {
+        "http": {
+            "routePrefix": ""
+        }
+    }
+}
+Using route parameters
+Route parameters that defined a function'sroutepattern are available to each binding. For example, if you have a route defined as"route": "products/{id}"then a table storage binding can use the value of the{id}parameter in the binding configuration.
+route
+"route": "products/{id}"
+{id}
+The following configuration shows how the{id}parameter is passed to the binding'srowKey.
+{id}
+rowKey
+v2
+v1
+@app.table_input(arg_name="product", table_name="products", 
+                 row_key="{id}", partition_key="products",
+                 connection="AzureWebJobsStorage")
+@app.table_input(arg_name="product", table_name="products", 
+                 row_key="{id}", partition_key="products",
+                 connection="AzureWebJobsStorage")
+{
+    "type": "table",
+    "direction": "in",
+    "name": "product",
+    "partitionKey": "products",
+    "tableName": "products",
+    "rowKey": "{id}"
+}
+{
+    "type": "table",
+    "direction": "in",
+    "name": "product",
+    "partitionKey": "products",
+    "tableName": "products",
+    "rowKey": "{id}"
+}
+Model v4
+Model v3
+import { app, HttpRequest, HttpResponseInit, input, InvocationContext } from '@azure/functions';
+
+const tableInput = input.table({
+    connection: 'MyStorageConnectionAppSetting',
+    partitionKey: 'products',
+    tableName: 'products',
+    rowKey: '{id}',
+});
+
+export async function httpTrigger1(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
+    return { jsonBody: context.extraInputs.get(tableInput) };
+}
+
+app.http('httpTrigger1', {
+    methods: ['GET'],
+    authLevel: 'anonymous',
+    route: 'products/{id}',
+    extraInputs: [tableInput],
+    handler: httpTrigger1,
+});
+import { app, HttpRequest, HttpResponseInit, input, InvocationContext } from '@azure/functions';
+
+const tableInput = input.table({
+    connection: 'MyStorageConnectionAppSetting',
+    partitionKey: 'products',
+    tableName: 'products',
+    rowKey: '{id}',
+});
+
+export async function httpTrigger1(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
+    return { jsonBody: context.extraInputs.get(tableInput) };
+}
+
+app.http('httpTrigger1', {
+    methods: ['GET'],
+    authLevel: 'anonymous',
+    route: 'products/{id}',
+    extraInputs: [tableInput],
+    handler: httpTrigger1,
+});
+TypeScript samples aren't documented for model v3.
+Model v4
+Model v3
+const { app, input } = require('@azure/functions');
+
+const tableInput = input.table({
+    connection: 'MyStorageConnectionAppSetting',
+    partitionKey: 'products',
+    tableName: 'products',
+    rowKey: '{id}',
+});
+
+app.http('httpTrigger1', {
+    methods: ['GET'],
+    authLevel: 'anonymous',
+    route: 'products/{id}',
+    extraInputs: [tableInput],
+    handler: async (request, context) => {
+        return { jsonBody: context.extraInputs.get(tableInput) };
+    },
+});
+const { app, input } = require('@azure/functions');
+
+const tableInput = input.table({
+    connection: 'MyStorageConnectionAppSetting',
+    partitionKey: 'products',
+    tableName: 'products',
+    rowKey: '{id}',
+});
+
+app.http('httpTrigger1', {
+    methods: ['GET'],
+    authLevel: 'anonymous',
+    route: 'products/{id}',
+    extraInputs: [tableInput],
+    handler: async (request, context) => {
+        return { jsonBody: context.extraInputs.get(tableInput) };
+    },
+});
+{
+    "type": "table",
+    "direction": "in",
+    "name": "product",
+    "connection": "MyStorageConnectionAppSetting",
+    "partitionKey": "products",
+    "tableName": "products",
+    "rowKey": "{id}"
+}
+{
+    "type": "table",
+    "direction": "in",
+    "name": "product",
+    "connection": "MyStorageConnectionAppSetting",
+    "partitionKey": "products",
+    "tableName": "products",
+    "rowKey": "{id}"
+}
+{
+    "type": "table",
+    "direction": "in",
+    "name": "product",
+    "partitionKey": "products",
+    "tableName": "products",
+    "rowKey": "{id}"
+}
+{
+    "type": "table",
+    "direction": "in",
+    "name": "product",
+    "partitionKey": "products",
+    "tableName": "products",
+    "rowKey": "{id}"
+}
+When you use route parameters, aninvoke_URL_templateis automatically created for your function. Your clients can use the URL template to understand the parameters they need to pass in the URL when calling your function using its URL. Navigate to one of your HTTP-triggered functions in theAzure portaland selectGet function URL.
+invoke_URL_template
+You can programmatically access theinvoke_URL_templateby using the Azure Resource Manager APIs forList FunctionsorGet Function.
+invoke_URL_template
+HTTP streams
+You can now stream requests to and responses from your HTTP endpoint in Node.js v4 function apps. For more information, seeHTTP streams.
+HTTP streams
+HTTP streams support in Python lets you accept and return data from your HTTP endpoints using FastAPI request and response APIs enabled in your functions. These APIs enable the host to process data in HTTP messages as chunks instead of having to read an entire message into memory. For more information, seeHTTP streams in Python
+Important
+HTTP streams support for Python is currently in preview and is only supported for the Python v2 programming model.
+Working with client identities
+If your function app is usingApp Service Authentication / Authorization, you can view information about authenticated clients from your code. This information is available asrequest headers injected by the platform.
+You can also read this information from binding data.
+Note
+Access to authenticated client information is currently only available for .NET languages. It also isn't supported in version 1.x of the Functions runtime.
+Information regarding authenticated clients is available as aClaimsPrincipal, which is available as part of the request context as shown in the following example:
+Isolated worker model
+In-process model
+The authenticated user is available viaHTTP Headers.
+using System.Net;
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+
+public static IActionResult Run(HttpRequest req, ILogger log)
+{
+    ClaimsPrincipal identities = req.HttpContext.User;
+    // ...
+    return new OkObjectResult();
+}
+using System.Net;
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+
+public static IActionResult Run(HttpRequest req, ILogger log)
+{
+    ClaimsPrincipal identities = req.HttpContext.User;
+    // ...
+    return new OkObjectResult();
+}
+Alternatively, the ClaimsPrincipal can simply be included as an extra parameter in the function signature:
+using System.Net;
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+using Newtonsoft.Json.Linq;
+
+public static void Run(JObject input, ClaimsPrincipal principal, ILogger log)
+{
+    // ...
+    return;
+}
+using System.Net;
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+using Newtonsoft.Json.Linq;
+
+public static void Run(JObject input, ClaimsPrincipal principal, ILogger log)
+{
+    // ...
+    return;
+}
+The authenticated user is available viaHTTP Headers.
+Authorization level
+The authorization level is a string value that indicates the kind ofauthorization keythat's required to access the function endpoint. For an HTTP triggered function, the authorization level can be one of the following values:
+When a level isn't explicitly set, authorization defaults to thefunctionlevel.
+function
+When a level isn't explicitly set, the default authorization depends on the version of the Node.js model:
+Model v4
+Model v3
+Authorization defaults to theanonymouslevel.
+anonymous
+Authorization defaults to thefunctionlevel.
+function
+Function access keys
+Functions lets you use access keys to make it harder to access your function endpoints. Unless the authorization level on an HTTP triggered function is set toanonymous, requests must include an access key in the request. For more information, seeWork with access keys in Azure Functions.
+anonymous
+Access key authorization
+Most HTTP trigger templates require an access key in the request. So your HTTP request normally looks like the following URL:
+https://<APP_NAME>.azurewebsites.net/api/<FUNCTION_NAME>?code=<API_KEY>
+https://<APP_NAME>.azurewebsites.net/api/<FUNCTION_NAME>?code=<API_KEY>
+Function apps that run in containers use the domain of the container host. For an example HTTP endpoint hosted in Azure Container Apps, see the example inthis Container Apps hosting article.
+The key can be included in a query string variable namedcode, as mentioned earlier. It can also be included in anx-functions-keyHTTP header. The value of the key can be any function key defined for the function, or any host key.
+code
+x-functions-key
+You can allow anonymous requests, which don't require keys. You can also require that the master key is used. You change the default authorization level by using theauthLevelproperty in the binding JSON.
+authLevel
+Note
+When running functions locally, authorization is disabled regardless of the specified authorization level setting. After publishing to Azure, theauthLevelsetting in your trigger is enforced. Keys are still required when runninglocally in a container.
+authLevel
+Webhooks
+Note
+Webhook mode is only available for version 1.x of the Functions runtime. This change was made to improve the performance of HTTP triggers in version 2.x and higher.
+In version 1.x, webhook templates provide another validation for webhook payloads. In version 2.x and higher, the base HTTP trigger still works and is the recommended approach for webhooks.
+ThewebHookTypebinding property indicates the type if webhook supported by the function, which also dictates the supported payload.  The webhook type can be one of the following values:
+webHookType
+genericJson
+application/json
+github
+authLevel
+slack
+authLevel
+When setting thewebHookTypeproperty, don't also set themethodsproperty on the binding.
+webHookType
+methods
+To respond to GitHub webhooks, first create your function with an HTTP Trigger, and set thewebHookTypeproperty togithub. Then copy its URL and API key into theAdd webhookpage of your GitHub repository.
+github
+
+The Slack webhook generates a token for you instead of letting you specify it, so you must configure a function-specific key with the token from Slack. SeeAuthorization keys.
+Webhooks and keys
+Webhook authorization is handled by the webhook receiver component, part of the HTTP trigger, and the mechanism varies based on the webhook type. Each mechanism does rely on a key. By default, the function key named "default" is used. To use a different key, configure the webhook provider to send the key name with the request in one of the following ways:
+Query string: The provider passes the key name in theclientidquery string parameter, such ashttps://<APP_NAME>.azurewebsites.net/api/<FUNCTION_NAME>?clientid=<KEY_NAME>.
+clientid
+https://<APP_NAME>.azurewebsites.net/api/<FUNCTION_NAME>?clientid=<KEY_NAME>
+Request header: The provider passes the key name in thex-functions-clientidheader.
+x-functions-clientid
+Content types
+Passing binary and form data to a non-C# function requires that you use the appropriate content-type header. Supported content types includeoctet-streamfor binary data andmultipart types.
+octet-stream
+In non-C# functions, requests sent with the content-typeimage/jpegresults in astringvalue passed to the function. In cases like these, you can manually convert thestringvalue to a byte array to access the raw binary data.
+image/jpeg
+string
+string
+Limits
+The HTTP request length is limited to 100 MB (104,857,600 bytes), and the URL length is limited to 4 KB (4,096 bytes). These limits are specified by thehttpRuntimeelement of the runtime'sWeb.config file.
+httpRuntime
+If a function that uses the HTTP trigger doesn't complete within 230 seconds, theAzure Load Balancerwill time out and return an HTTP 502 error. The function will continue running but will be unable to return an HTTP response. For long-running functions, we recommend that you follow async patterns and return a location where you can ping the status of the request. For information about how long a function can run, seeScale and hosting - Consumption plan.
+Next steps
+Return an HTTP response from a function
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,247 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Deploy custom policies with Azure Pipelines
+Article
+2024-01-11
+12 contributors
+In this article
+Azure Pipelinessupports continuous integration (CI) and continuous delivery (CD) to constantly and consistently test, build, and ship a code to any target. This article describes how to automate the deployment process of the Azure Active Directory B2C (Azure AD B2C)custom policiesusing Azure Pipelines.
+Important
+Managing Azure AD B2C custom policies with Azure Pipelines currently usespreviewoperations available on the Microsoft Graph API/betaendpoint. Use of these APIs in production applications is not supported. For more information, see theMicrosoft Graph REST API beta endpoint reference.
+/beta
+Prerequisites
+Complete the steps in theGet started with custom policies in Active Directory B2C.
+If you haven't created a DevOps organization, create one by following the instructions inSign up, sign in to Azure DevOps.
+Register an application for management tasks
+You use PowerShell script to deploy the Azure AD B2C policies. Before the PowerShell script can interact with theMicrosoft Graph API, create an application registration in your Azure AD B2C tenant. If you haven't already done so,register a Microsoft Graph application.
+For the PowerShell script to access data in MS Graph, grant the registered application the relevantapplication permissions. Granted theMicrosoft Graph>Policy>Policy.ReadWrite.TrustFrameworkpermission within theAPI Permissionsof the app registration.
+Configure an Azure Repo
+With a Microsoft Graph application registered, you're ready to configure a repository for your policy files.
+Sign in to yourAzure DevOps organization.
+Create a new project, or select an existing project.
+In your project, navigate toRepos, and selectFiles.
+Select an existing repository or create one.
+In the root directory of your repository, create a folder namedB2CAssets. Add your Azure AD B2C custom policy files to theB2CAssetsfolder.
+B2CAssets
+In the root directory of your repository, create a folder namedScripts. Create a PowerShell fileDeployToB2C.ps1. Paste the following PowerShell script intoDeployToB2C.ps1.
+Scripts
+CommitandPushthe changes.
+The following script acquires an access token from Microsoft Entra ID. With the token, the script calls the MS Graph API to upload the policies in theB2CAssetsfolder. You can also change the content of the policy before uploading it. For example, replace thetenant-name.onmicrosoft.comwith your tenant name.
+tenant-name.onmicrosoft.com
+[Cmdletbinding()]
+Param(
+    [Parameter(Mandatory = $true)][string]$ClientID,
+    [Parameter(Mandatory = $true)][string]$ClientSecret,
+    [Parameter(Mandatory = $true)][string]$TenantId,
+    [Parameter(Mandatory = $true)][string]$Folder,
+    [Parameter(Mandatory = $true)][string]$Files
+)
+
+try {
+    $body = @{grant_type = "client_credentials"; scope = "https://graph.microsoft.com/.default"; client_id = $ClientID; client_secret = $ClientSecret }
+
+    $response = Invoke-RestMethod -Uri https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token -Method Post -Body $body
+    $token = $response.access_token
+
+    $headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
+    $headers.Add("Content-Type", 'application/xml')
+    $headers.Add("Authorization", 'Bearer ' + $token)
+
+    # Get the list of files to upload
+    $filesArray = $Files.Split(",")
+
+    Foreach ($file in $filesArray) {
+
+        $filePath = $Folder + $file.Trim()
+
+        # Check if file exists
+        $FileExists = Test-Path -Path $filePath -PathType Leaf
+
+        if ($FileExists) {
+            $policycontent = Get-Content $filePath -Encoding UTF8
+
+            # Optional: Change the content of the policy. For example, replace the tenant-name with your tenant name.
+            # $policycontent = $policycontent.Replace("your-tenant.onmicrosoft.com", "contoso.onmicrosoft.com")     
+    
+    
+            # Get the policy name from the XML document
+            $match = Select-String -InputObject $policycontent  -Pattern '(?<=\bPolicyId=")[^"]*'
+    
+            If ($match.matches.groups.count -ge 1) {
+                $PolicyId = $match.matches.groups[0].value
+    
+                Write-Host "Uploading the" $PolicyId "policy..."
+    
+                $graphuri = 'https://graph.microsoft.com/beta/trustframework/policies/' + $PolicyId + '/$value'
+                $content = [System.Text.Encoding]::UTF8.GetBytes($policycontent)
+                $response = Invoke-RestMethod -Uri $graphuri -Method Put -Body $content -Headers $headers -ContentType "application/xml; charset=utf-8"
+    
+                Write-Host "Policy" $PolicyId "uploaded successfully."
+            }
+        }
+        else {
+            $warning = "File " + $filePath + " couldn't be not found."
+            Write-Warning -Message $warning
+        }
+    }
+}
+catch {
+    Write-Host "StatusCode:" $_.Exception.Response.StatusCode.value__
+
+    $_
+
+    $streamReader = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+    $streamReader.BaseStream.Position = 0
+    $streamReader.DiscardBufferedData()
+    $errResp = $streamReader.ReadToEnd()
+    $streamReader.Close()
+
+    $ErrResp
+
+    exit 1
+}
+
+exit 0
+[Cmdletbinding()]
+Param(
+    [Parameter(Mandatory = $true)][string]$ClientID,
+    [Parameter(Mandatory = $true)][string]$ClientSecret,
+    [Parameter(Mandatory = $true)][string]$TenantId,
+    [Parameter(Mandatory = $true)][string]$Folder,
+    [Parameter(Mandatory = $true)][string]$Files
+)
+
+try {
+    $body = @{grant_type = "client_credentials"; scope = "https://graph.microsoft.com/.default"; client_id = $ClientID; client_secret = $ClientSecret }
+
+    $response = Invoke-RestMethod -Uri https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token -Method Post -Body $body
+    $token = $response.access_token
+
+    $headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
+    $headers.Add("Content-Type", 'application/xml')
+    $headers.Add("Authorization", 'Bearer ' + $token)
+
+    # Get the list of files to upload
+    $filesArray = $Files.Split(",")
+
+    Foreach ($file in $filesArray) {
+
+        $filePath = $Folder + $file.Trim()
+
+        # Check if file exists
+        $FileExists = Test-Path -Path $filePath -PathType Leaf
+
+        if ($FileExists) {
+            $policycontent = Get-Content $filePath -Encoding UTF8
+
+            # Optional: Change the content of the policy. For example, replace the tenant-name with your tenant name.
+            # $policycontent = $policycontent.Replace("your-tenant.onmicrosoft.com", "contoso.onmicrosoft.com")     
+    
+    
+            # Get the policy name from the XML document
+            $match = Select-String -InputObject $policycontent  -Pattern '(?<=\bPolicyId=")[^"]*'
+    
+            If ($match.matches.groups.count -ge 1) {
+                $PolicyId = $match.matches.groups[0].value
+    
+                Write-Host "Uploading the" $PolicyId "policy..."
+    
+                $graphuri = 'https://graph.microsoft.com/beta/trustframework/policies/' + $PolicyId + '/$value'
+                $content = [System.Text.Encoding]::UTF8.GetBytes($policycontent)
+                $response = Invoke-RestMethod -Uri $graphuri -Method Put -Body $content -Headers $headers -ContentType "application/xml; charset=utf-8"
+    
+                Write-Host "Policy" $PolicyId "uploaded successfully."
+            }
+        }
+        else {
+            $warning = "File " + $filePath + " couldn't be not found."
+            Write-Warning -Message $warning
+        }
+    }
+}
+catch {
+    Write-Host "StatusCode:" $_.Exception.Response.StatusCode.value__
+
+    $_
+
+    $streamReader = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+    $streamReader.BaseStream.Position = 0
+    $streamReader.DiscardBufferedData()
+    $errResp = $streamReader.ReadToEnd()
+    $streamReader.Close()
+
+    $ErrResp
+
+    exit 1
+}
+
+exit 0
+Configure Azure Pipelines
+With your repository initialized and populated with your custom policy files, you're ready to set up the release pipeline. To create a pipeline, follow these steps:
+In your project, selectPipelines>Releases>New pipeline.
+UnderSelect a template, selectEmpty job, and then selectApply.
+Enter aStage name, for exampleDeployCustomPolicies, then close the pane.
+SelectAdd an artifact, and underSource type, selectAzure Repository.For theProject, select your project.Select theSource (repository)that contains theScriptsfolder.Select aDefault branch, for examplemaster.Leave theDefault versionsetting ofLatest from the default branch.Enter aSource aliasfor the repository. For example,policyRepo.
+For theProject, select your project.
+Select theSource (repository)that contains theScriptsfolder.
+Select aDefault branch, for examplemaster.
+Leave theDefault versionsetting ofLatest from the default branch.
+Enter aSource aliasfor the repository. For example,policyRepo.
+SelectAdd
+Rename the pipeline to reflect its intent. For example,Deploy Custom Policy Pipeline.
+SelectSaveto save the pipeline configuration.
+Configure pipeline variables
+The pipeline variables give you a convenient way to get key bits of data into various parts of the pipeline. The following variables provide information about your Azure AD B2C environment.
+clientId
+clientSecret
+tenantId
+your-b2c-tenant.onmicrosoft.com
+To add pipeline variables, follow these steps:
+In your pipeline, select theVariablestab.
+UnderPipeline variables, add the above variable with their values.
+SelectSaveto save the variables.
+Add pipeline tasks
+A pipeline task is a pre-packaged script that performs an action. Add a task that calls theDeployToB2C.ps1PowerShell script.
+In the pipeline you created, select theTaskstab.
+In the pipeline you created, select theTaskstab.
+SelectAgent job, and then select the plus sign (+) to add a task to the Agent job.
+SelectAgent job, and then select the plus sign (+) to add a task to the Agent job.
+Search for and selectPowerShell. Don't select "Azure PowerShell," "PowerShell on target machines," or another PowerShell entry.
+Search for and selectPowerShell. Don't select "Azure PowerShell," "PowerShell on target machines," or another PowerShell entry.
+Select newly addedPowerShell Scripttask.
+Select newly addedPowerShell Scripttask.
+Enter following values for the PowerShell Script task:Task version: 2.*Display name: The name of the policy that this task should upload. For example,B2C_1A_TrustFrameworkBase.Type: File PathScript Path: Select the ellipsis (...), navigate to theScriptsfolder, and then select theDeployToB2C.ps1file.Arguments: Enter the following PowerShell script.-ClientID $(clientId) -ClientSecret $(clientSecret) -TenantId $(tenantId) -Folder $(System.DefaultWorkingDirectory)/policyRepo/B2CAssets/ -Files "TrustFrameworkBase.xml,TrustFrameworkLocalization.xml,TrustFrameworkExtensions.xml,SignUpOrSignin.xml,ProfileEdit.xml,PasswordReset.xml"The-Filesparameter is a comma delimiter list of policy files to deploy. Update the list with your policy files.ImportantEnsure the policies are uploaded in the correct order. First the base policy, the extensions policy, then the relying party policies. For example,TrustFrameworkBase.xml,TrustFrameworkLocalization.xml,TrustFrameworkExtensions.xml,SignUpOrSignin.xml.
+Enter following values for the PowerShell Script task:
+Task version: 2.*
+Task version: 2.*
+Display name: The name of the policy that this task should upload. For example,B2C_1A_TrustFrameworkBase.
+Display name: The name of the policy that this task should upload. For example,B2C_1A_TrustFrameworkBase.
+Type: File Path
+Type: File Path
+Script Path: Select the ellipsis (...), navigate to theScriptsfolder, and then select theDeployToB2C.ps1file.
+Script Path: Select the ellipsis (...), navigate to theScriptsfolder, and then select theDeployToB2C.ps1file.
+Arguments: Enter the following PowerShell script.-ClientID $(clientId) -ClientSecret $(clientSecret) -TenantId $(tenantId) -Folder $(System.DefaultWorkingDirectory)/policyRepo/B2CAssets/ -Files "TrustFrameworkBase.xml,TrustFrameworkLocalization.xml,TrustFrameworkExtensions.xml,SignUpOrSignin.xml,ProfileEdit.xml,PasswordReset.xml"The-Filesparameter is a comma delimiter list of policy files to deploy. Update the list with your policy files.ImportantEnsure the policies are uploaded in the correct order. First the base policy, the extensions policy, then the relying party policies. For example,TrustFrameworkBase.xml,TrustFrameworkLocalization.xml,TrustFrameworkExtensions.xml,SignUpOrSignin.xml.
+Arguments: Enter the following PowerShell script.
+-ClientID $(clientId) -ClientSecret $(clientSecret) -TenantId $(tenantId) -Folder $(System.DefaultWorkingDirectory)/policyRepo/B2CAssets/ -Files "TrustFrameworkBase.xml,TrustFrameworkLocalization.xml,TrustFrameworkExtensions.xml,SignUpOrSignin.xml,ProfileEdit.xml,PasswordReset.xml"
+-ClientID $(clientId) -ClientSecret $(clientSecret) -TenantId $(tenantId) -Folder $(System.DefaultWorkingDirectory)/policyRepo/B2CAssets/ -Files "TrustFrameworkBase.xml,TrustFrameworkLocalization.xml,TrustFrameworkExtensions.xml,SignUpOrSignin.xml,ProfileEdit.xml,PasswordReset.xml"
+The-Filesparameter is a comma delimiter list of policy files to deploy. Update the list with your policy files.
+-Files
+Important
+Ensure the policies are uploaded in the correct order. First the base policy, the extensions policy, then the relying party policies. For example,TrustFrameworkBase.xml,TrustFrameworkLocalization.xml,TrustFrameworkExtensions.xml,SignUpOrSignin.xml.
+TrustFrameworkBase.xml,TrustFrameworkLocalization.xml,TrustFrameworkExtensions.xml,SignUpOrSignin.xml
+SelectSaveto save the Agent job.
+SelectSaveto save the Agent job.
+Test your pipeline
+To test your release pipeline:
+SelectPipelinesand thenReleases.
+Select the pipeline you created earlier, for exampleDeployCustomPolicies.
+SelectCreate release, then selectCreateto queue the release.
+You should see a notification banner that says that a release has been queued. To view its status, select the link in the notification banner, or select it in the list on theReleasestab.
+Next steps
+Learn more about:
+Service-to-service calls using client credentials
+Azure DevOps Services
+Feedback
+Was this page helpful?
+Additional resources

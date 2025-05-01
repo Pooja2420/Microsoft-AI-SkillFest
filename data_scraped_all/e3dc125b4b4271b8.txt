@@ -1,0 +1,686 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Configure a VNet-to-VNet VPN gateway connection using Azure CLI
+Article
+2024-07-11
+12 contributors
+In this article
+This article helps you connect virtual networks by using the VNet-to-VNet connection type. The virtual networks can be in the same or different regions, and from the same or different subscriptions. When connecting VNets from different subscriptions, the subscriptions don't need to be associated with the same tenant.
+
+In this exercise, you create the required virtual networks (VNets) and VPN gateways. We have steps to connect VNets within the same subscription, as well as steps and commands for the more complicated scenario to connect VNets in different subscriptions.
+The Azure CLI command to create a connection isaz network vpn-connection. If you're connecting VNets from different subscriptions, use the steps in this article or in thePowerShellarticle. If you already have VNets that you want to connect and they're in the same subscription, you might want to use theAzure portalsteps instead because the process is less complicated. Note that you can't connect VNets from different subscriptions using the Azure portal.
+About connecting VNets
+There are multiple ways to connect VNets. The following sections describe different ways to connect virtual networks.
+VNet-to-VNet
+Configuring a VNet-to-VNet connection is a good way to easily connect VNets. Connecting a virtual network to another virtual network using the VNet-to-VNet connection type is similar to creating a Site-to-Site IPsec connection to an on-premises location. Both connectivity types use a VPN gateway to provide a secure tunnel using IPsec/IKE, and both function the same way when communicating. The difference between the connection types is the way the local network gateway is configured. When you create a VNet-to-VNet connection, you don't see the local network gateway address space. It's automatically created and populated. If you update the address space for one VNet, the other VNet automatically knows to route to the updated address space. Creating a VNet-to-VNet connection is typically faster and easier than creating a Site-to-Site connection between VNets, but doesn't provide the same level of flexibility if you want to add another connection because the local network gateway address space isn't available to manually modify.
+Connecting VNets using Site-to-Site (IPsec) steps
+If you're working with a complicated network configuration, you might prefer to connect your VNets using theSite-to-Sitesteps, instead of the VNet-to-VNet steps. When you use the Site-to-Site steps, you create and configure the local network gateways manually. The local network gateway for each VNet treats the other VNet as a local site. This lets you specify additional address spaces for the local network gateway in order to route traffic. If the address space for a VNet changes, you need to manually update the corresponding local network gateway to reflect the change. It doesn't automatically update.
+VNet peering
+You might want to consider connecting your VNets using VNet Peering. VNet peering doesn't use a VPN gateway and has different constraints. Additionally,VNet peering pricingis calculated differently thanVNet-to-VNet VPN Gateway pricing. For more information, seeVNet peering.
+Why create a VNet-to-VNet connection?
+You might want to connect virtual networks using a VNet-to-VNet connection for the following reasons:
+Cross region geo-redundancy and geo-presenceYou can set up your own geo-replication or synchronization with secure connectivity without going over Internet-facing endpoints.With Azure Traffic Manager and Load Balancer, you can set up highly available workload with geo-redundancy across multiple Azure regions. One important example is to set up SQL Always On with Availability Groups spreading across multiple Azure regions.
+Cross region geo-redundancy and geo-presence
+You can set up your own geo-replication or synchronization with secure connectivity without going over Internet-facing endpoints.
+With Azure Traffic Manager and Load Balancer, you can set up highly available workload with geo-redundancy across multiple Azure regions. One important example is to set up SQL Always On with Availability Groups spreading across multiple Azure regions.
+Regional multi-tier applications with isolation or administrative boundaryWithin the same region, you can set up multi-tier applications with multiple virtual networks connected together due to isolation or administrative requirements.
+Regional multi-tier applications with isolation or administrative boundary
+Within the same region, you can set up multi-tier applications with multiple virtual networks connected together due to isolation or administrative requirements.
+VNet-to-VNet communication can be combined with multi-site configurations. This lets you establish network topologies that combine cross-premises connectivity with inter-virtual network connectivity.
+Which VNet-to-VNet steps should I use?
+In this article, you see two different sets of VNet-to-VNet connection steps. One set of steps forVNets that reside in the same subscriptionand one forVNets that reside in different subscriptions.
+For this exercise, you can combine configurations, or just choose the one that you want to work with. All of the configurations use the VNet-to-VNet connection type. Network traffic flows between the VNets that are directly connected to each other.
+VNets that reside in the same subscription
+VNets that reside in the same subscription
+VNets that reside in different subscriptions
+VNets that reside in different subscriptions
+Connect VNets that are in the same subscription
+Before you begin
+Before beginning, install the latest version of the CLI commands (2.0 or later). For information about installing the CLI commands, seeInstall the Azure CLI.
+Plan your IP address ranges
+In the following steps, you create two virtual networks along with their respective gateway subnets and configurations. You then create a VPN connection between the two VNets. Itâs important to plan the IP address ranges for your network configuration. Keep in mind that you must make sure that none of your VNet ranges or local network ranges overlap in any way. In these examples, we don't include a DNS server. If you want name resolution for your virtual networks, seeName resolution.
+We use the following values in the examples:
+Values for TestVNet1:
+VNet Name: TestVNet1
+Resource Group: TestRG1
+Location: East US
+TestVNet1: 10.11.0.0/16 & 10.12.0.0/16
+FrontEnd: 10.11.0.0/24
+BackEnd: 10.12.0.0/24
+GatewaySubnet: 10.12.255.0/27
+GatewayName: VNet1GW
+Public IP: VNet1GWIP
+VPNType: RouteBased
+Connection(1to4): VNet1toVNet4
+Connection(1to5): VNet1toVNet5 (For VNets in different subscriptions)
+Values for TestVNet4:
+VNet Name: TestVNet4
+TestVNet2: 10.41.0.0/16 & 10.42.0.0/16
+FrontEnd: 10.41.0.0/24
+BackEnd: 10.42.0.0/24
+GatewaySubnet: 10.42.255.0/27
+Resource Group: TestRG4
+Location: West US
+GatewayName: VNet4GW
+Public IP: VNet4GWIP
+VPN Type: RouteBased
+Connection: VNet4toVNet1
+Step 1 - Connect to your subscription
+If you want to use the Azure CLI locally (instead of using Azure CloudShell), use the following steps to connect to your Azure subscription. If you're using CloudShell, skip to the next section.
+Sign in to your Azure subscription with theaz logincommand and follow the on-screen directions. For more information about signing in, seeGet Started with Azure CLI.az login
+Sign in to your Azure subscription with theaz logincommand and follow the on-screen directions. For more information about signing in, seeGet Started with Azure CLI.
+az login
+az login
+If you have more than one Azure subscription, list the subscriptions for the account.az account list --all
+If you have more than one Azure subscription, list the subscriptions for the account.
+az account list --all
+az account list --all
+Specify the subscription that you want to use.az account set --subscription <replace_with_your_subscription_id>
+Specify the subscription that you want to use.
+az account set --subscription <replace_with_your_subscription_id>
+az account set --subscription <replace_with_your_subscription_id>
+Step 2 - Create and configure TestVNet1
+Create a resource group.az group create -n TestRG1  -l eastus
+Create a resource group.
+az group create -n TestRG1  -l eastus
+az group create -n TestRG1  -l eastus
+Create TestVNet1 and the subnets for TestVNet1 using theaz network vnet createcommand. This example creates a virtual network named TestVNet1 and a subnet named FrontEnd.az network vnet create \
+  -n TestVNet1 \
+  -g TestRG1 \
+  -l eastus \
+  --address-prefix 10.11.0.0/16 \
+  --subnet-name Frontend \
+  --subnet-prefix 10.11.0.0/24
+Create TestVNet1 and the subnets for TestVNet1 using theaz network vnet createcommand. This example creates a virtual network named TestVNet1 and a subnet named FrontEnd.
+az network vnet create \
+  -n TestVNet1 \
+  -g TestRG1 \
+  -l eastus \
+  --address-prefix 10.11.0.0/16 \
+  --subnet-name Frontend \
+  --subnet-prefix 10.11.0.0/24
+az network vnet create \
+  -n TestVNet1 \
+  -g TestRG1 \
+  -l eastus \
+  --address-prefix 10.11.0.0/16 \
+  --subnet-name Frontend \
+  --subnet-prefix 10.11.0.0/24
+Create an additional address space for the backend subnet. Notice that in this step, we specified both the address space that we created earlier, and the additional address space that we want to add. This is because theaz network vnet updatecommand overwrites the previous settings. Make sure to specify all of the address prefixes when using this command.az network vnet update \
+   -n TestVNet1 \
+   --address-prefixes 10.11.0.0/16 10.12.0.0/16 \
+   -g TestRG1
+Create an additional address space for the backend subnet. Notice that in this step, we specified both the address space that we created earlier, and the additional address space that we want to add. This is because theaz network vnet updatecommand overwrites the previous settings. Make sure to specify all of the address prefixes when using this command.
+az network vnet update \
+   -n TestVNet1 \
+   --address-prefixes 10.11.0.0/16 10.12.0.0/16 \
+   -g TestRG1
+az network vnet update \
+   -n TestVNet1 \
+   --address-prefixes 10.11.0.0/16 10.12.0.0/16 \
+   -g TestRG1
+Create the backend subnet.az network vnet subnet create \
+   --vnet-name TestVNet1 \
+   -n BackEnd \
+   -g TestRG1 \
+   --address-prefix 10.12.0.0/24
+Create the backend subnet.
+az network vnet subnet create \
+   --vnet-name TestVNet1 \
+   -n BackEnd \
+   -g TestRG1 \
+   --address-prefix 10.12.0.0/24
+az network vnet subnet create \
+   --vnet-name TestVNet1 \
+   -n BackEnd \
+   -g TestRG1 \
+   --address-prefix 10.12.0.0/24
+Create the gateway subnet. Notice that the gateway subnet is named 'GatewaySubnet'. This name is required. In this example, the gateway subnet is using a /27. While it's possible to create a gateway subnet as small as /29, we recommend that you create a larger subnet that includes more addresses by selecting at least /28 or /27. This will allow for enough addresses to accommodate possible additional configurations that you might want in the future.az network vnet subnet create \
+   --vnet-name TestVNet1 \
+   -n GatewaySubnet \
+   -g TestRG1 \
+   --address-prefix 10.12.255.0/27
+Create the gateway subnet. Notice that the gateway subnet is named 'GatewaySubnet'. This name is required. In this example, the gateway subnet is using a /27. While it's possible to create a gateway subnet as small as /29, we recommend that you create a larger subnet that includes more addresses by selecting at least /28 or /27. This will allow for enough addresses to accommodate possible additional configurations that you might want in the future.
+az network vnet subnet create \
+   --vnet-name TestVNet1 \
+   -n GatewaySubnet \
+   -g TestRG1 \
+   --address-prefix 10.12.255.0/27
+az network vnet subnet create \
+   --vnet-name TestVNet1 \
+   -n GatewaySubnet \
+   -g TestRG1 \
+   --address-prefix 10.12.255.0/27
+A VPN gateway must have a public IP address. The public IP address is allocated to the VPN gateway that you create for your virtual network. Use the following example to request a public IP address using theaz network public-ip createcommand:az network public-ip create \
+ -g TestRG1 \
+ -n VNet1GWIP1 \
+ --sku Standard \
+ --allocation-method Static \
+ --l eastus
+A VPN gateway must have a public IP address. The public IP address is allocated to the VPN gateway that you create for your virtual network. Use the following example to request a public IP address using theaz network public-ip createcommand:
+az network public-ip create \
+ -g TestRG1 \
+ -n VNet1GWIP1 \
+ --sku Standard \
+ --allocation-method Static \
+ --l eastus
+az network public-ip create \
+ -g TestRG1 \
+ -n VNet1GWIP1 \
+ --sku Standard \
+ --allocation-method Static \
+ --l eastus
+Create the virtual network gateway for TestVNet1 using theaz network vnet-gateway createcommand. If you run this command using the '--no-wait' parameter, you don't see any feedback or output. The '--no-wait' parameter allows the gateway to create in the background. It doesn't mean that the VPN gateway finishes creating immediately. Creating a gateway can often take 45 minutes or more, depending on the gateway SKU that you use.az network vnet-gateway create \
+  --name VNet1GW \
+  --public-ip-address VNet1GWIP \
+  --resource-group TestRG1 \
+  --vnet TestVNet1 \
+  --gateway-type Vpn \
+  --sku VpnGw2 \
+  --vpn-gateway-generation Generation2 \
+  --no-wait
+Create the virtual network gateway for TestVNet1 using theaz network vnet-gateway createcommand. If you run this command using the '--no-wait' parameter, you don't see any feedback or output. The '--no-wait' parameter allows the gateway to create in the background. It doesn't mean that the VPN gateway finishes creating immediately. Creating a gateway can often take 45 minutes or more, depending on the gateway SKU that you use.
+az network vnet-gateway create \
+  --name VNet1GW \
+  --public-ip-address VNet1GWIP \
+  --resource-group TestRG1 \
+  --vnet TestVNet1 \
+  --gateway-type Vpn \
+  --sku VpnGw2 \
+  --vpn-gateway-generation Generation2 \
+  --no-wait
+az network vnet-gateway create \
+  --name VNet1GW \
+  --public-ip-address VNet1GWIP \
+  --resource-group TestRG1 \
+  --vnet TestVNet1 \
+  --gateway-type Vpn \
+  --sku VpnGw2 \
+  --vpn-gateway-generation Generation2 \
+  --no-wait
+Step 3 - Create and configure TestVNet4
+Create a resource group.az group create -n TestRG4 -l westus
+Create a resource group.
+az group create -n TestRG4 -l westus
+az group create -n TestRG4 -l westus
+Create TestVNet4.az network vnet create \
+  -n TestVNet4 \
+  -g TestRG4 \
+  -l westus \
+  --address-prefix 10.41.0.0/16 \
+  --subnet-name Frontend \
+  --subnet-prefix 10.41.0.0/24
+Create TestVNet4.
+az network vnet create \
+  -n TestVNet4 \
+  -g TestRG4 \
+  -l westus \
+  --address-prefix 10.41.0.0/16 \
+  --subnet-name Frontend \
+  --subnet-prefix 10.41.0.0/24
+az network vnet create \
+  -n TestVNet4 \
+  -g TestRG4 \
+  -l westus \
+  --address-prefix 10.41.0.0/16 \
+  --subnet-name Frontend \
+  --subnet-prefix 10.41.0.0/24
+Create additional subnets for TestVNet4.az network vnet update \
+   -n TestVNet4 \
+   --address-prefixes 10.41.0.0/16 10.42.0.0/16 \
+   -g TestRG4 \az network vnet subnet create \
+   --vnet-name TestVNet4 \
+   -n BackEnd \
+   -g TestRG4 \
+   --address-prefix 10.42.0.0/24
+Create additional subnets for TestVNet4.
+az network vnet update \
+   -n TestVNet4 \
+   --address-prefixes 10.41.0.0/16 10.42.0.0/16 \
+   -g TestRG4 \
+az network vnet update \
+   -n TestVNet4 \
+   --address-prefixes 10.41.0.0/16 10.42.0.0/16 \
+   -g TestRG4 \
+az network vnet subnet create \
+   --vnet-name TestVNet4 \
+   -n BackEnd \
+   -g TestRG4 \
+   --address-prefix 10.42.0.0/24
+az network vnet subnet create \
+   --vnet-name TestVNet4 \
+   -n BackEnd \
+   -g TestRG4 \
+   --address-prefix 10.42.0.0/24
+Create the gateway subnet.az network vnet subnet create \
+  --vnet-name TestVNet4 \
+  -n GatewaySubnet \
+  -g TestRG4 \
+  --address-prefix 10.42.255.0/27
+Create the gateway subnet.
+az network vnet subnet create \
+  --vnet-name TestVNet4 \
+  -n GatewaySubnet \
+  -g TestRG4 \
+  --address-prefix 10.42.255.0/27
+az network vnet subnet create \
+  --vnet-name TestVNet4 \
+  -n GatewaySubnet \
+  -g TestRG4 \
+  --address-prefix 10.42.255.0/27
+Request a Public IP address.az network public-ip create \
+ -g TestRG4 \
+ --n VNet4GWIP \
+ --sku Standard \
+ --allocation-method Static \
+ --l westus
+Request a Public IP address.
+az network public-ip create \
+ -g TestRG4 \
+ --n VNet4GWIP \
+ --sku Standard \
+ --allocation-method Static \
+ --l westus
+az network public-ip create \
+ -g TestRG4 \
+ --n VNet4GWIP \
+ --sku Standard \
+ --allocation-method Static \
+ --l westus
+Create the TestVNet4 virtual network gateway.az network vnet-gateway create \
+  -n VNet4GW \
+  -l westus \
+  --public-ip-address VNet4GWIP \
+  -g TestRG4 \
+  --vnet TestVNet4 \
+  --gateway-type Vpn \
+  --sku VpnGw2 \
+  --vpn-gateway-generation Generation2 \
+  --no-wait
+Create the TestVNet4 virtual network gateway.
+az network vnet-gateway create \
+  -n VNet4GW \
+  -l westus \
+  --public-ip-address VNet4GWIP \
+  -g TestRG4 \
+  --vnet TestVNet4 \
+  --gateway-type Vpn \
+  --sku VpnGw2 \
+  --vpn-gateway-generation Generation2 \
+  --no-wait
+az network vnet-gateway create \
+  -n VNet4GW \
+  -l westus \
+  --public-ip-address VNet4GWIP \
+  -g TestRG4 \
+  --vnet TestVNet4 \
+  --gateway-type Vpn \
+  --sku VpnGw2 \
+  --vpn-gateway-generation Generation2 \
+  --no-wait
+Step 4 - Create the connections
+You now have two VNets with VPN gateways. The next step is to create VPN gateway connections between the virtual network gateways. If you used the preceding examples, your VNet gateways are in different resource groups. When gateways are in different resource groups, you need to identify and specify the resource IDs for each gateway when making a connection. If your VNets are in the same resource group, you can use thesecond set of instructionsbecause you don't need to specify the resource IDs.
+To connect VNets that reside in different resource groups
+Get the Resource ID of VNet1GW from the output of the following command:az network vnet-gateway show -n VNet1GW -g TestRG1In the output, find the"id:"line. The values within the quotes are needed to create the connection in the next section. Copy these values to a text editor, such as Notepad, so that you can easily paste them when creating your connection.Example output:"activeActive": false, 
+"bgpSettings": { 
+ "asn": 65515, 
+ "bgpPeeringAddress": "10.12.255.30", 
+ "peerWeight": 0 
+}, 
+"enableBgp": false, 
+"etag": "W/\"ecb42bc5-c176-44e1-802f-b0ce2962ac04\"", 
+"gatewayDefaultSite": null, 
+"gatewayType": "Vpn", 
+"id": "/subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW", 
+"ipConfigurations":Copy the values after"id":within the quotes."id": "/subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW"
+Get the Resource ID of VNet1GW from the output of the following command:
+az network vnet-gateway show -n VNet1GW -g TestRG1
+az network vnet-gateway show -n VNet1GW -g TestRG1
+In the output, find the"id:"line. The values within the quotes are needed to create the connection in the next section. Copy these values to a text editor, such as Notepad, so that you can easily paste them when creating your connection.
+"id:"
+Example output:
+"activeActive": false, 
+"bgpSettings": { 
+ "asn": 65515, 
+ "bgpPeeringAddress": "10.12.255.30", 
+ "peerWeight": 0 
+}, 
+"enableBgp": false, 
+"etag": "W/\"ecb42bc5-c176-44e1-802f-b0ce2962ac04\"", 
+"gatewayDefaultSite": null, 
+"gatewayType": "Vpn", 
+"id": "/subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW", 
+"ipConfigurations":
+"activeActive": false, 
+"bgpSettings": { 
+ "asn": 65515, 
+ "bgpPeeringAddress": "10.12.255.30", 
+ "peerWeight": 0 
+}, 
+"enableBgp": false, 
+"etag": "W/\"ecb42bc5-c176-44e1-802f-b0ce2962ac04\"", 
+"gatewayDefaultSite": null, 
+"gatewayType": "Vpn", 
+"id": "/subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW", 
+"ipConfigurations":
+Copy the values after"id":within the quotes.
+"id":
+"id": "/subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW"
+"id": "/subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW"
+Get the Resource ID of VNet4GW and copy the values to a text editor.az network vnet-gateway show -n VNet4GW -g TestRG4
+Get the Resource ID of VNet4GW and copy the values to a text editor.
+az network vnet-gateway show -n VNet4GW -g TestRG4
+az network vnet-gateway show -n VNet4GW -g TestRG4
+Create the TestVNet1 to TestVNet4 connection. In this step, you create the connection from TestVNet1 to TestVNet4. There's a shared key referenced in the examples. You can use your own values for the shared key. The important thing is that the shared key must match for both connections. Creating a connection takes a short while to complete.az network vpn-connection create \
+   -n VNet1ToVNet4 \
+   -g TestRG1 \
+   --vnet-gateway1 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW \
+   -l eastus \
+   --shared-key "aabbcc" \
+   --vnet-gateway2 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG4/providers/Microsoft.Network/virtualNetworkGateways/VNet4GW
+Create the TestVNet1 to TestVNet4 connection. In this step, you create the connection from TestVNet1 to TestVNet4. There's a shared key referenced in the examples. You can use your own values for the shared key. The important thing is that the shared key must match for both connections. Creating a connection takes a short while to complete.
+az network vpn-connection create \
+   -n VNet1ToVNet4 \
+   -g TestRG1 \
+   --vnet-gateway1 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW \
+   -l eastus \
+   --shared-key "aabbcc" \
+   --vnet-gateway2 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG4/providers/Microsoft.Network/virtualNetworkGateways/VNet4GW
+az network vpn-connection create \
+   -n VNet1ToVNet4 \
+   -g TestRG1 \
+   --vnet-gateway1 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW \
+   -l eastus \
+   --shared-key "aabbcc" \
+   --vnet-gateway2 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG4/providers/Microsoft.Network/virtualNetworkGateways/VNet4GW
+Create the TestVNet4 to TestVNet1 connection. This step is similar to the previous step, except you're creating the connection from TestVNet4 to TestVNet1. Make sure the shared keys match. It takes a few minutes to establish the connection.az network vpn-connection create \
+   -n VNet4ToVNet1 \
+   -g TestRG4 \
+   --vnet-gateway1 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG4/providers/Microsoft.Network/virtualNetworkGateways/VNet4GW \
+   -l westus \
+   --shared-key "aabbcc" \
+   --vnet-gateway2 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW
+Create the TestVNet4 to TestVNet1 connection. This step is similar to the previous step, except you're creating the connection from TestVNet4 to TestVNet1. Make sure the shared keys match. It takes a few minutes to establish the connection.
+az network vpn-connection create \
+   -n VNet4ToVNet1 \
+   -g TestRG4 \
+   --vnet-gateway1 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG4/providers/Microsoft.Network/virtualNetworkGateways/VNet4GW \
+   -l westus \
+   --shared-key "aabbcc" \
+   --vnet-gateway2 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW
+az network vpn-connection create \
+   -n VNet4ToVNet1 \
+   -g TestRG4 \
+   --vnet-gateway1 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG4/providers/Microsoft.Network/virtualNetworkGateways/VNet4GW \
+   -l westus \
+   --shared-key "aabbcc" \
+   --vnet-gateway2 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW
+Verify your connections. SeeVerify your connection.
+Verify your connections. SeeVerify your connection.
+To connect VNets that reside in the same resource group
+Create the TestVNet1 to TestVNet4 connection. In this step, you create the connection from TestVNet1 to TestVNet4. Notice the resource groups are the same in the examples. You also see a shared key referenced in the examples. You can use your own values for the shared key, however, the shared key must match for both connections. Creating a connection takes a short while to complete.az network vpn-connection create \
+   -n VNet1ToVNet4 \
+   -g TestRG1 \
+   --vnet-gateway1 VNet1GW \
+   -l eastus \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 VNet4GW
+Create the TestVNet1 to TestVNet4 connection. In this step, you create the connection from TestVNet1 to TestVNet4. Notice the resource groups are the same in the examples. You also see a shared key referenced in the examples. You can use your own values for the shared key, however, the shared key must match for both connections. Creating a connection takes a short while to complete.
+az network vpn-connection create \
+   -n VNet1ToVNet4 \
+   -g TestRG1 \
+   --vnet-gateway1 VNet1GW \
+   -l eastus \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 VNet4GW
+az network vpn-connection create \
+   -n VNet1ToVNet4 \
+   -g TestRG1 \
+   --vnet-gateway1 VNet1GW \
+   -l eastus \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 VNet4GW
+Create the TestVNet4 to TestVNet1 connection. This step is similar to the previous step, except you're creating the connection from TestVNet4 to TestVNet1. Make sure the shared keys match. It takes a few minutes to establish the connection.az network vpn-connection create \
+   -n VNet4ToVNet1 \
+   -g TestRG1 \
+   --vnet-gateway1 VNet4GW \
+   -l eastus \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 VNet1GW
+Create the TestVNet4 to TestVNet1 connection. This step is similar to the previous step, except you're creating the connection from TestVNet4 to TestVNet1. Make sure the shared keys match. It takes a few minutes to establish the connection.
+az network vpn-connection create \
+   -n VNet4ToVNet1 \
+   -g TestRG1 \
+   --vnet-gateway1 VNet4GW \
+   -l eastus \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 VNet1GW
+az network vpn-connection create \
+   -n VNet4ToVNet1 \
+   -g TestRG1 \
+   --vnet-gateway1 VNet4GW \
+   -l eastus \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 VNet1GW
+Verify your connections. SeeVerify your connection.
+Verify your connections. SeeVerify your connection.
+Connect VNets that are in different subscriptions
+In this scenario, you connect TestVNet1 and TestVNet5. The VNets reside different subscriptions. The subscriptions don't need to be associated with the same tenant. The steps for this configuration add an additional VNet-to-VNet connection in order to connect TestVNet1 to TestVNet5.
+Step 5 - Create and configure TestVNet1
+These instructions continue from the steps in the preceding sections. You must completeStep 1andStep 2to create and configure TestVNet1 and the VPN Gateway for TestVNet1. For this configuration, you aren't required to create TestVNet4 from the previous section, although if you do create it, it won't conflict with these steps: traffic from TestVNet4 doesn't route to TestVNet5. Once you complete Step 1 and Step 2, continue with Step 6.
+Step 6 - Verify the IP address ranges
+When creating additional connections, it's important to verify that the IP address space of the new virtual network doesn't overlap with any of your other VNet ranges or local network gateway ranges. For this exercise, you can use the following values for the TestVNet5:
+Values for TestVNet5:
+VNet Name: TestVNet5
+Resource Group: TestRG5
+Location: Japan East
+TestVNet5: 10.51.0.0/16 & 10.52.0.0/16
+FrontEnd: 10.51.0.0/24
+BackEnd: 10.52.0.0/24
+GatewaySubnet: 10.52.255.0/27
+GatewayName: VNet5GW
+Public IP: VNet5GWIP
+VPN Type: RouteBased
+Connection: VNet5toVNet1
+ConnectionType: VNet2VNet
+Step 7 - Create and configure TestVNet5
+This step must be done in the context of the new subscription, Subscription 5. This part can be performed by the administrator in a different organization that owns the subscription. To switch between subscriptions useaz account list --allto list the subscriptions available to your account, then useaz account set --subscription <subscriptionID>to switch to the subscription that you want to use.
+az account list --all
+az account set --subscription <subscriptionID>
+Make sure you're connected to Subscription 5, then create a resource group.az group create -n TestRG5  -l japaneast
+Make sure you're connected to Subscription 5, then create a resource group.
+az group create -n TestRG5  -l japaneast
+az group create -n TestRG5  -l japaneast
+Create TestVNet5.az network vnet create \
+   -n TestVNet5 \
+   -g TestRG5 \
+   --address-prefix 10.51.0.0/16 \
+   -l japaneast \
+   --subnet-name FrontEnd \
+   --subnet-prefix 10.51.0.0/24
+Create TestVNet5.
+az network vnet create \
+   -n TestVNet5 \
+   -g TestRG5 \
+   --address-prefix 10.51.0.0/16 \
+   -l japaneast \
+   --subnet-name FrontEnd \
+   --subnet-prefix 10.51.0.0/24
+az network vnet create \
+   -n TestVNet5 \
+   -g TestRG5 \
+   --address-prefix 10.51.0.0/16 \
+   -l japaneast \
+   --subnet-name FrontEnd \
+   --subnet-prefix 10.51.0.0/24
+Add subnets.az network vnet update \
+   -n TestVNet5 \
+   --address-prefixes 10.51.0.0/16 10.52.0.0/16 \
+   -g TestRG5 \az network vnet subnet create \
+   --vnet-name TestVNet5 \
+   -n BackEnd \
+   -g TestRG5 \
+   --address-prefix 10.52.0.0/24
+Add subnets.
+az network vnet update \
+   -n TestVNet5 \
+   --address-prefixes 10.51.0.0/16 10.52.0.0/16 \
+   -g TestRG5 \
+az network vnet update \
+   -n TestVNet5 \
+   --address-prefixes 10.51.0.0/16 10.52.0.0/16 \
+   -g TestRG5 \
+az network vnet subnet create \
+   --vnet-name TestVNet5 \
+   -n BackEnd \
+   -g TestRG5 \
+   --address-prefix 10.52.0.0/24
+az network vnet subnet create \
+   --vnet-name TestVNet5 \
+   -n BackEnd \
+   -g TestRG5 \
+   --address-prefix 10.52.0.0/24
+Add the gateway subnet.az network vnet subnet create \
+   --vnet-name TestVNet5 \
+   -n GatewaySubnet \
+   -g TestRG5 \
+   --address-prefix 10.52.255.0/27
+Add the gateway subnet.
+az network vnet subnet create \
+   --vnet-name TestVNet5 \
+   -n GatewaySubnet \
+   -g TestRG5 \
+   --address-prefix 10.52.255.0/27
+az network vnet subnet create \
+   --vnet-name TestVNet5 \
+   -n GatewaySubnet \
+   -g TestRG5 \
+   --address-prefix 10.52.255.0/27
+Request a public IP address.az network public-ip create \
+   -g TestRG5 \
+   --n VNet5GWIP \
+   --sku Standard \
+   --allocation-method Static \
+   --l japaneast
+Request a public IP address.
+az network public-ip create \
+   -g TestRG5 \
+   --n VNet5GWIP \
+   --sku Standard \
+   --allocation-method Static \
+   --l japaneast
+az network public-ip create \
+   -g TestRG5 \
+   --n VNet5GWIP \
+   --sku Standard \
+   --allocation-method Static \
+   --l japaneast
+Create the TestVNet5 gatewayaz network vnet-gateway create \
+  -n VNet5GW \
+  -l japaneast \
+  --public-ip-address VNet5GWIP \
+  -g TestRG5 \
+  --vnet TestVNet5 \
+  --gateway-type Vpn \
+  --sku VpnGw2 \
+  --vpn-gateway-generation Generation2 \
+  --no-wait
+Create the TestVNet5 gateway
+az network vnet-gateway create \
+  -n VNet5GW \
+  -l japaneast \
+  --public-ip-address VNet5GWIP \
+  -g TestRG5 \
+  --vnet TestVNet5 \
+  --gateway-type Vpn \
+  --sku VpnGw2 \
+  --vpn-gateway-generation Generation2 \
+  --no-wait
+az network vnet-gateway create \
+  -n VNet5GW \
+  -l japaneast \
+  --public-ip-address VNet5GWIP \
+  -g TestRG5 \
+  --vnet TestVNet5 \
+  --gateway-type Vpn \
+  --sku VpnGw2 \
+  --vpn-gateway-generation Generation2 \
+  --no-wait
+Step 8 - Create the connections
+This step is split into two CLI sessions marked as[Subscription 1], and[Subscription 5]because the gateways are in the different subscriptions. To switch between subscriptions useaz account list --allto list the subscriptions available to your account, then useaz account set --subscription <subscriptionID>to switch to the subscription that you want to use.
+az account list --all
+az account set --subscription <subscriptionID>
+[Subscription 1]Sign in and connect to Subscription 1. Run the following command to get the name and ID of the Gateway from the output:az network vnet-gateway show -n VNet1GW -g TestRG1Copy the output forid:. Send the ID and the name of the VNet gateway (VNet1GW) to the administrator of Subscription 5 via email or another method.Example output:"id": "/subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW"
+[Subscription 1]Sign in and connect to Subscription 1. Run the following command to get the name and ID of the Gateway from the output:
+az network vnet-gateway show -n VNet1GW -g TestRG1
+az network vnet-gateway show -n VNet1GW -g TestRG1
+Copy the output forid:. Send the ID and the name of the VNet gateway (VNet1GW) to the administrator of Subscription 5 via email or another method.
+id:
+Example output:
+"id": "/subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW"
+"id": "/subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW"
+[Subscription 5]Sign in and connect to Subscription 5. Run the following command to get the name and ID of the Gateway from the output:az network vnet-gateway show -n VNet5GW -g TestRG5Copy the output forid:. Send the ID and the name of the VNet gateway (VNet5GW) to the administrator of Subscription 1 via email or another method.
+[Subscription 5]Sign in and connect to Subscription 5. Run the following command to get the name and ID of the Gateway from the output:
+az network vnet-gateway show -n VNet5GW -g TestRG5
+az network vnet-gateway show -n VNet5GW -g TestRG5
+Copy the output forid:. Send the ID and the name of the VNet gateway (VNet5GW) to the administrator of Subscription 1 via email or another method.
+id:
+[Subscription 1]In this step, you create the connection from TestVNet1 to TestVNet5. You can use your own values for the shared key, however, the shared key must match for both connections. Creating a connection can take a short while to complete. Make sure you connect to Subscription 1.az network vpn-connection create \
+   -n VNet1ToVNet5 \
+   -g TestRG1 \
+   --vnet-gateway1 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW \
+   -l eastus \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 /subscriptions/e7e33b39-fe28-4822-b65c-a4db8bbff7cb/resourceGroups/TestRG5/providers/Microsoft.Network/virtualNetworkGateways/VNet5GW
+[Subscription 1]In this step, you create the connection from TestVNet1 to TestVNet5. You can use your own values for the shared key, however, the shared key must match for both connections. Creating a connection can take a short while to complete. Make sure you connect to Subscription 1.
+az network vpn-connection create \
+   -n VNet1ToVNet5 \
+   -g TestRG1 \
+   --vnet-gateway1 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW \
+   -l eastus \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 /subscriptions/e7e33b39-fe28-4822-b65c-a4db8bbff7cb/resourceGroups/TestRG5/providers/Microsoft.Network/virtualNetworkGateways/VNet5GW
+az network vpn-connection create \
+   -n VNet1ToVNet5 \
+   -g TestRG1 \
+   --vnet-gateway1 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW \
+   -l eastus \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 /subscriptions/e7e33b39-fe28-4822-b65c-a4db8bbff7cb/resourceGroups/TestRG5/providers/Microsoft.Network/virtualNetworkGateways/VNet5GW
+[Subscription 5]This step is similar to the preceding step, except you're creating the connection from TestVNet5 to TestVNet1. Make sure that the shared keys match and that you connect to Subscription 5.az network vpn-connection create \
+   -n VNet5ToVNet1 \
+   -g TestRG5 \
+   --vnet-gateway1 /subscriptions/e7e33b39-fe28-4822-b65c-a4db8bbff7cb/resourceGroups/TestRG5/providers/Microsoft.Network/virtualNetworkGateways/VNet5GW \
+   -l japaneast \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW
+[Subscription 5]This step is similar to the preceding step, except you're creating the connection from TestVNet5 to TestVNet1. Make sure that the shared keys match and that you connect to Subscription 5.
+az network vpn-connection create \
+   -n VNet5ToVNet1 \
+   -g TestRG5 \
+   --vnet-gateway1 /subscriptions/e7e33b39-fe28-4822-b65c-a4db8bbff7cb/resourceGroups/TestRG5/providers/Microsoft.Network/virtualNetworkGateways/VNet5GW \
+   -l japaneast \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW
+az network vpn-connection create \
+   -n VNet5ToVNet1 \
+   -g TestRG5 \
+   --vnet-gateway1 /subscriptions/e7e33b39-fe28-4822-b65c-a4db8bbff7cb/resourceGroups/TestRG5/providers/Microsoft.Network/virtualNetworkGateways/VNet5GW \
+   -l japaneast \
+   --shared-key "eeffgg" \
+   --vnet-gateway2 /subscriptions/d6ff83d6-713d-41f6-a025-5eb76334fda9/resourceGroups/TestRG1/providers/Microsoft.Network/virtualNetworkGateways/VNet1GW
+Verify the connections
+Important
+NSGs on the gateway subnet aren't supported. Associating a network security group to this subnet might cause your virtual network gateway (VPN and ExpressRoute gateways) to stop functioning as expected. For more information about network security groups, seeWhat is a network security group?.
+You can verify that your connection succeeded by using theaz network vpn-connection showcommand. In the example,â¯'--name'â¯refers to the name of the connection that you want to test. When the connection is in the process of being established, its connection status shows 'Connecting'. Once the connection is established, the status changes to 'Connected'. Modify the following example with the values for your environment.
+az network vpn-connection show --name <connection-name> --resource-group <resource-group-name>
+az network vpn-connection show --name <connection-name> --resource-group <resource-group-name>
+VNet-to-VNet FAQ
+See theVPN Gateway FAQfor VNet-to-VNet frequently asked questions.
+Next steps
+Once your connection is complete, you can add virtual machines to your virtual networks. For more information, see theVirtual Machines documentation.
+For information about BGP, see theBGP OverviewandHow to configure BGP.
+Feedback
+Was this page helpful?
+Additional resources

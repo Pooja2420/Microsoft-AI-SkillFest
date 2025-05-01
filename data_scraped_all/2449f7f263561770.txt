@@ -1,0 +1,303 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Get SQL query execution metrics and analyze query performance using .NET SDK
+Article
+2024-08-14
+4 contributors
+In this article
+APPLIES TO:NoSQL
+This article presents how to profile SQL query performance on Azure Cosmos DB usingServerSideCumulativeMetricsretrieved from the .NET SDK.ServerSideCumulativeMetricsis a strongly typed object with information about the backend query execution. It contains cumulative metrics that are aggregated across all physical partitions for the request, a list of metrics for each physical partition, and the total request charge. These metrics are documented in more detail in theTune Query Performancearticle.
+ServerSideCumulativeMetrics
+Get query metrics
+Query metrics are available as a strongly typed object in the .NET SDK beginning inversion 3.36.0. Prior to this version, or if you're using a different SDK language, you can retrieve query metrics by parsing theDiagnostics. The following code sample shows how to retrieveServerSideCumulativeMetricsfrom theDiagnosticsin aFeedResponse:
+Diagnostics
+ServerSideCumulativeMetrics
+Diagnostics
+CosmosClient client = new CosmosClient(myCosmosEndpoint, myCosmosKey);
+Container container = client.GetDatabase(myDatabaseName).GetContainer(myContainerName);
+
+QueryDefinition query = new QueryDefinition("SELECT TOP 5 * FROM c");
+FeedIterator<MyClass> feedIterator = container.GetItemQueryIterator<MyClass>(query);
+
+while (feedIterator.HasMoreResults)
+{
+    // Execute one continuation of the query
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+
+    // Retrieve the ServerSideCumulativeMetrics object from the FeedResponse
+    ServerSideCumulativeMetrics metrics = feedResponse.Diagnostics.GetQueryMetrics();
+}
+CosmosClient client = new CosmosClient(myCosmosEndpoint, myCosmosKey);
+Container container = client.GetDatabase(myDatabaseName).GetContainer(myContainerName);
+
+QueryDefinition query = new QueryDefinition("SELECT TOP 5 * FROM c");
+FeedIterator<MyClass> feedIterator = container.GetItemQueryIterator<MyClass>(query);
+
+while (feedIterator.HasMoreResults)
+{
+    // Execute one continuation of the query
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+
+    // Retrieve the ServerSideCumulativeMetrics object from the FeedResponse
+    ServerSideCumulativeMetrics metrics = feedResponse.Diagnostics.GetQueryMetrics();
+}
+You can also get query metrics from theFeedResponseof a LINQ query using theToFeedIterator()method:
+FeedResponse
+ToFeedIterator()
+FeedIterator<MyClass> feedIterator = container.GetItemLinqQueryable<MyClass>()
+    .Take(5)
+    .ToFeedIterator();
+
+while (feedIterator.HasMoreResults)
+{
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+    ServerSideCumulativeMetrics metrics = feedResponse.Diagnostics.GetQueryMetrics();
+}
+FeedIterator<MyClass> feedIterator = container.GetItemLinqQueryable<MyClass>()
+    .Take(5)
+    .ToFeedIterator();
+
+while (feedIterator.HasMoreResults)
+{
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+    ServerSideCumulativeMetrics metrics = feedResponse.Diagnostics.GetQueryMetrics();
+}
+Cumulative Metrics
+ServerSideCumulativeMetricscontains aCumulativeMetricsproperty that represents the query metrics aggregated over all partitions for the single round trip.
+ServerSideCumulativeMetrics
+CumulativeMetrics
+// Retrieve the ServerSideCumulativeMetrics object from the FeedResponse
+ServerSideCumulativeMetrics metrics = feedResponse.Diagnostics.GetQueryMetrics();
+
+// CumulativeMetrics is the metrics for this continuation aggregated over all partitions
+ServerSideMetrics cumulativeMetrics = metrics.CumulativeMetrics;
+// Retrieve the ServerSideCumulativeMetrics object from the FeedResponse
+ServerSideCumulativeMetrics metrics = feedResponse.Diagnostics.GetQueryMetrics();
+
+// CumulativeMetrics is the metrics for this continuation aggregated over all partitions
+ServerSideMetrics cumulativeMetrics = metrics.CumulativeMetrics;
+You can also aggregate these metrics across all round trips for the query. The following is an example of how to aggregate query execution time across all round trips for a given query using LINQ:
+QueryDefinition query = new QueryDefinition("SELECT TOP 5 * FROM c");
+FeedIterator<MyClass> feedIterator = container.GetItemQueryIterator<MyClass>(query);
+
+List<ServerSideCumulativeMetrics> metrics = new List<ServerSideCumulativeMetrics>();
+TimeSpan cumulativeTime;
+while (feedIterator.HasMoreResults)
+{
+    // Execute one continuation of the query
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+
+    // Store the ServerSideCumulativeMetrics object to aggregate values after all round trips
+    metrics.Add(feedResponse.Diagnostics.GetQueryMetrics());
+}
+
+// Aggregate values across trips for metrics of interest
+TimeSpan totalTripsExecutionTime = metrics.Aggregate(TimeSpan.Zero, (currentSum, next) => currentSum + next.CumulativeMetrics.TotalTime);
+DoSomeLogging(totalTripsExecutionTime);
+QueryDefinition query = new QueryDefinition("SELECT TOP 5 * FROM c");
+FeedIterator<MyClass> feedIterator = container.GetItemQueryIterator<MyClass>(query);
+
+List<ServerSideCumulativeMetrics> metrics = new List<ServerSideCumulativeMetrics>();
+TimeSpan cumulativeTime;
+while (feedIterator.HasMoreResults)
+{
+    // Execute one continuation of the query
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+
+    // Store the ServerSideCumulativeMetrics object to aggregate values after all round trips
+    metrics.Add(feedResponse.Diagnostics.GetQueryMetrics());
+}
+
+// Aggregate values across trips for metrics of interest
+TimeSpan totalTripsExecutionTime = metrics.Aggregate(TimeSpan.Zero, (currentSum, next) => currentSum + next.CumulativeMetrics.TotalTime);
+DoSomeLogging(totalTripsExecutionTime);
+Partitioned Metrics
+ServerSideCumulativeMetricscontains aPartitionedMetricsproperty that is a list of per-partition metrics for the round trip. If multiple physical partitions are reached in a single round trip, then metrics for each of them appear in the list. Partitioned metrics are represented asServerSidePartitionedMetricswith a unique identifier for each physical partition and request charge for that partition.
+ServerSideCumulativeMetrics
+PartitionedMetrics
+// Retrieve the ServerSideCumulativeMetrics object from the FeedResponse
+ServerSideCumulativeMetrics metrics = feedResponse.Diagnostics.GetQueryMetrics();
+
+// PartitionedMetrics is a list of per-partition metrics for this continuation
+List<ServerSidePartitionedMetrics> partitionedMetrics = metrics.PartitionedMetrics;
+// Retrieve the ServerSideCumulativeMetrics object from the FeedResponse
+ServerSideCumulativeMetrics metrics = feedResponse.Diagnostics.GetQueryMetrics();
+
+// PartitionedMetrics is a list of per-partition metrics for this continuation
+List<ServerSidePartitionedMetrics> partitionedMetrics = metrics.PartitionedMetrics;
+When accumulated over all round trips, per partition metrics allow you to see if a specific partition is causing performance issues when compared to others. The following is an example of how to group partition metrics for each trip using LINQ:
+QueryDefinition query = new QueryDefinition("SELECT TOP 5 * FROM c");
+FeedIterator<MyClass> feedIterator = container.GetItemQueryIterator<MyClass>(query);
+
+List<ServerSideCumulativeMetrics> metrics = new List<ServerSideCumulativeMetrics>();
+while (feedIterator.HasMoreResults)
+{
+    // Execute one continuation of the query
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+
+    // Store the ServerSideCumulativeMetrics object to aggregate values after all round trips
+    metrics.Add(feedResponse.Diagnostics.GetQueryMetrics());
+}
+
+// Group metrics by partition key range id
+var groupedPartitionMetrics = metrics.SelectMany(m => m.PartitionedMetrics).GroupBy(p => p.PartitionKeyRangeId);
+foreach(var partitionGroup in groupedPartitionMetrics)
+{
+    foreach(var tripMetrics in partitionGroup)
+    {
+        DoSomethingWithMetrics();
+    }
+}
+QueryDefinition query = new QueryDefinition("SELECT TOP 5 * FROM c");
+FeedIterator<MyClass> feedIterator = container.GetItemQueryIterator<MyClass>(query);
+
+List<ServerSideCumulativeMetrics> metrics = new List<ServerSideCumulativeMetrics>();
+while (feedIterator.HasMoreResults)
+{
+    // Execute one continuation of the query
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+
+    // Store the ServerSideCumulativeMetrics object to aggregate values after all round trips
+    metrics.Add(feedResponse.Diagnostics.GetQueryMetrics());
+}
+
+// Group metrics by partition key range id
+var groupedPartitionMetrics = metrics.SelectMany(m => m.PartitionedMetrics).GroupBy(p => p.PartitionKeyRangeId);
+foreach(var partitionGroup in groupedPartitionMetrics)
+{
+    foreach(var tripMetrics in partitionGroup)
+    {
+        DoSomethingWithMetrics();
+    }
+}
+Get the query request charge
+You can capture the request units consumed by each query to investigate expensive queries or queries that consume high throughput. You can get the total request charge using theTotalRequestChargeproperty inServerSideCumulativeMetricsor you can look at the request charge from each partition using theRequestChargeproperty for eachServerSidePartitionedMetricsreturned.
+TotalRequestCharge
+ServerSideCumulativeMetrics
+RequestCharge
+ServerSidePartitionedMetrics
+The total request charge is also available using theRequestChargeproperty inFeedResponse. To learn more about how to get the request charge using the Azure portal and different SDKs, seefind the request unit chargearticle.
+RequestCharge
+FeedResponse
+QueryDefinition query = new QueryDefinition("SELECT TOP 5 * FROM c");
+FeedIterator<MyClass> feedIterator = container.GetItemQueryIterator<MyClass>(query);
+
+while (feedIterator.HasMoreResults)
+{
+    // Execute one continuation of the query
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+    double requestCharge = feedResponse.RequestCharge;
+
+    // Log the RequestCharge how ever you want.
+    DoSomeLogging(requestCharge);
+}
+QueryDefinition query = new QueryDefinition("SELECT TOP 5 * FROM c");
+FeedIterator<MyClass> feedIterator = container.GetItemQueryIterator<MyClass>(query);
+
+while (feedIterator.HasMoreResults)
+{
+    // Execute one continuation of the query
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+    double requestCharge = feedResponse.RequestCharge;
+
+    // Log the RequestCharge how ever you want.
+    DoSomeLogging(requestCharge);
+}
+Get the query execution time
+You can capture query execution time for each trip from the query metrics. When looking at request latency, it's important to differentiate query execution time from other sources of latency, such as network transit time. The following example shows how to get cumulative query execution time for each round trip:
+QueryDefinition query = new QueryDefinition("SELECT TOP 5 * FROM c");
+FeedIterator<MyClass> feedIterator = container.GetItemQueryIterator<MyClass>(query);
+
+TimeSpan cumulativeTime;
+while (feedIterator.HasMoreResults)
+{
+    // Execute one continuation of the query
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+    ServerSideCumulativeMetrics metrics = response.Diagnostics.GetQueryMetrics();
+    cumulativeTime = metrics.CumulativeMetrics.TotalTime;
+}
+
+// Log the elapsed time
+DoSomeLogging(cumulativeTime);
+QueryDefinition query = new QueryDefinition("SELECT TOP 5 * FROM c");
+FeedIterator<MyClass> feedIterator = container.GetItemQueryIterator<MyClass>(query);
+
+TimeSpan cumulativeTime;
+while (feedIterator.HasMoreResults)
+{
+    // Execute one continuation of the query
+    FeedResponse<MyClass> feedResponse = await feedIterator.ReadNextAsync();
+    ServerSideCumulativeMetrics metrics = response.Diagnostics.GetQueryMetrics();
+    cumulativeTime = metrics.CumulativeMetrics.TotalTime;
+}
+
+// Log the elapsed time
+DoSomeLogging(cumulativeTime);
+Get the index utilization
+Looking at the index utilization can help you debug slow queries. Queries that can't use the index result in a full scan of all documents in a container before returning the result set.
+Here's an example of a scan query:
+SELECT VALUE c.description 
+FROM   c 
+WHERE UPPER(c.description) = "BABYFOOD, DESSERT, FRUIT DESSERT, WITHOUT ASCORBIC ACID, JUNIOR"
+SELECT VALUE c.description 
+FROM   c 
+WHERE UPPER(c.description) = "BABYFOOD, DESSERT, FRUIT DESSERT, WITHOUT ASCORBIC ACID, JUNIOR"
+This query's filter uses the system function UPPER, which isn't served from the index. Executing this query against a large collection produced the following query metrics for the first continuation:
+QueryMetrics
+
+Retrieved Document Count                 :          60,951
+Retrieved Document Size                  :     399,998,938 bytes
+Output Document Count                    :               7
+Output Document Size                     :             510 bytes
+Index Utilization                        :            0.00 %
+Total Query Execution Time               :        4,500.34 milliseconds
+Query Preparation Time                   :             0.2 milliseconds
+Index Lookup Time                        :            0.01 milliseconds
+Document Load Time                       :        4,177.66 milliseconds
+Runtime Execution Time                   :           407.9 milliseconds
+Document Write Time                      :            0.01 milliseconds
+QueryMetrics
+
+Retrieved Document Count                 :          60,951
+Retrieved Document Size                  :     399,998,938 bytes
+Output Document Count                    :               7
+Output Document Size                     :             510 bytes
+Index Utilization                        :            0.00 %
+Total Query Execution Time               :        4,500.34 milliseconds
+Query Preparation Time                   :             0.2 milliseconds
+Index Lookup Time                        :            0.01 milliseconds
+Document Load Time                       :        4,177.66 milliseconds
+Runtime Execution Time                   :           407.9 milliseconds
+Document Write Time                      :            0.01 milliseconds
+Note the following values from the query metrics output:
+Retrieved Document Count                 :          60,951
+Retrieved Document Size                  :     399,998,938 bytes
+Retrieved Document Count                 :          60,951
+Retrieved Document Size                  :     399,998,938 bytes
+This query loaded 60,951 documents, which totaled 399,998,938 bytes. Loading this many bytes results in high cost or request unit charge. It also takes a long time to execute the query, which is clear with the total time spent property:
+Total Query Execution Time               :        4,500.34 milliseconds
+Total Query Execution Time               :        4,500.34 milliseconds
+Meaning that the query took 4.5 seconds to execute (and this was only one continuation).
+To optimize this example query, avoid the use of UPPER in the filter. Instead, when documents are created or updated, thec.descriptionvalues must be inserted in all uppercase characters. The query then becomes:
+c.description
+SELECT VALUE c.description 
+FROM   c 
+WHERE c.description = "BABYFOOD, DESSERT, FRUIT DESSERT, WITHOUT ASCORBIC ACID, JUNIOR"
+SELECT VALUE c.description 
+FROM   c 
+WHERE c.description = "BABYFOOD, DESSERT, FRUIT DESSERT, WITHOUT ASCORBIC ACID, JUNIOR"
+This query is now able to be served from the index. Alternatively, you can usecomputed propertiesto index the results of system functions or complex calculations that would otherwise result in a full scan.
+To learn more about tuning query performance, see theTune Query Performancearticle.
+References
+Azure Cosmos DB SQL specification
+ANSI SQL 2011
+JSON
+LINQ
+Next steps
+Tune query performance
+Indexing overview
+Azure Cosmos DB .NET samples
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,265 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Automate the rotation of a secret for resources that use one set of authentication credentials
+Article
+2025-04-14
+9 contributors
+In this article
+The best way to authenticate to Azure services is by using amanaged identity, but there are some scenarios where that isn't an option. In those cases, access keys or secrets are used. You should periodically rotate access keys or secrets.
+This tutorial shows how to automate the periodic rotation of secrets for databases and services that use one set of authentication credentials. Specifically, this tutorial rotates SQL Server passwords stored in Azure Key Vault by using a function triggered by Azure Event Grid notification:
+
+Thirty days before the expiration date of a secret, Key Vault publishes the "near expiry" event to Event Grid.
+Event Grid checks the event subscriptions and uses HTTP POST to call the function app endpoint subscribed to the event.
+The function app receives the secret information, generates a new random password, and creates a new version for the secret with the new password in Key Vault.
+The function app updates SQL Server with the new password.
+Note
+There could be a lag between steps 3 and 4. During that time, the secret in Key Vault won't be able to authenticate to SQL Server.
+In case of a failure of any of the steps, Event Grid retries for two hours.
+Prerequisites
+An Azure subscription -create one for free.
+Azure Key Vault
+SQL Server
+If you don't have existing Key Vault and SQL Server, you can use this deployment link:
+
+UnderResource group, selectCreate new. Give group a name, we useakvrotationin this tutorial.
+UnderSQL Admin Login, type SQL administrator login name.
+SelectReview + create.
+SelectCreate
+
+You'll now have a Key Vault, and a SQL Server instance. You can verify this setup in the Azure CLI by running the following command:
+az resource list -o table -g akvrotation
+az resource list -o table -g akvrotation
+The result will look something the following output:
+Name                     ResourceGroup         Location    Type                               Status
+-----------------------  --------------------  ----------  ---------------------------------  --------
+akvrotation-kv           akvrotation      eastus      Microsoft.KeyVault/vaults
+akvrotation-sql          akvrotation      eastus      Microsoft.Sql/servers
+akvrotation-sql/master   akvrotation      eastus      Microsoft.Sql/servers/databases
+akvrotation-sql2         akvrotation      eastus      Microsoft.Sql/servers
+akvrotation-sql2/master  akvrotation      eastus      Microsoft.Sql/servers/databases
+Name                     ResourceGroup         Location    Type                               Status
+-----------------------  --------------------  ----------  ---------------------------------  --------
+akvrotation-kv           akvrotation      eastus      Microsoft.KeyVault/vaults
+akvrotation-sql          akvrotation      eastus      Microsoft.Sql/servers
+akvrotation-sql/master   akvrotation      eastus      Microsoft.Sql/servers/databases
+akvrotation-sql2         akvrotation      eastus      Microsoft.Sql/servers
+akvrotation-sql2/master  akvrotation      eastus      Microsoft.Sql/servers/databases
+Create and deploy SQL server password rotation function
+Important
+This template requires the key vault, SQL server and Azure Function to be in the same resource group.
+Next, create a function app with a system-managed identity, in addition to the other required components, and deploy SQL server password rotation functions
+The function app requires these components:
+An Azure App Service plan
+A Function App with SQL password rotation functions with event trigger and http trigger
+A storage account required for function app trigger management
+An access policy for Function App identity to access secrets in Key Vault
+An Event Grid event subscription forSecretNearExpiryevent
+Select the Azure template deployment link:
+Select the Azure template deployment link:
+
+In theResource grouplist, selectakvrotation.
+In theResource grouplist, selectakvrotation.
+In theSQL Server Name, type the SQL Server name with password to rotate
+In theSQL Server Name, type the SQL Server name with password to rotate
+In theKey Vault Name,  type the key vault name
+In theKey Vault Name,  type the key vault name
+In theFunction App Name,  type the function app name
+In theFunction App Name,  type the function app name
+In theSecret Name,  type secret name where the password will be stored
+In theSecret Name,  type secret name where the password will be stored
+In theRepo Url, type function code GitHub location (https://github.com/Azure-Samples/KeyVault-Rotation-SQLPassword-Csharp.git)
+In theRepo Url, type function code GitHub location (https://github.com/Azure-Samples/KeyVault-Rotation-SQLPassword-Csharp.git)
+SelectReview + create.
+SelectReview + create.
+SelectCreate.
+SelectCreate.
+
+After you complete the preceding steps, you'll have a storage account, a server farm, and a function app. You can verify this setup in the Azure CLI by running the following command:
+az resource list -o table -g akvrotation
+az resource list -o table -g akvrotation
+The result will look something like the following output:
+Name                     ResourceGroup         Location    Type                               Status
+-----------------------  --------------------  ----------  ---------------------------------  --------
+akvrotation-kv           akvrotation       eastus      Microsoft.KeyVault/vaults
+akvrotation-sql          akvrotation       eastus      Microsoft.Sql/servers
+akvrotation-sql/master   akvrotation       eastus      Microsoft.Sql/servers/databases
+cfogyydrufs5wazfunctions akvrotation       eastus      Microsoft.Storage/storageAccounts
+akvrotation-fnapp        akvrotation       eastus      Microsoft.Web/serverFarms
+akvrotation-fnapp        akvrotation       eastus      Microsoft.Web/sites
+akvrotation-fnapp        akvrotation       eastus      Microsoft.insights/components
+Name                     ResourceGroup         Location    Type                               Status
+-----------------------  --------------------  ----------  ---------------------------------  --------
+akvrotation-kv           akvrotation       eastus      Microsoft.KeyVault/vaults
+akvrotation-sql          akvrotation       eastus      Microsoft.Sql/servers
+akvrotation-sql/master   akvrotation       eastus      Microsoft.Sql/servers/databases
+cfogyydrufs5wazfunctions akvrotation       eastus      Microsoft.Storage/storageAccounts
+akvrotation-fnapp        akvrotation       eastus      Microsoft.Web/serverFarms
+akvrotation-fnapp        akvrotation       eastus      Microsoft.Web/sites
+akvrotation-fnapp        akvrotation       eastus      Microsoft.insights/components
+For information on how to create a function app and use managed identity to access Key Vault, seeCreate a function app from the Azure portal,How to use managed identity for App Service and Azure Functions, andAssign a Key Vault access policy using the Azure portal.
+Rotation function
+Deployed in previous step function uses an event to trigger the rotation of a secret by updating Key Vault and the SQL database.
+This function reads event data and runs the rotation logic:
+public static class SimpleRotationEventHandler
+{
+   [FunctionName("AKVSQLRotation")]
+   public static void Run([EventGridTrigger]EventGridEvent eventGridEvent, ILogger log)
+   {
+      log.LogInformation("C# Event trigger function processed a request.");
+      var secretName = eventGridEvent.Subject;
+      var secretVersion = Regex.Match(eventGridEvent.Data.ToString(), "Version\":\"([a-z0-9]*)").Groups[1].ToString();
+      var keyVaultName = Regex.Match(eventGridEvent.Topic, ".vaults.(.*)").Groups[1].ToString();
+      log.LogInformation($"Key Vault Name: {keyVaultName}");
+      log.LogInformation($"Secret Name: {secretName}");
+      log.LogInformation($"Secret Version: {secretVersion}");
+
+      SecretRotator.RotateSecret(log, secretName, keyVaultName);
+   }
+}
+public static class SimpleRotationEventHandler
+{
+   [FunctionName("AKVSQLRotation")]
+   public static void Run([EventGridTrigger]EventGridEvent eventGridEvent, ILogger log)
+   {
+      log.LogInformation("C# Event trigger function processed a request.");
+      var secretName = eventGridEvent.Subject;
+      var secretVersion = Regex.Match(eventGridEvent.Data.ToString(), "Version\":\"([a-z0-9]*)").Groups[1].ToString();
+      var keyVaultName = Regex.Match(eventGridEvent.Topic, ".vaults.(.*)").Groups[1].ToString();
+      log.LogInformation($"Key Vault Name: {keyVaultName}");
+      log.LogInformation($"Secret Name: {secretName}");
+      log.LogInformation($"Secret Version: {secretVersion}");
+
+      SecretRotator.RotateSecret(log, secretName, keyVaultName);
+   }
+}
+This rotation method reads database information from the secret, creates a new version of the secret, and updates the database with the new secret:
+public class SecretRotator
+    {
+		private const string CredentialIdTag = "CredentialId";
+		private const string ProviderAddressTag = "ProviderAddress";
+		private const string ValidityPeriodDaysTag = "ValidityPeriodDays";
+
+		public static void RotateSecret(ILogger log, string secretName, string keyVaultName)
+        {
+            //Retrieve Current Secret
+            var kvUri = "https://" + keyVaultName + ".vault.azure.net";
+            var client = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
+            KeyVaultSecret secret = client.GetSecret(secretName);
+            log.LogInformation("Secret Info Retrieved");
+
+            //Retrieve Secret Info
+            var credentialId = secret.Properties.Tags.ContainsKey(CredentialIdTag) ? secret.Properties.Tags[CredentialIdTag] : "";
+            var providerAddress = secret.Properties.Tags.ContainsKey(ProviderAddressTag) ? secret.Properties.Tags[ProviderAddressTag] : "";
+            var validityPeriodDays = secret.Properties.Tags.ContainsKey(ValidityPeriodDaysTag) ? secret.Properties.Tags[ValidityPeriodDaysTag] : "";
+            log.LogInformation($"Provider Address: {providerAddress}");
+            log.LogInformation($"Credential Id: {credentialId}");
+
+            //Check Service Provider connection
+            CheckServiceConnection(secret);
+            log.LogInformation("Service  Connection Validated");
+            
+            //Create new password
+            var randomPassword = CreateRandomPassword();
+            log.LogInformation("New Password Generated");
+
+            //Add secret version with new password to Key Vault
+            CreateNewSecretVersion(client, secret, randomPassword);
+            log.LogInformation("New Secret Version Generated");
+
+            //Update Service Provider with new password
+            UpdateServicePassword(secret, randomPassword);
+            log.LogInformation("Password Changed");
+            log.LogInformation($"Secret Rotated Successfully");
+        }
+}
+public class SecretRotator
+    {
+		private const string CredentialIdTag = "CredentialId";
+		private const string ProviderAddressTag = "ProviderAddress";
+		private const string ValidityPeriodDaysTag = "ValidityPeriodDays";
+
+		public static void RotateSecret(ILogger log, string secretName, string keyVaultName)
+        {
+            //Retrieve Current Secret
+            var kvUri = "https://" + keyVaultName + ".vault.azure.net";
+            var client = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
+            KeyVaultSecret secret = client.GetSecret(secretName);
+            log.LogInformation("Secret Info Retrieved");
+
+            //Retrieve Secret Info
+            var credentialId = secret.Properties.Tags.ContainsKey(CredentialIdTag) ? secret.Properties.Tags[CredentialIdTag] : "";
+            var providerAddress = secret.Properties.Tags.ContainsKey(ProviderAddressTag) ? secret.Properties.Tags[ProviderAddressTag] : "";
+            var validityPeriodDays = secret.Properties.Tags.ContainsKey(ValidityPeriodDaysTag) ? secret.Properties.Tags[ValidityPeriodDaysTag] : "";
+            log.LogInformation($"Provider Address: {providerAddress}");
+            log.LogInformation($"Credential Id: {credentialId}");
+
+            //Check Service Provider connection
+            CheckServiceConnection(secret);
+            log.LogInformation("Service  Connection Validated");
+            
+            //Create new password
+            var randomPassword = CreateRandomPassword();
+            log.LogInformation("New Password Generated");
+
+            //Add secret version with new password to Key Vault
+            CreateNewSecretVersion(client, secret, randomPassword);
+            log.LogInformation("New Secret Version Generated");
+
+            //Update Service Provider with new password
+            UpdateServicePassword(secret, randomPassword);
+            log.LogInformation("Password Changed");
+            log.LogInformation($"Secret Rotated Successfully");
+        }
+}
+You can find the complete code onGitHub.
+Add the secret to Key Vault
+Set your access policy to grantmanage secretspermissions to users:
+az keyvault set-policy --upn <email-address-of-user> --name akvrotation-kv --secret-permissions set delete get list
+az keyvault set-policy --upn <email-address-of-user> --name akvrotation-kv --secret-permissions set delete get list
+Create a new secret with tags that contain the SQL Server resource ID, the SQL Server login name, and validity period for the secret in days. Provide name of the secret, initial password from SQL database (in our example "Simple123") and include an expiration date that's set for tomorrow.
+$tomorrowDate = (get-date).AddDays(+1).ToString("yyy-MM-ddThh:mm:ssZ")
+az keyvault secret set --name sqlPassword --vault-name akvrotation-kv --value "Simple123" --tags "CredentialId=sqlAdmin" "ProviderAddress=<sql-database-resource-id>" "ValidityPeriodDays=90" --expires $tomorrowDate
+$tomorrowDate = (get-date).AddDays(+1).ToString("yyy-MM-ddThh:mm:ssZ")
+az keyvault secret set --name sqlPassword --vault-name akvrotation-kv --value "Simple123" --tags "CredentialId=sqlAdmin" "ProviderAddress=<sql-database-resource-id>" "ValidityPeriodDays=90" --expires $tomorrowDate
+Creating a secret with a short expiration date will publish aSecretNearExpiryevent within 15 minutes, which will in turn trigger the function to rotate the secret.
+SecretNearExpiry
+Test and verify
+To verify that the secret has rotated, go toKey Vault>Secrets:
+
+Open thesqlPasswordsecret and view the original and rotated versions:
+
+Create a web app
+To verify the SQL credentials, create a web app. This web app will get the secret from Key Vault, extract SQL database information and credentials from the secret, and test the connection to SQL Server.
+The web app requires these components:
+A web app with system-managed identity
+An access policy to access secrets in Key Vault via web app managed identity
+Select the Azure template deployment link:
+Select the Azure template deployment link:
+
+Select theakvrotationresource group.
+Select theakvrotationresource group.
+In theSQL Server Name, type the SQL Server name with password to rotate
+In theSQL Server Name, type the SQL Server name with password to rotate
+In theKey Vault Name,  type the key vault name
+In theKey Vault Name,  type the key vault name
+In theSecret Name,  type secret name where the password is stored
+In theSecret Name,  type secret name where the password is stored
+In theRepo Url, type web app code GitHub location (https://github.com/Azure-Samples/KeyVault-Rotation-SQLPassword-Csharp-WebApp.git)
+In theRepo Url, type web app code GitHub location (https://github.com/Azure-Samples/KeyVault-Rotation-SQLPassword-Csharp-WebApp.git)
+SelectReview + create.
+SelectReview + create.
+SelectCreate.
+SelectCreate.
+Open the web app
+Go to the deployed application URL:
+'https://akvrotation-app.azurewebsites.net/'
+When the application opens in the browser, you will see theGenerated Secret Valueand aDatabase Connectedvalue oftrue.
+Learn more
+Tutorial:Rotation for resources with two sets of credentials
+Overview:Monitoring Key Vault with Azure Event Grid
+How to:Receive email when a key vault secret changes
+Azure Event Grid event schema for Azure Key Vault
+Feedback
+Was this page helpful?
+Additional resources

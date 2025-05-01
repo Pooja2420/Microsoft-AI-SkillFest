@@ -1,0 +1,461 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Connect privately to an Azure container registry using Azure Private Link
+Article
+2024-09-19
+17 contributors
+In this article
+Limit access to a registry by assigning virtual network private IP addresses to the registry endpoints and usingAzure Private Link. Network traffic between the clients on the virtual network and the registry's private endpoints traverses the virtual network and a private link on the Microsoft backbone network, eliminating exposure from the public internet. Private Link also enables private registry access from on-premises throughAzure ExpressRoute, private peering, or aVPN gateway.
+You canconfigure DNS settingsfor the registry's private endpoints, so that the settings resolve to the registry's allocated private IP address. With DNS configuration, clients and services in the network can continue to access the registry at the registry's fully qualified domain name, such asmyregistry.azurecr.io.
+This article shows how to configure a private endpoint for your registry using the Azure portal (recommended) or the Azure CLI. This feature is available in thePremiumcontainer registry service tier. For information about registry service tiers and limits, seeAzure Container Registry tiers.
+Important
+Some functionality may be unavailable or require more configuration in a container registry that restricts access to private endpoints, selected subnets, or IP addresses.
+When public network access to a registry is disabled, registry access by certaintrusted servicesincluding Azure Security Center requires enabling a network setting to bypass the network rules.
+Once the public network access is disabled, instances of certain Azure services including Azure DevOps Services are currently unable to access the container registry.
+Private endpoints are not currently supported with Azure DevOps managed agents. You will need to use a self-hosted agent with network line of sight to the private endpoint.
+If the registry has an approved private endpoint and public network access is disabled, repositories and tags can't be listed outside the virtual network using the Azure portal, Azure CLI, or other tools.
+Note
+Starting from October 2021, new container registries allow a maximum of 200 private endpoints. Registries created earlier allow a maximum of 10 private endpoints. Use theaz acr show-usagecommand to see the limit for your registry. Please open a support ticket to increase the limit to 200 private endpoints.
+Prerequisites
+A virtual network and subnet in which to set up the private endpoint. If needed,create a new virtual network and subnet.
+For testing, it's recommended to set up a VM in the virtual network. For steps to create a test virtual machine to access your registry, seeCreate a Docker-enabled virtual machine.
+To use the Azure CLI steps in this article, Azure CLI version 2.6.0 or later is recommended. If you need to install or upgrade, seeInstall Azure CLI. Or run inAzure Cloud Shell.
+If you don't already have a container registry, create one (Premium tier required) andimporta sample public image such asmcr.microsoft.com/hello-worldfrom Microsoft Container Registry. For example, use theAzure portalor theAzure CLIto create a registry.
+mcr.microsoft.com/hello-world
+Register container registry resource provider
+To configure registry access using a private link in a different Azure subscription or tenant, you need toregister the resource providerfor Azure Container Registry in that subscription. Use the Azure portal, Azure CLI, or other tools.
+Example:
+az account set --subscription <Name or ID of subscription of private link>
+
+az provider register --namespace Microsoft.ContainerRegistry
+az account set --subscription <Name or ID of subscription of private link>
+
+az provider register --namespace Microsoft.ContainerRegistry
+Set up private endpoint - portal (recommended)
+Set up a private endpoint when you create a registry, or add a private endpoint to an existing registry.
+Create a private endpoint - new registry
+When creating a registry in the portal, on theBasicstab, inSKU, selectPremium.
+When creating a registry in the portal, on theBasicstab, inSKU, selectPremium.
+Select theNetworkingtab.
+Select theNetworkingtab.
+InNetwork connectivity, selectPrivate endpoint>+ Add.
+InNetwork connectivity, selectPrivate endpoint>+ Add.
+Enter or select the following information:SettingValueSubscriptionSelect your subscription.Resource groupEnter the name of an existing group or create a new one.NameEnter a unique name.Registry subresourceSelectregistryNetworkingVirtual networkSelect the virtual network for the private endpoint. Example:myDockerVMVNET.SubnetSelect the subnet for the private endpoint. Example:myDockerVMSubnet.Private DNS integrationIntegrate with private DNS zoneSelectYes.Private DNS ZoneSelect(New) privatelink.azurecr.io
+Enter or select the following information:
+Configure the remaining registry settings, and then selectReview + create.
+Configure the remaining registry settings, and then selectReview + create.
+
+Your private link is now configured and ready for use.
+Create a private endpoint - existing registry
+In the portal, navigate to your container registry.
+In the portal, navigate to your container registry.
+UnderSettings, selectNetworking.
+UnderSettings, selectNetworking.
+On thePrivate endpointstab, select+ Private endpoint.
+On thePrivate endpointstab, select+ Private endpoint.
+In theBasicstab, enter or select the following information:SettingValueProject detailsSubscriptionSelect your subscription.Resource groupEnter the name of an existing group or create a new one.Instance detailsNameEnter a name.RegionSelect a region.
+In theBasicstab, enter or select the following information:
+SelectNext: Resource.
+SelectNext: Resource.
+Enter or select the following information:SettingValueConnection methodFor this example, selectConnect to an Azure resource in my directory.SubscriptionSelect your subscription.Resource typeSelectMicrosoft.ContainerRegistry/registries.ResourceSelect the name of your registryTarget subresourceSelectregistry
+Enter or select the following information:
+SelectNext: Configuration.
+SelectNext: Configuration.
+Enter or select the  information:SettingValueNetworkingVirtual networkSelect the virtual network for the private endpointSubnetSelect the subnet for the private endpointPrivate DNS IntegrationIntegrate with private DNS zoneSelectYes.Private DNS ZoneSelect(New) privatelink.azurecr.io
+Enter or select the  information:
+SelectReview + create. You're taken to theReview + createpage where Azure validates your configuration.
+SelectReview + create. You're taken to theReview + createpage where Azure validates your configuration.
+When you see theValidation passedmessage, selectCreate.
+When you see theValidation passedmessage, selectCreate.
+Confirm endpoint configuration
+After the private endpoint is created, DNS settings in the private zone appear with thePrivate endpointssettings in the portal:
+In the portal, navigate to your container registry and selectSettings > Networking.
+On thePrivate endpointstab, select the private endpoint you created.
+SelectDNS configuration.
+Review the link settings and custom DNS settings.
+
+Set up private endpoint - CLI
+The Azure CLI examples in this article use the following environment variables. You'll need the names of an existing container registry, virtual network, and subnet to set up a private endpoint. Substitute values appropriate for your environment. All examples are formatted for the Bash shell:
+REGISTRY_NAME=<container-registry-name>
+REGISTRY_LOCATION=<container-registry-location> # Azure region such as westeurope where registry created
+RESOURCE_GROUP=<resource-group-name> # Resource group for your existing virtual network and subnet
+NETWORK_NAME=<virtual-network-name>
+SUBNET_NAME=<subnet-name>
+REGISTRY_NAME=<container-registry-name>
+REGISTRY_LOCATION=<container-registry-location> # Azure region such as westeurope where registry created
+RESOURCE_GROUP=<resource-group-name> # Resource group for your existing virtual network and subnet
+NETWORK_NAME=<virtual-network-name>
+SUBNET_NAME=<subnet-name>
+Disable network policies in subnet
+Disable network policiessuch as network security groups in the subnet for the private endpoint. Update your subnet configuration withaz network vnet subnet update:
+az network vnet subnet update \
+ --name $SUBNET_NAME \
+ --vnet-name $NETWORK_NAME \
+ --resource-group $RESOURCE_GROUP \
+ --disable-private-endpoint-network-policies
+az network vnet subnet update \
+ --name $SUBNET_NAME \
+ --vnet-name $NETWORK_NAME \
+ --resource-group $RESOURCE_GROUP \
+ --disable-private-endpoint-network-policies
+Configure the private DNS zone
+Create aprivate Azure DNS zonefor the private Azure container registry domain. In later steps, you create DNS records for your registry domain in this DNS zone. For more information, seeDNS configuration options, later in this article.
+To use a private zone to override the default DNS resolution for your Azure container registry, the zone must be namedprivatelink.azurecr.io. Run the followingaz network private-dns zone createcommand to create the private zone:
+az network private-dns zone create \
+  --resource-group $RESOURCE_GROUP \
+  --name "privatelink.azurecr.io"
+az network private-dns zone create \
+  --resource-group $RESOURCE_GROUP \
+  --name "privatelink.azurecr.io"
+Create an association link
+Runaz network private-dns link vnet createto associate your private zone with the virtual network. This example creates a link calledmyDNSLink.
+az network private-dns link vnet create \
+  --resource-group $RESOURCE_GROUP \
+  --zone-name "privatelink.azurecr.io" \
+  --name MyDNSLink \
+  --virtual-network $NETWORK_NAME \
+  --registration-enabled false
+az network private-dns link vnet create \
+  --resource-group $RESOURCE_GROUP \
+  --zone-name "privatelink.azurecr.io" \
+  --name MyDNSLink \
+  --virtual-network $NETWORK_NAME \
+  --registration-enabled false
+Create a private registry endpoint
+In this section, create the registry's private endpoint in the virtual network. First, get the resource ID of your registry:
+REGISTRY_ID=$(az acr show --name $REGISTRY_NAME \
+  --query 'id' --output tsv)
+REGISTRY_ID=$(az acr show --name $REGISTRY_NAME \
+  --query 'id' --output tsv)
+Run theaz network private-endpoint createcommand to create the registry's private endpoint.
+The following example creates the endpointmyPrivateEndpointand service connectionmyConnection. To specify a container registry resource for the endpoint, pass--group-ids registry:
+--group-ids registry
+az network private-endpoint create \
+    --name myPrivateEndpoint \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $NETWORK_NAME \
+    --subnet $SUBNET_NAME \
+    --private-connection-resource-id $REGISTRY_ID \
+    --group-ids registry \
+    --connection-name myConnection
+az network private-endpoint create \
+    --name myPrivateEndpoint \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $NETWORK_NAME \
+    --subnet $SUBNET_NAME \
+    --private-connection-resource-id $REGISTRY_ID \
+    --group-ids registry \
+    --connection-name myConnection
+Get endpoint IP configuration
+To configure DNS records, get the IP configuration of the private endpoint. Associated with the private endpoint's network interface in this example are two private IP addresses for the container registry: one for the registry itself, and one for the registry's data endpoint. If your registry is geo-replicated, an additional IP address is associated with each replica.
+First, runaz network private-endpoint showto query the private endpoint for the network interface ID:
+NETWORK_INTERFACE_ID=$(az network private-endpoint show \
+  --name myPrivateEndpoint \
+  --resource-group $RESOURCE_GROUP \
+  --query 'networkInterfaces[0].id' \
+  --output tsv)
+NETWORK_INTERFACE_ID=$(az network private-endpoint show \
+  --name myPrivateEndpoint \
+  --resource-group $RESOURCE_GROUP \
+  --query 'networkInterfaces[0].id' \
+  --output tsv)
+The followingaz network nic showcommands get the private IP addresses and FQDNs for the container registry and the registry's data endpoint:
+REGISTRY_PRIVATE_IP=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry'].privateIPAddress" \
+  --output tsv)
+
+DATA_ENDPOINT_PRIVATE_IP=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry_data_$REGISTRY_LOCATION'].privateIPAddress" \
+  --output tsv)
+
+# An FQDN is associated with each IP address in the IP configurations
+
+REGISTRY_FQDN=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry'].privateLinkConnectionProperties.fqdns" \
+  --output tsv)
+
+DATA_ENDPOINT_FQDN=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry_data_$REGISTRY_LOCATION'].privateLinkConnectionProperties.fqdns" \
+  --output tsv)
+REGISTRY_PRIVATE_IP=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry'].privateIPAddress" \
+  --output tsv)
+
+DATA_ENDPOINT_PRIVATE_IP=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry_data_$REGISTRY_LOCATION'].privateIPAddress" \
+  --output tsv)
+
+# An FQDN is associated with each IP address in the IP configurations
+
+REGISTRY_FQDN=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry'].privateLinkConnectionProperties.fqdns" \
+  --output tsv)
+
+DATA_ENDPOINT_FQDN=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry_data_$REGISTRY_LOCATION'].privateLinkConnectionProperties.fqdns" \
+  --output tsv)
+If your registry isgeo-replicated, query for the additional data endpoint for each registry replica. For example, in theeastusregion:
+REPLICA_LOCATION=eastus
+GEO_REPLICA_DATA_ENDPOINT_PRIVATE_IP=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry_data_$REPLICA_LOCATION'].privateIPAddress" \
+  --output tsv) 
+
+GEO_REPLICA_DATA_ENDPOINT_FQDN=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry_data_$REPLICA_LOCATION'].privateLinkConnectionProperties.fqdns" \
+  --output tsv)
+REPLICA_LOCATION=eastus
+GEO_REPLICA_DATA_ENDPOINT_PRIVATE_IP=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry_data_$REPLICA_LOCATION'].privateIPAddress" \
+  --output tsv) 
+
+GEO_REPLICA_DATA_ENDPOINT_FQDN=$(az network nic show \
+  --ids $NETWORK_INTERFACE_ID \
+  --query "ipConfigurations[?privateLinkConnectionProperties.requiredMemberName=='registry_data_$REPLICA_LOCATION'].privateLinkConnectionProperties.fqdns" \
+  --output tsv)
+Once a new geo-replication is added, a private endpoint connection is set to be pending. To approve a private endpoint connection configured manually runaz acr private-endpoint-connection approvecommand.
+Create DNS records in the private zone
+The following commands create DNS records in the private zone for the registry endpoint and its data endpoint. For example, if you have a registry namedmyregistryin thewesteuroperegion, the endpoint names aremyregistry.azurecr.ioandmyregistry.westeurope.data.azurecr.io.
+myregistry.azurecr.io
+myregistry.westeurope.data.azurecr.io
+First runaz network private-dns record-set a createto create empty A-record sets for the registry endpoint and data endpoint:
+az network private-dns record-set a create \
+  --name $REGISTRY_NAME \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP
+
+# Specify registry region in data endpoint name
+az network private-dns record-set a create \
+  --name ${REGISTRY_NAME}.${REGISTRY_LOCATION}.data \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP
+az network private-dns record-set a create \
+  --name $REGISTRY_NAME \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP
+
+# Specify registry region in data endpoint name
+az network private-dns record-set a create \
+  --name ${REGISTRY_NAME}.${REGISTRY_LOCATION}.data \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP
+Run theaz network private-dns record-set a add-recordcommand to create the A-records for the registry endpoint and data endpoint:
+az network private-dns record-set a add-record \
+  --record-set-name $REGISTRY_NAME \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP \
+  --ipv4-address $REGISTRY_PRIVATE_IP
+
+# Specify registry region in data endpoint name
+az network private-dns record-set a add-record \
+  --record-set-name ${REGISTRY_NAME}.${REGISTRY_LOCATION}.data \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP \
+  --ipv4-address $DATA_ENDPOINT_PRIVATE_IP
+az network private-dns record-set a add-record \
+  --record-set-name $REGISTRY_NAME \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP \
+  --ipv4-address $REGISTRY_PRIVATE_IP
+
+# Specify registry region in data endpoint name
+az network private-dns record-set a add-record \
+  --record-set-name ${REGISTRY_NAME}.${REGISTRY_LOCATION}.data \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP \
+  --ipv4-address $DATA_ENDPOINT_PRIVATE_IP
+If your registry is geo-replicated, create additional DNS settings for each replica. Continuing the example in theeastusregion:
+az network private-dns record-set a create \
+  --name ${REGISTRY_NAME}.${REPLICA_LOCATION}.data \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP
+
+az network private-dns record-set a add-record \
+  --record-set-name ${REGISTRY_NAME}.${REPLICA_LOCATION}.data \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP \
+  --ipv4-address $GEO_REPLICA_DATA_ENDPOINT_PRIVATE_IP
+az network private-dns record-set a create \
+  --name ${REGISTRY_NAME}.${REPLICA_LOCATION}.data \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP
+
+az network private-dns record-set a add-record \
+  --record-set-name ${REGISTRY_NAME}.${REPLICA_LOCATION}.data \
+  --zone-name privatelink.azurecr.io \
+  --resource-group $RESOURCE_GROUP \
+  --ipv4-address $GEO_REPLICA_DATA_ENDPOINT_PRIVATE_IP
+The private link is now configured and ready for use.
+Disable public access
+For many scenarios, disable registry access from public networks. This configuration prevents clients outside the virtual network from reaching the registry endpoints.
+Disable public access - portal
+In the portal, navigate to your container registry and selectSettings > Networking.
+On thePublic accesstab, inAllow public network access, selectDisabled. Then selectSave.
+Disable public access - CLI
+Note
+If the public access is disabled, theaz acr buildcommands will no longer work.
+az acr build
+To disable public access using the Azure CLI, runaz acr updateand set--public-network-enabledtofalse.
+--public-network-enabled
+false
+az acr update --name $REGISTRY_NAME --public-network-enabled false
+az acr update --name $REGISTRY_NAME --public-network-enabled false
+Execute theaz acr buildwith private endpoint and private registry
+az acr build
+Note
+Once you disable public networkaccess here, thenaz acr buildcommands will no longer work.
+Unless you are utilizing dedicated agent pools, it's typically require the public IP's. Tasks reserve a set of public IPs in each region for outbound requests. If needed, we have the option to add these IPs to our firewall's allowed list for seamless communication.az acr buildcommand uses the same set of IPs as the tasks.
+az acr build
+az acr build
+Consider the following options to execute theaz acr buildsuccessfully.
+az acr build
+Assign adedicated agent pool.
+If agent pool is not available in the region, add the regionalAzure Container Registry Service Tag IPv4to thefirewall access rules. Tasks reserve a set of public IPs in each region (a.k.a. AzureContainerRegistry Service Tag) for outbound requests. You can choose to add the IPs in the firewall allowed list.
+Disable access to a container registry using a service endpoint
+Important
+The container registry does not support enabling both private link and service endpoint features configured from a virtual network.
+Once the registry has public access disabled and private link configured, you can disable the service endpoint access to a container registry from a virtual network byremoving virtual network rules.
+Runaz acr network-rule listcommand to list the existing network rules.
+az acr network-rule list
+Runaz acr network-rule removecommand to remove the network rule.
+az acr network-rule remove
+Validate private link connection
+You should validate that the resources within the subnet of the private endpoint connect to your registry over a private IP address, and have the correct private DNS zone integration.
+To validate the private link connection, connect to the virtual machine you set up in the virtual network.
+Run a utility such asnslookupordigto look up the IP address of your registry over the private link. For example:
+nslookup
+dig
+dig $REGISTRY_NAME.azurecr.io
+dig $REGISTRY_NAME.azurecr.io
+Example output shows the registry's IP address in the address space of the subnet:
+[...]
+; <<>> DiG 9.11.3-1ubuntu1.13-Ubuntu <<>> myregistry.azurecr.io
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 52155
+;; flags: qr rd ra; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 65494
+;; QUESTION SECTION:
+;myregistry.azurecr.io.         IN      A
+
+;; ANSWER SECTION:
+myregistry.azurecr.io.  1783    IN      CNAME   myregistry.privatelink.azurecr.io.
+myregistry.privatelink.azurecr.io. 10 IN A      10.0.0.7
+
+[...]
+[...]
+; <<>> DiG 9.11.3-1ubuntu1.13-Ubuntu <<>> myregistry.azurecr.io
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 52155
+;; flags: qr rd ra; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 65494
+;; QUESTION SECTION:
+;myregistry.azurecr.io.         IN      A
+
+;; ANSWER SECTION:
+myregistry.azurecr.io.  1783    IN      CNAME   myregistry.privatelink.azurecr.io.
+myregistry.privatelink.azurecr.io. 10 IN A      10.0.0.7
+
+[...]
+Compare this result with the public IP address indigoutput for the same registry over a public endpoint:
+dig
+[...]
+;; ANSWER SECTION:
+myregistry.azurecr.io.	2881	IN	CNAME	myregistry.privatelink.azurecr.io.
+myregistry.privatelink.azurecr.io. 2881	IN CNAME xxxx.xx.azcr.io.
+xxxx.xx.azcr.io.	300	IN	CNAME	xxxx-xxx-reg.trafficmanager.net.
+xxxx-xxx-reg.trafficmanager.net. 300 IN	CNAME	xxxx.westeurope.cloudapp.azure.com.
+xxxx.westeurope.cloudapp.azure.com. 10	IN A 20.45.122.144
+
+[...]
+[...]
+;; ANSWER SECTION:
+myregistry.azurecr.io.	2881	IN	CNAME	myregistry.privatelink.azurecr.io.
+myregistry.privatelink.azurecr.io. 2881	IN CNAME xxxx.xx.azcr.io.
+xxxx.xx.azcr.io.	300	IN	CNAME	xxxx-xxx-reg.trafficmanager.net.
+xxxx-xxx-reg.trafficmanager.net. 300 IN	CNAME	xxxx.westeurope.cloudapp.azure.com.
+xxxx.westeurope.cloudapp.azure.com. 10	IN A 20.45.122.144
+
+[...]
+Registry operations over private link
+Also verify that you can perform registry operations from the virtual machine in the network. Make an SSH connection to your virtual machine, and runaz acr loginto login to your registry. Depending on your VM configuration, you might need to prefix the following commands withsudo.
+sudo
+az acr login --name $REGISTRY_NAME
+az acr login --name $REGISTRY_NAME
+Perform registry operations such asdocker pullto pull a sample image from the registry. Replacehello-world:v1with an image and tag appropriate for your registry, prefixed with the registry login server name (all lowercase):
+docker pull
+hello-world:v1
+docker pull myregistry.azurecr.io/hello-world:v1
+docker pull myregistry.azurecr.io/hello-world:v1
+Docker successfully pulls the image to the VM.
+Manage private endpoint connections
+Manage a registry's private endpoint connections using the Azure portal, or by using commands in theaz acr private-endpoint-connectioncommand group. Operations include approve, delete, list, reject, or show details of a registry's private endpoint connections.
+For example, to list the private endpoint connections of a registry, run theaz acr private-endpoint-connection listcommand. For example:
+az acr private-endpoint-connection list \
+  --registry-name $REGISTRY_NAME
+az acr private-endpoint-connection list \
+  --registry-name $REGISTRY_NAME
+When you set up a private endpoint connection using the steps in this article, the registry automatically accepts connections from clients and services that have Azure RBAC permissions on the registry. You can set up the endpoint to require manual approval of connections. For information about how to approve and reject private endpoint connections, seeManage a Private Endpoint Connection.
+Important
+Currently, if you delete a private endpoint from a registry, you might also need to delete the virtual network's link to the private zone. If the link isn't deleted, you may see an error similar tounresolvable host.
+unresolvable host
+DNS configuration options
+The private endpoint in this example integrates with a private DNS zone associated with a basic virtual network. This setup uses the Azure-provided DNS service directly to resolve the registry's public FQDN to its private IP addresses in the virtual network.
+Private link supports additional DNS configuration scenarios that use the private zone, including with custom DNS solutions. For example, you might have a custom DNS solution deployed in the virtual network, or on-premises in a network you connect to the virtual network using a VPN gateway or Azure ExpressRoute.
+To resolve the registry's public FQDN to the private IP address in these scenarios, you need to configure a server-level forwarder to the Azure DNS service (168.63.129.16). Exact configuration options and steps depend on your existing networks and DNS. For examples, seeAzure Private Endpoint DNS configuration.
+Important
+If for high availability you created private endpoints in several regions, we recommend that you use a separate resource group in each region and place the virtual network and the associated private DNS zone in it. This configuration also prevents unpredictable DNS resolution caused by sharing the same private DNS zone.
+Manually configure DNS records
+For some scenarios, you may need to manually configure DNS records in a private zone instead of using the Azure-provided private zone. Be sure to create records for each of the following endpoints: the registry endpoint, the registry's data endpoint, and the data endpoint for any additional regional replica. If all records aren't configured, the registry may be unreachable.
+Important
+If you later add a new replica, you need to manually add a new DNS record for the data endpoint in that region. For example, if you create a replica ofmyregistryin the northeurope location, add a record formyregistry.northeurope.data.azurecr.io.
+myregistry.northeurope.data.azurecr.io
+The FQDNs and private IP addresses you need to create DNS records are associated with the private endpoint's network interface. You can obtain this information using the Azure portal or Azure CLI.
+In the portal, navigate to your private endpoint, and selectDNS configuration.
+Using the Azure CLI, run theaz network nic showcommand. For example commands, seeGet endpoint IP configuration, earlier in this article.
+After creating DNS records, make sure that the registry FQDNs resolve properly to their respective private IP addresses.
+Clean up resources
+To clean up your resources in the portal, navigate to your resource group. Once the resource group is loaded, click onDelete resource groupto remove the resource group and the resources stored there.
+If you created all the Azure resources in the same resource group and no longer need them, you can optionally delete the resources by using a singleaz group deletecommand:
+az group delete --name $RESOURCE_GROUP
+az group delete --name $RESOURCE_GROUP
+Integrating with a registry with private link enabled
+To pull content from a registry with private link enabled, clients must allow access to the registry REST endpoint, as well as all regional data endpoints. The client proxy or firewall must allow access to
+REST endpoint:{REGISTRY_NAME}.azurecr.ioData endpoint(s):{REGISTRY_NAME}.{REGISTRY_LOCATION}.data.azurecr.io
+{REGISTRY_NAME}.azurecr.io
+{REGISTRY_NAME}.{REGISTRY_LOCATION}.data.azurecr.io
+For a geo-replicated registry, customer needs to configure access to the data endpoint for each regional replica.
+You have to update the routing configuration for the client proxy and client firewall with the data endpoints to handle the pull requests successfully. A client proxy will provide central traffic control to theoutbound requests. To handle local traffic a client proxy is not required, you can add intonoProxysection to bypass the proxy. Learn more aboutHTTP proxy docto integrate with AKS.
+noProxy
+Requests to token server over private endpoint connection doesn't require the data endpoint configuration.
+Next steps
+To learn more about Private Link, see theAzure Private Linkdocumentation.
+To learn more about Private Link, see theAzure Private Linkdocumentation.
+To verify DNS settings in the virtual network that route to a private endpoint, run theaz acr check-healthcommand with the--vnetparameter. For more information, seeCheck the health of an Azure container registry.
+To verify DNS settings in the virtual network that route to a private endpoint, run theaz acr check-healthcommand with the--vnetparameter. For more information, seeCheck the health of an Azure container registry.
+--vnet
+If you need to set up registry access rules from behind a client firewall, seeConfigure rules to access an Azure container registry behind a firewall.
+If you need to set up registry access rules from behind a client firewall, seeConfigure rules to access an Azure container registry behind a firewall.
+Troubleshoot Azure Private Endpoint connectivity problems.
+Troubleshoot Azure Private Endpoint connectivity problems.
+If you need to deploy Azure Container Instances that can pull images from an ACR through a private endpoint, seeDeploy to Azure Container Instances from Azure Container Registry using a managed identity.
+If you need to deploy Azure Container Instances that can pull images from an ACR through a private endpoint, seeDeploy to Azure Container Instances from Azure Container Registry using a managed identity.
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,432 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Create a custom policy definition
+Article
+2025-03-04
+7 contributors
+In this article
+A custom policy definition allows customers to define their own rules for using Azure. These rules often enforce:
+Security practices.
+Cost management.
+Organization-specific rules (like naming or locations).
+Whatever the business driver for creating a custom policy, the steps are the same for defining the new custom policy.
+Before creating a custom policy, check thepolicy samplesto see whether a policy that matches your needs already exists.
+The approach to creating a custom policy follows these steps:
+Identify your business requirements
+Map each requirement to an Azure resource property
+Map the property to an alias
+Determine which effect to use
+Compose the policy definition
+Prerequisites
+If you don't have an Azure subscription, create afree accountbefore you begin.
+Identify requirements
+Before creating the policy definition, it's important to understand the intent of the policy. For this tutorial, use a common enterprise security requirement as the goal to illustrate the steps involved:
+Each storage account must be enabled for HTTPS.
+Each storage account must be disabled for HTTP.
+Your requirements should clearly identify both the "to be" and the "not to be" resource states.
+While we defined the expected state of the resource, we haven't defined what we want done with non-compliant resources. Azure Policy supports manyeffects. For this tutorial, we define the business requirement as preventing the creation of resources if they aren't compliant with the business rules. To meet this goal, we use thedenyeffect. We also want the option to suspend the policy for specific assignments. Use thedisabledeffect and make the effect aparameterin the policy definition.
+Determine resource properties
+Based on the business requirement, the Azure resource to audit with Azure Policy is a storage account. However, we don't know the properties to use in the policy definition. Azure Policy evaluates against the JSON representation of the resource, so we need to understand the properties available on that resource.
+There are many ways to determine the properties for an Azure resource. We look at each for this tutorial:
+Azure Policy extension for VS Code.
+Azure Resource Manager templates (ARM templates).Export existing resource.Creation experience.Quickstart templates (GitHub).Template reference docs.
+Export existing resource.
+Creation experience.
+Quickstart templates (GitHub).
+Template reference docs.
+Azure Resource Explorer.
+View resources in VS Code extension
+TheVS Code extensioncan be used to browse resources in your environment and see the Resource Manager properties on each resource.
+ARM templates
+There are several ways to look at anARM templatethat includes the property you're looking to manage.
+The simplest way to find properties is to look at an existing resource of the same type. Resources already configured with the setting you want to enforce also provide the value to compare against. Look at theExport templatepage, inSettings, in the Azure portal for that specific resource.
+Warning
+The ARM template exported by Azure portal can't be plugged straight into thedeploymentproperty
+for an ARM template in adeployIfNotExistspolicy
+definition.
+deployment
+
+Doing so for a storage account reveals a template similar to this example:
+"resources": [
+  {
+    "comments": "Generalized from resource: '/subscriptions/{subscriptionId}/resourceGroups/myResourceGroup/providers/Microsoft.Storage/storageAccounts/mystorageaccount'.",
+    "type": "Microsoft.Storage/storageAccounts",
+    "sku": {
+      "name": "Standard_LRS",
+      "tier": "Standard"
+    },
+    "kind": "Storage",
+    "name": "[parameters('storageAccounts_mystorageaccount_name')]",
+    "apiVersion": "2018-07-01",
+    "location": "westus",
+    "tags": {
+      "ms-resource-usage": "azure-cloud-shell"
+    },
+    "scale": null,
+    "properties": {
+      "networkAcls": {
+        "bypass": "AzureServices",
+        "virtualNetworkRules": [],
+        "ipRules": [],
+        "defaultAction": "Allow"
+      },
+      "supportsHttpsTrafficOnly": false,
+      "encryption": {
+        "services": {
+          "file": {
+            "enabled": true
+          },
+          "blob": {
+            "enabled": true
+          }
+        },
+        "keySource": "Microsoft.Storage"
+      }
+    },
+    "dependsOn": []
+  }
+]
+"resources": [
+  {
+    "comments": "Generalized from resource: '/subscriptions/{subscriptionId}/resourceGroups/myResourceGroup/providers/Microsoft.Storage/storageAccounts/mystorageaccount'.",
+    "type": "Microsoft.Storage/storageAccounts",
+    "sku": {
+      "name": "Standard_LRS",
+      "tier": "Standard"
+    },
+    "kind": "Storage",
+    "name": "[parameters('storageAccounts_mystorageaccount_name')]",
+    "apiVersion": "2018-07-01",
+    "location": "westus",
+    "tags": {
+      "ms-resource-usage": "azure-cloud-shell"
+    },
+    "scale": null,
+    "properties": {
+      "networkAcls": {
+        "bypass": "AzureServices",
+        "virtualNetworkRules": [],
+        "ipRules": [],
+        "defaultAction": "Allow"
+      },
+      "supportsHttpsTrafficOnly": false,
+      "encryption": {
+        "services": {
+          "file": {
+            "enabled": true
+          },
+          "blob": {
+            "enabled": true
+          }
+        },
+        "keySource": "Microsoft.Storage"
+      }
+    },
+    "dependsOn": []
+  }
+]
+Underpropertiesis a value namedsupportsHttpsTrafficOnlyset tofalse. This property looks like it might be the property we're looking for. Also, thetypeof the resource isMicrosoft.Storage/storageAccounts. The type lets us limit the policy to only resources of this type.
+properties
+supportsHttpsTrafficOnly
+false
+type
+Microsoft.Storage/storageAccounts
+Another way through the portal is the resource creation experience. When you create a storage account through the portal, an option under theAdvancedtab isSecurity transfer required. This property hasDisabledandEnabledoptions. The info icon has more text that confirms this option is likely the property we want. But the portal doesn't tell us the property name on this screen.
+On theReview + createtab, a link is at the bottom of the page toDownload a template for automation. Selecting the link opens the template that creates the resource we configured. In this case, we see two key pieces of information:
+...
+"supportsHttpsTrafficOnly": {
+  "type": "bool"
+}
+...
+"properties": {
+  "accessTier": "[parameters('accessTier')]",
+  "supportsHttpsTrafficOnly": "[parameters('supportsHttpsTrafficOnly')]"
+}
+...
+...
+"supportsHttpsTrafficOnly": {
+  "type": "bool"
+}
+...
+"properties": {
+  "accessTier": "[parameters('accessTier')]",
+  "supportsHttpsTrafficOnly": "[parameters('supportsHttpsTrafficOnly')]"
+}
+...
+This information tells us the property type and also confirmssupportsHttpsTrafficOnlyis the property we're looking for.
+supportsHttpsTrafficOnly
+TheAzure Quickstart Templateson GitHub has hundreds of ARM templates built for different resources. These templates can be a great way to find the resource property you're looking for. Some properties might appear to be what you're looking for, but control something else.
+To validatesupportsHttpsTrafficOnlyis correct property, check the ARM template reference for thestorage account resourceon the storage provider. The properties object has a list of valid parameters. Selecting theStorageAccountPropertiesCreateParametersobject link shows a table of acceptable properties.supportsHttpsTrafficOnlyis present and the description matches what we're looking for in regard to the business requirements.
+supportsHttpsTrafficOnly
+StorageAccountPropertiesCreateParameters
+supportsHttpsTrafficOnly
+Azure Resource Explorer
+Another way to explore your Azure resources is through theAzure Resource Explorer(Preview). This tool uses the context of your subscription, so you need to authenticate to the website with your Azure credentials. Once authenticated, you can browse by providers, subscriptions, resource groups, and resources.
+Locate a storage account resource and look at the properties. We see thesupportsHttpsTrafficOnlyproperty here as well. Selecting theDocumentationtab, we see that the property description matches what we found in the reference docs earlier.
+supportsHttpsTrafficOnly
+Find the property alias
+We identified the resource property, but we need to map that property to analias.
+There are a few ways to determine the aliases for an Azure resource. We look at each for this tutorial:
+Azure Policy extension for VS Code.
+Azure CLI.
+Azure PowerShell.
+Get aliases in VS Code extension
+The Azure Policy extension for VS Code extension makes it easy to browse your resources anddiscover aliases.
+Note
+The VS Code extension only exposes Resource Manager mode properties and doesn't display anyResource Provider modeproperties.
+Azure CLI
+In Azure CLI, theaz providercommand group is used to search for resource aliases. We filter for theMicrosoft.Storagenamespace based on the details we got about the Azure resource earlier.
+az provider
+Microsoft.Storage
+# Login first with az login if not using Cloud Shell
+
+# Get Azure Policy aliases for type Microsoft.Storage
+az provider show --namespace Microsoft.Storage --expand "resourceTypes/aliases" --query "resourceTypes[].aliases[].name"
+# Login first with az login if not using Cloud Shell
+
+# Get Azure Policy aliases for type Microsoft.Storage
+az provider show --namespace Microsoft.Storage --expand "resourceTypes/aliases" --query "resourceTypes[].aliases[].name"
+In the results, we see an alias supported by the storage accounts namedsupportsHttpsTrafficOnly. This existence of this alias means we can write the policy to enforce our business requirements!
+supportsHttpsTrafficOnly
+Azure PowerShell
+In Azure PowerShell, theGet-AzPolicyAliascmdlet is used to search for resource aliases. Filter for theMicrosoft.Storagenamespace based on the details we got about the Azure resource earlier.
+Get-AzPolicyAlias
+Microsoft.Storage
+# Login first with Connect-AzAccount if not using Cloud Shell
+
+# Use Get-AzPolicyAlias to list aliases for Microsoft.Storage
+(Get-AzPolicyAlias -NamespaceMatch 'Microsoft.Storage').Aliases
+# Login first with Connect-AzAccount if not using Cloud Shell
+
+# Use Get-AzPolicyAlias to list aliases for Microsoft.Storage
+(Get-AzPolicyAlias -NamespaceMatch 'Microsoft.Storage').Aliases
+Like Azure CLI, the results show an alias supported by the storage accounts namedsupportsHttpsTrafficOnly.
+supportsHttpsTrafficOnly
+Determine the effect to use
+Deciding what to do with your non-compliant resources is nearly as important as deciding what to evaluate in the first place. Each possible response to a non-compliant resource is called aneffect. The effect controls if the non-compliant resource is logged, blocked, has data appended, or has a deployment associated to it for putting the resource back into a compliant state.
+For our example,denyis the effect we want as we don't want non-compliant resources created in our Azure environment. Audit is a good first choice for a policy effect to determine what the effect of a policy is before setting it todeny. One way to make changing the effect per assignment easier is to parameterize the effect. Seeparametersfor the details.
+deny
+deny
+Compose the definition
+We now have the property details and alias for what we plan to manage. Next, we compose the policy rule itself. If you aren't familiar with the policy language, referencepolicy definition structurefor how to structure the policy definition. Here's an empty template of what a policy definition looks like:
+{
+  "properties": {
+    "displayName": "<displayName>",
+    "description": "<description>",
+    "mode": "<mode>",
+    "parameters": {
+              <parameters>
+    },
+    "policyRule": {
+      "if": {
+              <rule>
+      },
+      "then": {
+        "effect": "<effect>"
+      }
+    }
+  }
+}
+{
+  "properties": {
+    "displayName": "<displayName>",
+    "description": "<description>",
+    "mode": "<mode>",
+    "parameters": {
+              <parameters>
+    },
+    "policyRule": {
+      "if": {
+              <rule>
+      },
+      "then": {
+        "effect": "<effect>"
+      }
+    }
+  }
+}
+Metadata
+The first three components are policy metadata. These components are easy to provide values for since we know what we are creating the rule for.Modeis primarily about tags and resource location. Since we don't need to limit evaluation to resources that support tags, use theallvalue formode.
+mode
+"displayName": "Deny storage accounts not using only HTTPS",
+"description": "Deny storage accounts not using only HTTPS. Checks the supportsHttpsTrafficOnly property on StorageAccounts.",
+"mode": "all",
+"displayName": "Deny storage accounts not using only HTTPS",
+"description": "Deny storage accounts not using only HTTPS. Checks the supportsHttpsTrafficOnly property on StorageAccounts.",
+"mode": "all",
+Parameters
+While we didn't use a parameter for changing the evaluation, we do want to use a parameter to allow changing theeffectfor troubleshooting. You define aneffectTypeparameter and limit it to onlydenyanddisabled. These two options match our business requirements. The finished parameters block looks like this example:
+effect
+effectType
+deny
+disabled
+"parameters": {
+  "effectType": {
+    "type": "string",
+    "defaultValue": "Deny",
+    "allowedValues": [
+      "Deny",
+      "Disabled"
+    ],
+    "metadata": {
+      "displayName": "Effect",
+      "description": "Enable or disable the execution of the policy"
+    }
+  }
+},
+"parameters": {
+  "effectType": {
+    "type": "string",
+    "defaultValue": "Deny",
+    "allowedValues": [
+      "Deny",
+      "Disabled"
+    ],
+    "metadata": {
+      "displayName": "Effect",
+      "description": "Enable or disable the execution of the policy"
+    }
+  }
+},
+Policy rule
+Composing thepolicy ruleis the final step in building our custom policy definition. We identified two statements to test for:
+The storage accounttypeisMicrosoft.Storage/storageAccounts.
+type
+Microsoft.Storage/storageAccounts
+The storage accountsupportsHttpsTrafficOnlyisn'ttrue.
+supportsHttpsTrafficOnly
+true
+Since we need both of these statements to be true, use theallOflogical operator. Pass theeffectTypeparameter to the effect instead of making a static declaration. Our finished rule looks like this example:
+allOf
+effectType
+"if": {
+  "allOf": [
+    {
+      "field": "type",
+      "equals": "Microsoft.Storage/storageAccounts"
+    },
+    {
+      "field": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly",
+      "notEquals": "true"
+    }
+  ]
+},
+"then": {
+  "effect": "[parameters('effectType')]"
+}
+"if": {
+  "allOf": [
+    {
+      "field": "type",
+      "equals": "Microsoft.Storage/storageAccounts"
+    },
+    {
+      "field": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly",
+      "notEquals": "true"
+    }
+  ]
+},
+"then": {
+  "effect": "[parameters('effectType')]"
+}
+Completed definition
+With all three parts of the policy defined, here is our completed definition:
+{
+  "properties": {
+    "displayName": "Deny storage accounts not using only HTTPS",
+    "description": "Deny storage accounts not using only HTTPS. Checks the supportsHttpsTrafficOnly property on StorageAccounts.",
+    "mode": "all",
+    "parameters": {
+      "effectType": {
+        "type": "string",
+        "defaultValue": "Deny",
+        "allowedValues": [
+          "Deny",
+          "Disabled"
+        ],
+        "metadata": {
+          "displayName": "Effect",
+          "description": "Enable or disable the execution of the policy"
+        }
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.Storage/storageAccounts"
+          },
+          {
+            "field": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly",
+            "notEquals": "true"
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effectType')]"
+      }
+    }
+  }
+}
+{
+  "properties": {
+    "displayName": "Deny storage accounts not using only HTTPS",
+    "description": "Deny storage accounts not using only HTTPS. Checks the supportsHttpsTrafficOnly property on StorageAccounts.",
+    "mode": "all",
+    "parameters": {
+      "effectType": {
+        "type": "string",
+        "defaultValue": "Deny",
+        "allowedValues": [
+          "Deny",
+          "Disabled"
+        ],
+        "metadata": {
+          "displayName": "Effect",
+          "description": "Enable or disable the execution of the policy"
+        }
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.Storage/storageAccounts"
+          },
+          {
+            "field": "Microsoft.Storage/storageAccounts/supportsHttpsTrafficOnly",
+            "notEquals": "true"
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effectType')]"
+      }
+    }
+  }
+}
+The completed definition can be used to create a new policy. Portal and each SDK (Azure CLI, Azure PowerShell, and REST API) accept the definition in different ways, so review the commands for each to validate correct usage. Then assign it, using the parameterized effect, to appropriate resources to manage the security of your storage accounts.
+Clean up resources
+If you're done working with resources from this tutorial, use the following steps to delete any of the assignments or definitions you created:
+SelectDefinitions(orAssignmentsif you're trying to delete an assignment) underAuthoringin the left side of the Azure Policy page.
+SelectDefinitions(orAssignmentsif you're trying to delete an assignment) underAuthoringin the left side of the Azure Policy page.
+Search for the new initiative or policy definition (or assignment) you want to remove.
+Search for the new initiative or policy definition (or assignment) you want to remove.
+Right-click the row or select the ellipses at the end of the definition (or assignment), and selectDelete definition(orDelete assignment).
+Right-click the row or select the ellipses at the end of the definition (or assignment), and selectDelete definition(orDelete assignment).
+Review
+In this tutorial, you successfully accomplished the following tasks:
+Identified your business requirements
+Mapped each requirement to an Azure resource property
+Mapped the property to an alias
+Determined the effect to use
+Composed the policy definition
+Next steps
+Next, use your custom policy definition to create and assign a policy:
+Create and assign a policy definition
+Feedback
+Was this page helpful?
+Additional resources

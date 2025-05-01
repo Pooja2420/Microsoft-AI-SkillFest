@@ -1,0 +1,283 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Authenticate JavaScript apps to Azure services during local development using service principals
+Article
+2025-02-27
+2 contributors
+In this article
+When you create cloud applications, developers need to debug and test applications on their local workstation. When an application is run on a developer's workstation during local development, it still must authenticate to any Azure services used by the app. This article covers how to set up dedicated application service principal objects to be used during local development.
+
+Dedicated application service principals for local development allow you to follow the principle of least privilege during app development. Since permissions are scoped to exactly what is needed for the app during development, app code is prevented from accidentally accessing an Azure resource intended for use by a different app. This method also prevents bugs from occurring when the app is moved to production because the app was overprivileged in the dev environment.
+An application service principal is set up for the app when the app is registered in Azure. When registering apps for local development, it's recommended to:
+Create separate app registrations for each developer working on the app. This method creates separate application service principals for each developer to use during local development and avoid the need for developers to share credentials for a single application service principal.
+Create separate app registrations per app. This scopes the app's permissions to only what is needed by the app.
+During local development, environment variables are set with the application service principal's identity. The Azure SDK for JavaScript reads these environment variables and uses this information to authenticate the app to the Azure resources it needs.
+Register the application in Azure
+Application service principal objects are created with an app registration in Azure. You can create service principals using either the Azure portal or Azure CLI.
+Azure portal
+Azure CLI
+Sign in to theAzure portaland follow these steps.
+Enterapp registrationsin the search bar at the top of the Azure portal.
+Select the item labeledApp registrationsunder theServicesheading on the menu that appears below the search bar.
+Nameâ Enter a name for the app registration in Azure.  It is recommended this name include the app name, the user the app registration is for, and an identifier like 'dev' to indicate this app registration is for use in local development.
+Supported account typesâAccounts in this organizational directory only.
+Application (client) IDâ This is the app ID the app will use to access Azure during local development. Copy this value to a temporary location in a text editor as you'll need it in a future step.
+Directory (tenant) idâ This value will also be needed by your app when it authenticates to Azure.  Copy this value to a temporary location in a text editor it will also be needed it in a future step.
+Client credentialsâ You must set the client credentials for the app before your app can authenticate to Azure and use Azure services.  SelectAdd a certificate or secretto add credentials for your app.
+Descriptionâ Enter a value ofCurrent.
+Expiresâ Select a value of24 months.
+Azure CLI commands can be run in theAzure Cloud Shellor on a workstation with theAzure CLI installed.
+First, use theaz ad sp create-for-rbaccommand to create a new service principal for the app. This creates the app registration for the app at the same time.
+az ad sp create-for-rbac --name {service-principal-name}
+az ad sp create-for-rbac --name {service-principal-name}
+The output of this command looks like the following JSON object. It's recommended to copy this output into a temporary file in a text editor as you'll need these values in a future step as this is the only place you ever see the client secret (password) for the service principal. You can, however, add a new password later without invalidating the service principal or existing passwords if need be.
+{
+  "appId": "00001111-aaaa-2222-bbbb-3333cccc4444",
+  "displayName": "{service-principal-name}",
+  "password": "abcdefghijklmnopqrstuvwxyz",
+  "tenant": "ffffaaaa-5555-bbbb-6666-cccc7777dddd"
+}
+{
+  "appId": "00001111-aaaa-2222-bbbb-3333cccc4444",
+  "displayName": "{service-principal-name}",
+  "password": "abcdefghijklmnopqrstuvwxyz",
+  "tenant": "ffffaaaa-5555-bbbb-6666-cccc7777dddd"
+}
+
+Create a Microsoft Entra security group for local development
+Since there typically multiple developers who work on an application, it's recommended to create a Microsoft Entra group to encapsulate the roles (permissions) the app needs in local development rather than assigning the roles to individual service principal objects. This offers the following advantages.
+Every developer is assured to have the same roles assigned since roles are assigned at the group level.
+If a new role is needed for the app, it only needs to be added to the Microsoft Entra group for the app.
+If a new developer joins the team, a new application service principal is created for the developer and added to the group, assuring the developer has the right permissions to work on the app.
+Azure portal
+Azure CLI
+Group typeâSecurity
+Group nameâ A name for the security group, typically created from the application name.  It is also helpful to include a string likelocal-devin the name of the group to indicate the purpose of the group.
+Group descriptionâ A description of the purpose of the group.
+Select theNo members selectedlink underMembersto add members to the group.
+Use the search box to filter the list of principal names in the list.
+Select the application service principals for local development for this app.  As objects are selected, they will be greyed out and move to theSelected itemslist at the bottom of the dialog.
+When finished, select theSelectbutton.
+Theaz ad group createcommand is used to create groups in Microsoft Entra ID. The--display-nameand--main-nicknameparameters are required. The name given to the group should be based on the name of the application. It's also useful to include a phrase like 'local-dev' in the name of the group to indicate the purpose of the group.
+--display-name
+--main-nickname
+az ad group create \
+    --display-name MyDisplay \
+    --mail-nickname MyDisplay  \
+    --description \<group-description>
+az ad group create \
+    --display-name MyDisplay \
+    --mail-nickname MyDisplay  \
+    --description \<group-description>
+To add members to the group, you'll need the object ID of the application service principal, which is different that the application ID. Use theaz ad sp listto list the available service principals. The--filterparameter command accepts OData style filters and can be used to filter the list as shown. The--queryparameter limits to columns to only those of interest.
+--filter
+--query
+az ad sp list \
+    --filter "startswith(displayName, 'msdocs')" \
+    --query "[].{objectId:objectId, displayName:displayName}" \
+    --output table
+az ad sp list \
+    --filter "startswith(displayName, 'msdocs')" \
+    --query "[].{objectId:objectId, displayName:displayName}" \
+    --output table
+Theaz ad group member addcommand can then be used to add members to groups.
+az ad group member add \
+    --group \<group-name> \
+    --member-id \<object-id>  \
+az ad group member add \
+    --group \<group-name> \
+    --member-id \<object-id>  \
+Assign roles to the application
+Next, you need to determine what roles (permissions) your app needs on what resources and assign those roles to your app. In this example, the roles are assigned to the Microsoft Entra group created in step 2. Roles can be assigned a role at a resource, resource group, or subscription scope. This example shows how to assign roles at the resource group scope since most applications group all their Azure resources into a single resource group.
+Azure portal
+Azure CLI
+Select theRole assignmentstab.
+Select+ Addfrom the top menu and thenAdd role assignmentfrom the resulting drop-down menu.
+Use the search box to filter the list to a more manageable size. This example shows how to filter for Storage Blob roles.
+Select the role that you want to assign.SelectNextto go to the next screen.
+SelectUser, group, or service principalunderAssign access to.
+Select+ Select membersunderMembers
+TheSelecttext box can be used to filter the list of users and groups in your subscription. If needed, type the first few characters of the local development Microsoft Entra group you created for the app.
+Select the local development Microsoft Entra group associated with your application.
+An application service principal is assigned a role in Azure using theaz role assignment createcommand.
+az role assignment create --assignee "{appId}" \
+    --scope /subscriptions/"{subscriptionName}" \
+    --role "{roleName}" \
+    --resource-group "{resourceGroupName}"
+az role assignment create --assignee "{appId}" \
+    --scope /subscriptions/"{subscriptionName}" \
+    --role "{roleName}" \
+    --resource-group "{resourceGroupName}"
+To get the role names that a service principal can be assigned to, use theaz role definition listcommand.
+az role definition list \
+    --query "sort_by([].{roleName:roleName, description:description}, &roleName)" \
+    --output table
+az role definition list \
+    --query "sort_by([].{roleName:roleName, description:description}, &roleName)" \
+    --output table
+For example, to allow the application service principal to read, write, and delete access to Azure Storage blob containers and data to all storage accounts in themsdocs-sdk-auth-exampleresource group, you would assign the application service principal to theStorage Blob Data Contributorrole using the following command.
+az role assignment create --assignee "aaaaaaaa-bbbb-cccc-7777-888888888888" \
+    --scope /subscriptions/"Storage Blob Data Subscriber" \
+    --role "Storage Blob Data Contributor" \
+    --resource-group "msdocs-sdk-auth-example"
+az role assignment create --assignee "aaaaaaaa-bbbb-cccc-7777-888888888888" \
+    --scope /subscriptions/"Storage Blob Data Subscriber" \
+    --role "Storage Blob Data Contributor" \
+    --resource-group "msdocs-sdk-auth-example"
+For information on assigning permissions at the resource or subscription level using the Azure CLI, see the articleAssign Azure roles using the Azure CLI.
+Set local development environment variables
+TheDefaultAzureCredentialobject looks for the service principal information in a set of environment variables at runtime. Since most developers work on multiple applications, it's recommended to use a package likedotenvto access environment from a.envfile stored in the application's directory during development. This scopes the environment variables used to authenticate the application to Azure such that they can only be used by this application.
+DefaultAzureCredential
+.env
+The.envfile is never checked into source control since it contains the application secret key for Azure. The standard.gitignorefile for JavaScript automatically excludes the.envfile from check-in.
+.env
+.env
+To use thedotenvpackage, first install the package in your application.
+dotenv
+npm install dotenv
+npm install dotenv
+Then, create a.envfile in your application root directory. Set the environment variable values with values obtained from the app registration process as follows:
+.env
+AZURE_CLIENT_IDâ The app ID value.
+AZURE_CLIENT_ID
+AZURE_TENANT_IDâ The tenant ID value.
+AZURE_TENANT_ID
+AZURE_CLIENT_SECRETâ The password/credential generated for the app.
+AZURE_CLIENT_SECRET
+AZURE_CLIENT_ID=00001111-aaaa-2222-bbbb-3333cccc4444
+AZURE_TENANT_ID=ffffaaaa-5555-bbbb-6666-cccc7777dddd
+AZURE_CLIENT_SECRET=Aa1Bb~2Cc3.-Dd4Ee5Ff6Gg7Hh8Ii9_Jj0Kk1Ll2
+AZURE_CLIENT_ID=00001111-aaaa-2222-bbbb-3333cccc4444
+AZURE_TENANT_ID=ffffaaaa-5555-bbbb-6666-cccc7777dddd
+AZURE_CLIENT_SECRET=Aa1Bb~2Cc3.-Dd4Ee5Ff6Gg7Hh8Ii9_Jj0Kk1Ll2
+Finally, in the startup code for your application, use thedotenvlibrary to read the environment variables from the.envfile on startup.
+dotenv
+.env
+import 'dotenv/config'
+import 'dotenv/config'
+Implement DefaultAzureCredential in your application
+To authenticate Azure SDK client objects to Azure, your application should use theDefaultAzureCredentialclass from the@azure/identitypackage. In this scenario,DefaultAzureCredentialdetects the environment variablesAZURE_CLIENT_ID,AZURE_TENANT_ID,  andAZURE_CLIENT_SECRETare set and read those variables to get the application service principal information to connect to Azure with.
+DefaultAzureCredential
+@azure/identity
+DefaultAzureCredential
+AZURE_CLIENT_ID
+AZURE_TENANT_ID
+AZURE_CLIENT_SECRET
+Start by adding the@azure/identitypackage to your application.
+npm install @azure/identity
+npm install @azure/identity
+Next, for any JavaScript code that creates an Azure SDK client object in your app, you'll want to:
+Import theDefaultAzureCredentialclass from the@azure/identitymodule.
+DefaultAzureCredential
+@azure/identity
+Create aDefaultAzureCredentialobject.
+DefaultAzureCredential
+Pass theDefaultAzureCredentialobject to the Azure SDK client object constructor.
+DefaultAzureCredential
+An example of this is shown in the following code segment.
+// Azure authentication dependency
+import { DefaultAzureCredential } from '@azure/identity';
+
+// Azure resource management dependency
+import { SubscriptionClient } from "@azure/arm-subscriptions";
+
+// Acquire credential
+const tokenCredential = new DefaultAzureCredential();
+
+async function listSubscriptions() {
+  try {
+
+    // use credential to authenticate with Azure SDKs
+    const client = new SubscriptionClient(tokenCredential);
+
+    // get details of each subscription
+    for await (const item of client.subscriptions.list()) {
+      const subscriptionDetails = await client.subscriptions.get(
+        item.subscriptionId
+      );
+      /* 
+        Each item looks like:
+      
+        {
+          id: '/subscriptions/aaaa0a0a-bb1b-cc2c-dd3d-eeeeee4e4e4e',
+          subscriptionId: 'aaaa0a0a-bb1b-cc2c-dd3d-eeeeee4e4e4e',
+          displayName: 'YOUR-SUBSCRIPTION-NAME',
+          state: 'Enabled',
+          subscriptionPolicies: {
+            locationPlacementId: 'Internal_2014-09-01',
+            quotaId: 'Internal_2014-09-01',
+            spendingLimit: 'Off'
+          },
+          authorizationSource: 'RoleBased'
+        },
+    */
+      console.log(subscriptionDetails);
+    }
+  } catch (err) {
+    console.error(JSON.stringify(err));
+  }
+}
+
+listSubscriptions()
+  .then(() => {
+    console.log("done");
+  })
+  .catch((ex) => {
+    console.log(ex);
+  });
+// Azure authentication dependency
+import { DefaultAzureCredential } from '@azure/identity';
+
+// Azure resource management dependency
+import { SubscriptionClient } from "@azure/arm-subscriptions";
+
+// Acquire credential
+const tokenCredential = new DefaultAzureCredential();
+
+async function listSubscriptions() {
+  try {
+
+    // use credential to authenticate with Azure SDKs
+    const client = new SubscriptionClient(tokenCredential);
+
+    // get details of each subscription
+    for await (const item of client.subscriptions.list()) {
+      const subscriptionDetails = await client.subscriptions.get(
+        item.subscriptionId
+      );
+      /* 
+        Each item looks like:
+      
+        {
+          id: '/subscriptions/aaaa0a0a-bb1b-cc2c-dd3d-eeeeee4e4e4e',
+          subscriptionId: 'aaaa0a0a-bb1b-cc2c-dd3d-eeeeee4e4e4e',
+          displayName: 'YOUR-SUBSCRIPTION-NAME',
+          state: 'Enabled',
+          subscriptionPolicies: {
+            locationPlacementId: 'Internal_2014-09-01',
+            quotaId: 'Internal_2014-09-01',
+            spendingLimit: 'Off'
+          },
+          authorizationSource: 'RoleBased'
+        },
+    */
+      console.log(subscriptionDetails);
+    }
+  } catch (err) {
+    console.error(JSON.stringify(err));
+  }
+}
+
+listSubscriptions()
+  .then(() => {
+    console.log("done");
+  })
+  .catch((ex) => {
+    console.log(ex);
+  });
+DefaultAzureCredentialwill automatically detect the authentication mechanism configured for the app and obtain the necessary tokens to authenticate the app to Azure. If an application makes use of more than one SDK client, the same credential object can be used with each SDK client object.
+DefaultAzureCredential
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,604 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Install AGIC by using an existing Application Gateway deployment
+Article
+2025-04-04
+18 contributors
+In this article
+The Application Gateway Ingress Controller (AGIC) is a pod within your Azure Kubernetes Service (AKS) cluster. AGIC monitors the KubernetesIngressresources. It creates and applies an Azure Application Gateway configuration based on the status of the Kubernetes cluster.
+Tip
+ConsiderApplication Gateway for Containersfor your Kubernetes ingress solution. For more information, seeQuickstart: Deploy Application Gateway for Containers ALB Controller.
+Prerequisites
+This article assumes that you already installed the following tools and infrastructure:
+An AKS clusterwithAzure Container Networking Interface (CNI).
+Application Gateway v2in the same virtual network as the AKS cluster.
+Microsoft Entra Workload IDconfigured for your AKS cluster.
+Azure Cloud Shellas the Azure shell environment, which hasaz(Azure CLI),kubectl, andhelminstalled. These tools are required for commands that support configuring this deployment.
+az
+kubectl
+helm
+Add the Helm repository
+Helmis a package manager for Kubernetes. You use it to install theapplication-gateway-kubernetes-ingresspackage.
+application-gateway-kubernetes-ingress
+If you use Cloud Shell, you don't need to install Helm. Cloud Shell comes with Helm version 3. Run the following commands to add the AGIC Helm repository for an AKS cluster that's enabled with Kubernetes role-based access control (RBAC):
+kubectl create serviceaccount --namespace kube-system tiller-sa
+kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller-sa
+helm init --tiller-namespace kube-system --service-account tiller-sa
+kubectl create serviceaccount --namespace kube-system tiller-sa
+kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller-sa
+helm init --tiller-namespace kube-system --service-account tiller-sa
+Back up the Application Gateway deployment
+Before you install AGIC, back up your Application Gateway deployment's configuration:
+In theAzure portal, go to your Application Gateway deployment.
+In theAutomationsection, selectExport templateand then selectDownload.
+The downloaded .zip file contains JSON templates, Bash scripts, and PowerShell scripts that you can use to restore Application Gateway, if a restoration becomes necessary.
+Set up an identity for Resource Manager authentication
+AGIC communicates with the Kubernetes API server andAzure Resource Manager. It requires an identity to access these APIs. You can use either Microsoft Entra Workload ID or a service principal.
+
+Set up Microsoft Entra Workload ID
+Microsoft Entra Workload IDis an identity that you assign to a software workload. This identity enables your AKS pod to authenticate with other Azure resources.
+For this configuration, you need authorization for the AGIC pod to make HTTP requests to Azure Resource Manager.
+Use the Azure CLIaz account setcommand to set a specific subscription to be the current active subscription:az account set --subscription "subscriptionID"Then use theaz identity createcommand to create a managed identity. You must create the identity in thenode resource group. The node resource group is assigned a name by default, such asMC_myResourceGroup_myAKSCluster_eastus.az identity create --name "userAssignedIdentityName" --resource-group "resourceGroupName" --location "location" --subscription "subscriptionID"
+Use the Azure CLIaz account setcommand to set a specific subscription to be the current active subscription:
+az account set --subscription "subscriptionID"
+az account set --subscription "subscriptionID"
+Then use theaz identity createcommand to create a managed identity. You must create the identity in thenode resource group. The node resource group is assigned a name by default, such asMC_myResourceGroup_myAKSCluster_eastus.
+MC_myResourceGroup_myAKSCluster_eastus
+az identity create --name "userAssignedIdentityName" --resource-group "resourceGroupName" --location "location" --subscription "subscriptionID"
+az identity create --name "userAssignedIdentityName" --resource-group "resourceGroupName" --location "location" --subscription "subscriptionID"
+For the role assignment, run the following command to identify theprincipalIdvalue for the newly created identity:$resourceGroup="resource-group-name"
+$identityName="identity-name"
+az identity list -g $resourceGroup --query "[?name == '$identityName'].principalId | [0]" -o tsv
+For the role assignment, run the following command to identify theprincipalIdvalue for the newly created identity:
+principalId
+$resourceGroup="resource-group-name"
+$identityName="identity-name"
+az identity list -g $resourceGroup --query "[?name == '$identityName'].principalId | [0]" -o tsv
+$resourceGroup="resource-group-name"
+$identityName="identity-name"
+az identity list -g $resourceGroup --query "[?name == '$identityName'].principalId | [0]" -o tsv
+Grant the identityContributoraccess to your Application Gateway deployment. You need the ID of the Application Gateway deployment, which looks like/subscriptions/A/resourceGroups/B/providers/Microsoft.Network/applicationGateways/C.First, get the list of Application Gateway IDs in your subscription by running the following command:az network application-gateway list --query '[].id'To assign the identityContributoraccess, run the following command:$resourceGroup="resource-group-name"
+$identityName="identity-Name"
+# Get the Application Gateway ID
+$AppGatewayID=$(az network application-gateway list --query '[].id' -o tsv)
+$role="contributor"
+# Get the principal ID for the user-assigned identity
+$principalId=$(az identity list -g $resourceGroup --query "[?name == '$identityName'].principalId | [0]" -o tsv)
+az role assignment create --assignee $principalId --role $role --scope $AppGatewayID
+Grant the identityContributoraccess to your Application Gateway deployment. You need the ID of the Application Gateway deployment, which looks like/subscriptions/A/resourceGroups/B/providers/Microsoft.Network/applicationGateways/C.
+/subscriptions/A/resourceGroups/B/providers/Microsoft.Network/applicationGateways/C
+First, get the list of Application Gateway IDs in your subscription by running the following command:
+az network application-gateway list --query '[].id'
+az network application-gateway list --query '[].id'
+To assign the identityContributoraccess, run the following command:
+$resourceGroup="resource-group-name"
+$identityName="identity-Name"
+# Get the Application Gateway ID
+$AppGatewayID=$(az network application-gateway list --query '[].id' -o tsv)
+$role="contributor"
+# Get the principal ID for the user-assigned identity
+$principalId=$(az identity list -g $resourceGroup --query "[?name == '$identityName'].principalId | [0]" -o tsv)
+az role assignment create --assignee $principalId --role $role --scope $AppGatewayID
+$resourceGroup="resource-group-name"
+$identityName="identity-Name"
+# Get the Application Gateway ID
+$AppGatewayID=$(az network application-gateway list --query '[].id' -o tsv)
+$role="contributor"
+# Get the principal ID for the user-assigned identity
+$principalId=$(az identity list -g $resourceGroup --query "[?name == '$identityName'].principalId | [0]" -o tsv)
+az role assignment create --assignee $principalId --role $role --scope $AppGatewayID
+Grant the identityReaderaccess to the Application Gateway resource group. The resource group ID looks like/subscriptions/A/resourceGroups/B. You can get all resource groups by runningaz group list --query '[].id'.$resourceGroup="resource-group-name"
+$identityName="identity-Name"
+# Get the Application Gateway resource group
+$AppGatewayResourceGroup=$(az network application-gateway list --query '[].resourceGroup' -o tsv)
+# Get the Application Gateway resource group ID
+$AppGatewayResourceGroupID=$(az group show --name $AppGatewayResourceGroup --query id -o tsv)
+$role="Reader"
+# Get the principal ID for the user-assigned identity
+$principalId=$(az identity list -g $resourceGroup --query "[?name == '$identityName'].principalId | [0]" -o tsv)
+# Assign the Reader role to the user-assigned identity at the resource group scope
+az role assignment create --role $role --assignee $principalId  --scope $AppGatewayResourceGroupID
+Grant the identityReaderaccess to the Application Gateway resource group. The resource group ID looks like/subscriptions/A/resourceGroups/B. You can get all resource groups by runningaz group list --query '[].id'.
+/subscriptions/A/resourceGroups/B
+az group list --query '[].id'
+$resourceGroup="resource-group-name"
+$identityName="identity-Name"
+# Get the Application Gateway resource group
+$AppGatewayResourceGroup=$(az network application-gateway list --query '[].resourceGroup' -o tsv)
+# Get the Application Gateway resource group ID
+$AppGatewayResourceGroupID=$(az group show --name $AppGatewayResourceGroup --query id -o tsv)
+$role="Reader"
+# Get the principal ID for the user-assigned identity
+$principalId=$(az identity list -g $resourceGroup --query "[?name == '$identityName'].principalId | [0]" -o tsv)
+# Assign the Reader role to the user-assigned identity at the resource group scope
+az role assignment create --role $role --assignee $principalId  --scope $AppGatewayResourceGroupID
+$resourceGroup="resource-group-name"
+$identityName="identity-Name"
+# Get the Application Gateway resource group
+$AppGatewayResourceGroup=$(az network application-gateway list --query '[].resourceGroup' -o tsv)
+# Get the Application Gateway resource group ID
+$AppGatewayResourceGroupID=$(az group show --name $AppGatewayResourceGroup --query id -o tsv)
+$role="Reader"
+# Get the principal ID for the user-assigned identity
+$principalId=$(az identity list -g $resourceGroup --query "[?name == '$identityName'].principalId | [0]" -o tsv)
+# Assign the Reader role to the user-assigned identity at the resource group scope
+az role assignment create --role $role --assignee $principalId  --scope $AppGatewayResourceGroupID
+Note
+Please ensure the identity used by AGIC has the proper permissions. A list of permissions needed by the identity can be found here:Configure Infrastructure - Permissions. If a custom role is not defined with the required permissions, you may use theNetwork Contributorrole.
+Set up a service principal
+It's also possible to provide AGIC access to Azure Resource Manager by using a Kubernetes secret:
+Create an Active Directory service principal and encode it with Base64. The Base64 encoding is required for the JSON blob to be saved to Kubernetes.az ad sp create-for-rbac --role Contributor --sdk-auth | base64 -w0
+Create an Active Directory service principal and encode it with Base64. The Base64 encoding is required for the JSON blob to be saved to Kubernetes.
+az ad sp create-for-rbac --role Contributor --sdk-auth | base64 -w0
+az ad sp create-for-rbac --role Contributor --sdk-auth | base64 -w0
+Add the Base64-encoded JSON blob to thehelm-config.yamlfile. Thehelm-config.yamlfile configures AGIC.armAuth:
+    type: servicePrincipal
+    secretJSON: <Base64-Encoded-Credentials>
+Add the Base64-encoded JSON blob to thehelm-config.yamlfile. Thehelm-config.yamlfile configures AGIC.
+helm-config.yaml
+helm-config.yaml
+armAuth:
+    type: servicePrincipal
+    secretJSON: <Base64-Encoded-Credentials>
+armAuth:
+    type: servicePrincipal
+    secretJSON: <Base64-Encoded-Credentials>
+Deploy the AGIC add-on
+Create a deployment manifest for the ingress controller
+---
+# file: pet-supplies-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pet-supplies-ingress
+spec:
+  ingressClassName: azure-application-gateway
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: store-front
+            port:
+              number: 80
+      - path: /order-service
+        pathType: Prefix
+        backend:
+          service:
+            name: order-service
+            port:
+              number: 3000
+      - path: /product-service
+        pathType: Prefix
+        backend:
+          service:
+            name: product-service
+            port:
+              number: 3002
+---
+# file: pet-supplies-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pet-supplies-ingress
+spec:
+  ingressClassName: azure-application-gateway
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: store-front
+            port:
+              number: 80
+      - path: /order-service
+        pathType: Prefix
+        backend:
+          service:
+            name: order-service
+            port:
+              number: 3000
+      - path: /product-service
+        pathType: Prefix
+        backend:
+          service:
+            name: product-service
+            port:
+              number: 3002
+Deploy the ingress controller
+$namespace="namespace"
+$file="pet-supplies-ingress.yaml"
+kubectl apply -f $file -n $namespace
+$namespace="namespace"
+$file="pet-supplies-ingress.yaml"
+kubectl apply -f $file -n $namespace
+Install the ingress controller as a Helm chart
+UseCloud Shellto install the AGIC Helm package:
+Perform a Helm update:helm repo update
+Perform a Helm update:
+helm repo update
+helm repo update
+Downloadhelm-config.yaml:wget https://raw.githubusercontent.com/Azure/application-gateway-kubernetes-ingress/master/docs/examples/sample-helm-config.yaml -O helm-config.yamlOr copy the following YAML file:# This file contains the essential configs for the ingress controller helm chart
+
+# Verbosity level of the App Gateway Ingress Controller
+verbosityLevel: 3
+
+################################################################################
+# Specify which application gateway the ingress controller must manage
+#
+appgw:
+    subscriptionId: <subscriptionId>
+    resourceGroup: <resourceGroupName>
+    name: <applicationGatewayName>
+
+    # Setting appgw.shared to "true" creates an AzureIngressProhibitedTarget CRD.
+    # This prohibits AGIC from applying config for any host/path.
+    # Use "kubectl get AzureIngressProhibitedTargets" to view and change this.
+    shared: false
+
+################################################################################
+# Specify which kubernetes namespace the ingress controller must watch
+# Default value is "default"
+# Leaving this variable out or setting it to blank or empty string would
+# result in Ingress Controller observing all accessible namespaces.
+#
+# kubernetes:
+#   watchNamespace: <namespace>
+
+################################################################################
+# Specify the authentication with Azure Resource Manager
+#
+# Two authentication methods are available:
+# - Option 1: Azure-AD-workload-identity
+armAuth:
+    type: workloadIdentity
+    identityClientID:  <identityClientId>
+
+## Alternatively you can use Service Principal credentials
+# armAuth:
+#    type: servicePrincipal
+#    secretJSON: <<Generate this value with: "az ad sp create-for-rbac --role Contributor --sdk-auth | base64 -w0" >>
+
+################################################################################
+# Specify if the cluster is Kubernetes RBAC enabled or not
+rbac:
+    enabled: false # true/false
+
+# Specify aks cluster related information. THIS IS BEING DEPRECATED.
+aksClusterConfiguration:
+    apiServerAddress: <aks-api-server-address>
+Downloadhelm-config.yaml:
+helm-config.yaml
+wget https://raw.githubusercontent.com/Azure/application-gateway-kubernetes-ingress/master/docs/examples/sample-helm-config.yaml -O helm-config.yaml
+wget https://raw.githubusercontent.com/Azure/application-gateway-kubernetes-ingress/master/docs/examples/sample-helm-config.yaml -O helm-config.yaml
+Or copy the following YAML file:
+# This file contains the essential configs for the ingress controller helm chart
+
+# Verbosity level of the App Gateway Ingress Controller
+verbosityLevel: 3
+
+################################################################################
+# Specify which application gateway the ingress controller must manage
+#
+appgw:
+    subscriptionId: <subscriptionId>
+    resourceGroup: <resourceGroupName>
+    name: <applicationGatewayName>
+
+    # Setting appgw.shared to "true" creates an AzureIngressProhibitedTarget CRD.
+    # This prohibits AGIC from applying config for any host/path.
+    # Use "kubectl get AzureIngressProhibitedTargets" to view and change this.
+    shared: false
+
+################################################################################
+# Specify which kubernetes namespace the ingress controller must watch
+# Default value is "default"
+# Leaving this variable out or setting it to blank or empty string would
+# result in Ingress Controller observing all accessible namespaces.
+#
+# kubernetes:
+#   watchNamespace: <namespace>
+
+################################################################################
+# Specify the authentication with Azure Resource Manager
+#
+# Two authentication methods are available:
+# - Option 1: Azure-AD-workload-identity
+armAuth:
+    type: workloadIdentity
+    identityClientID:  <identityClientId>
+
+## Alternatively you can use Service Principal credentials
+# armAuth:
+#    type: servicePrincipal
+#    secretJSON: <<Generate this value with: "az ad sp create-for-rbac --role Contributor --sdk-auth | base64 -w0" >>
+
+################################################################################
+# Specify if the cluster is Kubernetes RBAC enabled or not
+rbac:
+    enabled: false # true/false
+
+# Specify aks cluster related information. THIS IS BEING DEPRECATED.
+aksClusterConfiguration:
+    apiServerAddress: <aks-api-server-address>
+# This file contains the essential configs for the ingress controller helm chart
+
+# Verbosity level of the App Gateway Ingress Controller
+verbosityLevel: 3
+
+################################################################################
+# Specify which application gateway the ingress controller must manage
+#
+appgw:
+    subscriptionId: <subscriptionId>
+    resourceGroup: <resourceGroupName>
+    name: <applicationGatewayName>
+
+    # Setting appgw.shared to "true" creates an AzureIngressProhibitedTarget CRD.
+    # This prohibits AGIC from applying config for any host/path.
+    # Use "kubectl get AzureIngressProhibitedTargets" to view and change this.
+    shared: false
+
+################################################################################
+# Specify which kubernetes namespace the ingress controller must watch
+# Default value is "default"
+# Leaving this variable out or setting it to blank or empty string would
+# result in Ingress Controller observing all accessible namespaces.
+#
+# kubernetes:
+#   watchNamespace: <namespace>
+
+################################################################################
+# Specify the authentication with Azure Resource Manager
+#
+# Two authentication methods are available:
+# - Option 1: Azure-AD-workload-identity
+armAuth:
+    type: workloadIdentity
+    identityClientID:  <identityClientId>
+
+## Alternatively you can use Service Principal credentials
+# armAuth:
+#    type: servicePrincipal
+#    secretJSON: <<Generate this value with: "az ad sp create-for-rbac --role Contributor --sdk-auth | base64 -w0" >>
+
+################################################################################
+# Specify if the cluster is Kubernetes RBAC enabled or not
+rbac:
+    enabled: false # true/false
+
+# Specify aks cluster related information. THIS IS BEING DEPRECATED.
+aksClusterConfiguration:
+    apiServerAddress: <aks-api-server-address>
+Edithelm-config.yamland fill in the values forappgwandarmAuth.Note<identity-client-id>is a property of the Microsoft Entra Workload ID value that you set up in the previous section. You can retrieve this information by running the following command:az identity show -g <resourcegroup> -n <identity-name>. In that command,<resourcegroup>is the resource group that hosts the infrastructure resources related to the AKS cluster, Application Gateway, and the managed identity.
+Edithelm-config.yamland fill in the values forappgwandarmAuth.
+helm-config.yaml
+appgw
+armAuth
+Note
+<identity-client-id>is a property of the Microsoft Entra Workload ID value that you set up in the previous section. You can retrieve this information by running the following command:az identity show -g <resourcegroup> -n <identity-name>. In that command,<resourcegroup>is the resource group that hosts the infrastructure resources related to the AKS cluster, Application Gateway, and the managed identity.
+<identity-client-id>
+az identity show -g <resourcegroup> -n <identity-name>
+<resourcegroup>
+Install the Helm chart with thehelm-config.yamlconfiguration from the previous step:helm install agic-controller oci://mcr.microsoft.com/azure-application-gateway/charts/ingress-azure --version 1.8.1 -f helm-config.yamlAlternatively, you can combinehelm-config.yamland the Helm command in one step:helm install oci://mcr.microsoft.com/azure-application-gateway/charts/ingress-azure \
+     --name agic-controller \
+     --version 1.8.1 \
+     --namespace default \
+     --debug \
+     --set appgw.name=applicationgatewayABCD \
+     --set appgw.resourceGroup=your-resource-group \
+     --set appgw.subscriptionId=subscription-uuid \
+     --set appgw.shared=false \
+     --set armAuth.type=servicePrincipal \
+     --set armAuth.secretJSON=$(az ad sp create-for-rbac --role Contributor --sdk-auth | base64 -w0) \
+     --set rbac.enabled=true \
+     --set verbosityLevel=3 \
+     --set kubernetes.watchNamespace=default \
+     --set aksClusterConfiguration.apiServerAddress=aks-abcdefg.hcp.westus2.azmk8s.io
+Install the Helm chart with thehelm-config.yamlconfiguration from the previous step:
+helm-config.yaml
+helm install agic-controller oci://mcr.microsoft.com/azure-application-gateway/charts/ingress-azure --version 1.8.1 -f helm-config.yaml
+helm install agic-controller oci://mcr.microsoft.com/azure-application-gateway/charts/ingress-azure --version 1.8.1 -f helm-config.yaml
+Alternatively, you can combinehelm-config.yamland the Helm command in one step:
+helm-config.yaml
+helm install oci://mcr.microsoft.com/azure-application-gateway/charts/ingress-azure \
+     --name agic-controller \
+     --version 1.8.1 \
+     --namespace default \
+     --debug \
+     --set appgw.name=applicationgatewayABCD \
+     --set appgw.resourceGroup=your-resource-group \
+     --set appgw.subscriptionId=subscription-uuid \
+     --set appgw.shared=false \
+     --set armAuth.type=servicePrincipal \
+     --set armAuth.secretJSON=$(az ad sp create-for-rbac --role Contributor --sdk-auth | base64 -w0) \
+     --set rbac.enabled=true \
+     --set verbosityLevel=3 \
+     --set kubernetes.watchNamespace=default \
+     --set aksClusterConfiguration.apiServerAddress=aks-abcdefg.hcp.westus2.azmk8s.io
+helm install oci://mcr.microsoft.com/azure-application-gateway/charts/ingress-azure \
+     --name agic-controller \
+     --version 1.8.1 \
+     --namespace default \
+     --debug \
+     --set appgw.name=applicationgatewayABCD \
+     --set appgw.resourceGroup=your-resource-group \
+     --set appgw.subscriptionId=subscription-uuid \
+     --set appgw.shared=false \
+     --set armAuth.type=servicePrincipal \
+     --set armAuth.secretJSON=$(az ad sp create-for-rbac --role Contributor --sdk-auth | base64 -w0) \
+     --set rbac.enabled=true \
+     --set verbosityLevel=3 \
+     --set kubernetes.watchNamespace=default \
+     --set aksClusterConfiguration.apiServerAddress=aks-abcdefg.hcp.westus2.azmk8s.io
+Check the log of the newly created pod to verify that it started properly.
+Check the log of the newly created pod to verify that it started properly.
+To understand how you can expose an AKS service to the internet over HTTP or HTTPS by using an Azure Application Gateway deployment, seethis how-to guide.
+Set up a shared Application Gateway deployment
+By default, AGIC assumes full ownership of the Application Gateway deployment that it's linked to. AGIC version 0.8.0 and later can share a single Application Gateway deployment with other Azure components. For example, you could use the same Application Gateway deployment for an app
+that's hosted on anAzure virtual machine scale setand an AKS cluster.
+Example scenario
+Let's look at an imaginary Application Gateway deployment that manages traffic for two websites:
+dev.contoso.com: Hosted on a new AKS cluster by using Application Gateway and AGIC.
+dev.contoso.com
+prod.contoso.com: Hosted on a virtual machine scale set.
+prod.contoso.com
+With default settings, AGIC assumes 100% ownership of the Application Gateway deployment that it's pointed to. AGIC overwrites all of the App Gateway configuration. If you manually create a listener forprod.contoso.comon Application Gateway without defining it in the Kubernetes ingress, AGIC deletes theprod.contoso.comconfiguration within seconds.
+prod.contoso.com
+prod.contoso.com
+To install AGIC and also serveprod.contoso.comfrom the machines that use the virtual machine scale set, you must constrain AGIC to configuringdev.contoso.comonly. You facilitate this constraint by instantiating the followingcustom resource definition (CRD):
+prod.contoso.com
+dev.contoso.com
+cat <<EOF | kubectl apply -f -
+apiVersion: "appgw.ingress.k8s.io/v1"
+kind: AzureIngressProhibitedTarget
+metadata:
+  name: prod-contoso-com
+spec:
+  hostname: prod.contoso.com
+EOF
+cat <<EOF | kubectl apply -f -
+apiVersion: "appgw.ingress.k8s.io/v1"
+kind: AzureIngressProhibitedTarget
+metadata:
+  name: prod-contoso-com
+spec:
+  hostname: prod.contoso.com
+EOF
+The preceding command creates anAzureIngressProhibitedTargetobject. This object makes AGIC (version 0.8.0 and later) aware of the existence of
+the Application Gateway configuration forprod.contoso.com. This object also explicitly instructs AGIC to avoid changing any configuration
+related to that host name.
+AzureIngressProhibitedTarget
+prod.contoso.com
+Enable a shared Application Gateway deployment by using a new AGIC installation
+To limit AGIC (version 0.8.0 and later) to a subset of the Application Gateway configuration, modify thehelm-config.yamltemplate.
+In theappgw:section, add asharedkey and set it totrue:
+helm-config.yaml
+appgw:
+shared
+true
+appgw:
+    subscriptionId: <subscriptionId>    # existing field
+    resourceGroup: <resourceGroupName>  # existing field
+    name: <applicationGatewayName>      # existing field
+    shared: true                        # Add this field to enable shared Application Gateway
+appgw:
+    subscriptionId: <subscriptionId>    # existing field
+    resourceGroup: <resourceGroupName>  # existing field
+    name: <applicationGatewayName>      # existing field
+    shared: true                        # Add this field to enable shared Application Gateway
+Apply the Helm changes:
+Ensure that theAzureIngressProhibitedTargetCRD is installed:kubectl apply -f https://raw.githubusercontent.com/Azure/application-gateway-kubernetes-ingress/7b55ad194e7582c47589eb9e78615042e00babf3/crds/AzureIngressProhibitedTarget-v1-CRD-v1.yaml
+Ensure that theAzureIngressProhibitedTargetCRD is installed:
+AzureIngressProhibitedTarget
+kubectl apply -f https://raw.githubusercontent.com/Azure/application-gateway-kubernetes-ingress/7b55ad194e7582c47589eb9e78615042e00babf3/crds/AzureIngressProhibitedTarget-v1-CRD-v1.yaml
+kubectl apply -f https://raw.githubusercontent.com/Azure/application-gateway-kubernetes-ingress/7b55ad194e7582c47589eb9e78615042e00babf3/crds/AzureIngressProhibitedTarget-v1-CRD-v1.yaml
+Update Helm:helm upgrade \
+    --recreate-pods \
+    -f helm-config.yaml \
+    agic-controller
+    oci://mcr.microsoft.com/azure-application-gateway/charts/ingress-azure
+Update Helm:
+helm upgrade \
+    --recreate-pods \
+    -f helm-config.yaml \
+    agic-controller
+    oci://mcr.microsoft.com/azure-application-gateway/charts/ingress-azure
+helm upgrade \
+    --recreate-pods \
+    -f helm-config.yaml \
+    agic-controller
+    oci://mcr.microsoft.com/azure-application-gateway/charts/ingress-azure
+As a result, your AKS cluster has a new instance ofAzureIngressProhibitedTargetcalledprohibit-all-targets:
+AzureIngressProhibitedTarget
+prohibit-all-targets
+kubectl get AzureIngressProhibitedTargets prohibit-all-targets -o yaml
+kubectl get AzureIngressProhibitedTargets prohibit-all-targets -o yaml
+Theprohibit-all-targetsobject prohibits AGIC from changing the configuration foranyhost and path. Helm installed withappgw.shared=truedeploys AGIC, but it doesn't make any changes to Application Gateway.
+prohibit-all-targets
+appgw.shared=true
+Broaden permissions
+Because Helm withappgw.shared=trueand the defaultprohibit-all-targetsblocks AGIC from applying a configuration, you must broaden AGIC permissions:
+appgw.shared=true
+prohibit-all-targets
+Create a new YAML file namedAzureIngressProhibitedTargetwith the following snippet that contains your specific setup:cat <<EOF | kubectl apply -f -
+apiVersion: "appgw.ingress.k8s.io/v1"
+kind: AzureIngressProhibitedTarget
+metadata:
+  name: your-custom-prohibitions
+spec:
+  hostname: your.own-hostname.com
+EOF
+Create a new YAML file namedAzureIngressProhibitedTargetwith the following snippet that contains your specific setup:
+AzureIngressProhibitedTarget
+cat <<EOF | kubectl apply -f -
+apiVersion: "appgw.ingress.k8s.io/v1"
+kind: AzureIngressProhibitedTarget
+metadata:
+  name: your-custom-prohibitions
+spec:
+  hostname: your.own-hostname.com
+EOF
+cat <<EOF | kubectl apply -f -
+apiVersion: "appgw.ingress.k8s.io/v1"
+kind: AzureIngressProhibitedTarget
+metadata:
+  name: your-custom-prohibitions
+spec:
+  hostname: your.own-hostname.com
+EOF
+Now that you've created your own custom prohibition, you can delete the default one, which is too broad:kubectl delete AzureIngressProhibitedTarget prohibit-all-targets
+Now that you've created your own custom prohibition, you can delete the default one, which is too broad:
+kubectl delete AzureIngressProhibitedTarget prohibit-all-targets
+kubectl delete AzureIngressProhibitedTarget prohibit-all-targets
+Enable a shared Application Gateway deployment for an existing AGIC installation
+Assume that you already have a working AKS cluster and an Application Gateway deployment, and you configured AGIC in your cluster. You have an Ingress forprod.contoso.comand are successfully serving traffic for it from the cluster.
+prod.contoso.com
+You want to addstaging.contoso.comto your existing Application Gateway deployment, but you need to host it on avirtual machine. You're going to reuse the existing Application Gateway deployment and manually configure a listener and backend pools forstaging.contoso.com. But manually tweaking the Application Gateway configuration (by using theAzure portal,Resource Manager APIs, orTerraform) would conflict with AGIC's assumptions of full ownership. Shortly after you apply changes, AGIC overwrites or deletes them.
+staging.contoso.com
+staging.contoso.com
+You can prohibit AGIC from making changes to a subset of the configuration:
+Create a new YAML file namedAzureIngressProhibitedTargetby using the following snippet:cat <<EOF | kubectl apply -f -
+apiVersion: "appgw.ingress.k8s.io/v1"
+kind: AzureIngressProhibitedTarget
+metadata:
+  name: manually-configured-staging-environment
+spec:
+  hostname: staging.contoso.com
+EOF
+Create a new YAML file namedAzureIngressProhibitedTargetby using the following snippet:
+AzureIngressProhibitedTarget
+cat <<EOF | kubectl apply -f -
+apiVersion: "appgw.ingress.k8s.io/v1"
+kind: AzureIngressProhibitedTarget
+metadata:
+  name: manually-configured-staging-environment
+spec:
+  hostname: staging.contoso.com
+EOF
+cat <<EOF | kubectl apply -f -
+apiVersion: "appgw.ingress.k8s.io/v1"
+kind: AzureIngressProhibitedTarget
+metadata:
+  name: manually-configured-staging-environment
+spec:
+  hostname: staging.contoso.com
+EOF
+View the newly created object:kubectl get AzureIngressProhibitedTargets
+View the newly created object:
+kubectl get AzureIngressProhibitedTargets
+kubectl get AzureIngressProhibitedTargets
+Modify the Application Gateway configuration from the Azure portal. For example, add listeners, routing rules, and backends. The new object that you created (manually-configured-staging-environment) prohibits AGIC from overwriting the Application Gateway configuration related tostaging.contoso.com.
+Modify the Application Gateway configuration from the Azure portal. For example, add listeners, routing rules, and backends. The new object that you created (manually-configured-staging-environment) prohibits AGIC from overwriting the Application Gateway configuration related tostaging.contoso.com.
+manually-configured-staging-environment
+staging.contoso.com
+Related content
+Application Gateway for Containers
+Feedback
+Was this page helpful?
+Additional resources

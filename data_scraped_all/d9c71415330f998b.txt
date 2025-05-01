@@ -1,0 +1,180 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Azure Container Registry authentication with service principals
+Article
+2024-09-19
+15 contributors
+In this article
+You can use a Microsoft Entra service principal to provide push, pull, or other access to your container registry. By using a service principal, you can provide access to "headless" services and applications.
+What is a service principal?
+Microsoft Entra IDservice principalsprovide access to Azure resources within your subscription. You can think of a service principal as a user identity for a service, where "service" is any application, service, or platform that needs to access the resources. You can configure a service principal with access rights scoped only to those resources you specify. Then, configure your application or service to use the service principal's credentials to access those resources.
+In the context of Azure Container Registry, you can create a Microsoft Entra service principal with pull, push and pull, or other permissions to your private registry in Azure. For a complete list, seeAzure Container Registry roles and permissions.
+Why use a service principal?
+By using a Microsoft Entra service principal, you can provide scoped access to your private container registry. Create different service principals for each of your applications or services, each with tailored access rights to your registry. And, because you can avoid sharing credentials between services and applications, you can rotate credentials or revoke access for only the service principal (and thus the application) you choose.
+For example, configure your web application to use a service principal that provides it with imagepullaccess only, while your build system uses a service principal that provides it with bothpushandpullaccess. If development of your application changes hands, you can rotate its service principal credentials without affecting the build system.
+pull
+push
+pull
+When to use a service principal
+You should use a service principal to provide registry access inheadless scenarios. That is, an application, service, or script that must push or pull container images in an automated or otherwise unattended manner. For example:
+Pull: Deploy containers from a registry to orchestration systems including Kubernetes, DC/OS, and Docker Swarm. You can also pull from container registries to related Azure services such asApp Service,Batch,Service Fabric, and others.TipA service principal is recommended in severalKubernetes scenariosto pull images from an Azure container registry. With Azure Kubernetes Service (AKS), you can also use an automated mechanism to authenticate with a target registry by enabling the cluster'smanaged identity.Push: Build container images and push them to a registry using continuous integration and deployment solutions like Azure Pipelines or Jenkins.
+Pull: Deploy containers from a registry to orchestration systems including Kubernetes, DC/OS, and Docker Swarm. You can also pull from container registries to related Azure services such asApp Service,Batch,Service Fabric, and others.
+Tip
+A service principal is recommended in severalKubernetes scenariosto pull images from an Azure container registry. With Azure Kubernetes Service (AKS), you can also use an automated mechanism to authenticate with a target registry by enabling the cluster'smanaged identity.
+Push: Build container images and push them to a registry using continuous integration and deployment solutions like Azure Pipelines or Jenkins.
+For individual access to a registry, such as when you manually pull a container image to your development workstation, we recommend using your ownMicrosoft Entra identityinstead for registry access (for example, withaz acr login).
+Create a service principal
+To create a service principal with access to your container registry, run the following script in theAzure Cloud Shellor a local installation of theAzure CLI. The script is formatted for the Bash shell.
+Before running the script, update theACR_NAMEvariable with the name of your container registry. TheSERVICE_PRINCIPAL_NAMEvalue must be unique within your Microsoft Entra tenant. If you receive an "'http://acr-service-principal' already exists." error, specify a different name for the service principal.
+ACR_NAME
+SERVICE_PRINCIPAL_NAME
+'http://acr-service-principal' already exists.
+You can optionally modify the--rolevalue in theaz ad sp create-for-rbaccommand if you want to grant different permissions. For a complete list of roles, seeACR roles and permissions.
+--role
+After you run the script, take note of the service principal'sIDandpassword. Once you have its credentials, you can configure your applications and services to authenticate to your container registry as the service principal.
+#!/bin/bash
+# This script requires Azure CLI version 2.25.0 or later. Check version with `az --version`.
+
+# Modify for your environment.
+# ACR_NAME: The name of your Azure Container Registry
+# SERVICE_PRINCIPAL_NAME: Must be unique within your AD tenant
+ACR_NAME=$containerRegistry
+SERVICE_PRINCIPAL_NAME=$servicePrincipal
+
+# Obtain the full registry ID
+ACR_REGISTRY_ID=$(az acr show --name $ACR_NAME --query "id" --output tsv)
+# echo $registryId
+
+# Create the service principal with rights scoped to the registry.
+# Default permissions are for docker pull access. Modify the '--role'
+# argument value as desired:
+# acrpull:     pull only
+# acrpush:     push and pull
+# owner:       push, pull, and assign roles
+PASSWORD=$(az ad sp create-for-rbac --name $SERVICE_PRINCIPAL_NAME --scopes $ACR_REGISTRY_ID --role acrpull --query "password" --output tsv)
+USER_NAME=$(az ad sp list --display-name $SERVICE_PRINCIPAL_NAME --query "[].appId" --output tsv)
+
+# Output the service principal's credentials; use these in your services and
+# applications to authenticate to the container registry.
+echo "Service principal ID: $USER_NAME"
+echo "Service principal password: $PASSWORD"
+#!/bin/bash
+# This script requires Azure CLI version 2.25.0 or later. Check version with `az --version`.
+
+# Modify for your environment.
+# ACR_NAME: The name of your Azure Container Registry
+# SERVICE_PRINCIPAL_NAME: Must be unique within your AD tenant
+ACR_NAME=$containerRegistry
+SERVICE_PRINCIPAL_NAME=$servicePrincipal
+
+# Obtain the full registry ID
+ACR_REGISTRY_ID=$(az acr show --name $ACR_NAME --query "id" --output tsv)
+# echo $registryId
+
+# Create the service principal with rights scoped to the registry.
+# Default permissions are for docker pull access. Modify the '--role'
+# argument value as desired:
+# acrpull:     pull only
+# acrpush:     push and pull
+# owner:       push, pull, and assign roles
+PASSWORD=$(az ad sp create-for-rbac --name $SERVICE_PRINCIPAL_NAME --scopes $ACR_REGISTRY_ID --role acrpull --query "password" --output tsv)
+USER_NAME=$(az ad sp list --display-name $SERVICE_PRINCIPAL_NAME --query "[].appId" --output tsv)
+
+# Output the service principal's credentials; use these in your services and
+# applications to authenticate to the container registry.
+echo "Service principal ID: $USER_NAME"
+echo "Service principal password: $PASSWORD"
+Use an existing service principal
+To grant registry access to an existing service principal, you must assign a new role to the service principal. As with creating a new service principal, you can grant pull, push and pull, and owner access, among others.
+The following script uses theaz role assignment createcommand to grantpullpermissions to a service principal you specify in theSERVICE_PRINCIPAL_IDvariable. Adjust the--rolevalue if you'd like to grant a different level of access.
+SERVICE_PRINCIPAL_ID
+--role
+#!/bin/bash
+# Modify for your environment. The ACR_NAME is the name of your Azure Container
+# Registry, and the SERVICE_PRINCIPAL_ID is the service principal's 'appId' or
+# one of its 'servicePrincipalNames' values.
+ACR_NAME=$containerRegistry
+SERVICE_PRINCIPAL_ID=$servicePrincipal
+
+# Populate value required for subsequent command args
+ACR_REGISTRY_ID=$(az acr show --name $ACR_NAME --query id --output tsv)
+
+# Assign the desired role to the service principal. Modify the '--role' argument
+# value as desired:
+# acrpull:     pull only
+# acrpush:     push and pull
+# owner:       push, pull, and assign roles
+az role assignment create --assignee $SERVICE_PRINCIPAL_ID --scope $ACR_REGISTRY_ID --role acrpull
+#!/bin/bash
+# Modify for your environment. The ACR_NAME is the name of your Azure Container
+# Registry, and the SERVICE_PRINCIPAL_ID is the service principal's 'appId' or
+# one of its 'servicePrincipalNames' values.
+ACR_NAME=$containerRegistry
+SERVICE_PRINCIPAL_ID=$servicePrincipal
+
+# Populate value required for subsequent command args
+ACR_REGISTRY_ID=$(az acr show --name $ACR_NAME --query id --output tsv)
+
+# Assign the desired role to the service principal. Modify the '--role' argument
+# value as desired:
+# acrpull:     pull only
+# acrpush:     push and pull
+# owner:       push, pull, and assign roles
+az role assignment create --assignee $SERVICE_PRINCIPAL_ID --scope $ACR_REGISTRY_ID --role acrpull
+Sample scripts
+You can find the preceding sample scripts for Azure CLI on GitHub, as well as versions for Azure PowerShell:
+Azure CLI
+Azure PowerShell
+Authenticate with the service principal
+Once you have a service principal that you've granted access to your container registry, you can configure its credentials for access to "headless" services and applications, or enter them using thedocker logincommand. Use the following values:
+docker login
+Username- service principal'sapplication (client) ID
+Password- service principal'spassword (client secret)
+TheUsernamevalue has the formatxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.
+xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+Tip
+You can regenerate the password (client secret) of a service principal by running theaz ad sp credential resetcommand.
+Use credentials with Azure services
+You can use service principal credentials from any Azure service that authenticates with an Azure container registry.  Use service principal credentials in place of the registry's admin credentials for a variety of scenarios.
+Use with docker login
+You can rundocker loginusing a service principal. In the following example, the service principal application ID is passed in the environment variable$SP_APP_ID, and the password in the variable$SP_PASSWD. For recommended practices to manage Docker credentials, see thedocker logincommand reference.
+docker login
+$SP_APP_ID
+$SP_PASSWD
+# Log in to Docker with service principal credentials
+docker login myregistry.azurecr.io --username $SP_APP_ID --password $SP_PASSWD
+# Log in to Docker with service principal credentials
+docker login myregistry.azurecr.io --username $SP_APP_ID --password $SP_PASSWD
+Once logged in, Docker caches the credentials.
+Use with certificate
+If you've added a certificate to your service principal, you can sign in to the Azure CLI with certificate-based authentication, and then use theaz acr logincommand to access a registry. Using a certificate as a secret instead of a password provides additional security when you use the CLI.
+A self-signed certificate can be created when youcreate a service principal. Or, add one or more certificates to an existing service principal. For example, if you use one of the scripts in this article to create or update a service principal with rights to pull or push images from a registry, add a certificate using theaz ad sp credential resetcommand.
+To use the service principal with certificate tosign in to the Azure CLI, the certificate must be in PEM format and include the private key. If your certificate isn't in the required format, use a tool such asopensslto convert it. When you runaz loginto sign into the CLI using the service principal, also provide the service principal's application ID and the Active Directory tenant ID. The following example shows these values as environment variables:
+openssl
+az login --service-principal --username $SP_APP_ID --tenant $SP_TENANT_ID  --password /path/to/cert/pem/file
+az login --service-principal --username $SP_APP_ID --tenant $SP_TENANT_ID  --password /path/to/cert/pem/file
+Then, runaz acr loginto authenticate with the registry:
+az acr login --name myregistry
+az acr login --name myregistry
+The CLI uses the token created when you ranaz loginto authenticate your session with the registry.
+az login
+Create service principal for cross-tenant scenarios
+A service principal can also be used in Azure scenarios that require pulling images from a container registry in one Microsoft Entra ID (tenant) to a service or app in another. For example, an organization might run an app in Tenant A that needs to pull an image from a shared container registry in Tenant B.
+To create a service principal that can authenticate with a container registry in a cross-tenant scenario:
+Create amultitenant app(service principal) in Tenant A
+Provision the app in Tenant B
+Grant the service principal permissions to pull from the registry in Tenant B
+Update the service or app in Tenant A to authenticate using the new service principal
+For example steps, seePull images from a container registry to an AKS cluster in a different AD tenant.
+Service principal renewal
+The service principal is created with one-year validity. You have options to extend the validity further than one year, or can provide expiry date of your choice using theaz ad sp credential resetcommand.
+az ad sp credential reset
+Next steps
+See theauthentication overviewfor other scenarios to authenticate with an Azure container registry.
+See theauthentication overviewfor other scenarios to authenticate with an Azure container registry.
+For an example of using an Azure key vault to store and retrieve service principal credentials for a container registry, see the tutorial tobuild and deploy a container image using ACR Tasks.
+For an example of using an Azure key vault to store and retrieve service principal credentials for a container registry, see the tutorial tobuild and deploy a container image using ACR Tasks.
+Feedback
+Was this page helpful?
+Additional resources

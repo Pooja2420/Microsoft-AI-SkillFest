@@ -1,0 +1,114 @@
+Run a Linux VM on Azure
+Provisioning a virtual machine (VM) in Azure requires additional components besides the VM itself, including networking and storage resources. This article shows best practices for running a secure Linux VM on Azure.
+Architecture
+
+Download aVisio fileof this architecture.
+Workflow
+Resource group
+Aresource groupis a logical container that holds related Azure resources. In general, group resources based on their lifetime and who will manage them.
+Put closely associated resources that share the same lifecycle into the sameresource group. Resource groups allow you to deploy and monitor resources as a group and track billing costs by resource group. You can also delete resources as a set, which is useful for test deployments. Assign meaningful resource names to simplify locating a specific resource and understanding its role. For more information, seeRecommended Naming Conventions for Azure Resources.
+Virtual machine
+You can provision a VM from a list of published images, or from a custom managed image or virtual hard disk (VHD) file uploaded to Azure Blob storage.  Azure supports running various popular Linux distributions, including Debian, Red Hat Enterprise Linux (RHEL), and Ubuntu. For more information, seeAzure and Linux.
+Azure offers many different virtual machine sizes. For more information, seeSizes for virtual machines in Azure. If you're moving an existing workload to Azure, start with the VM size that's the closest match to your on-premises servers. Then measure the performance of your actual workload in terms of CPU, memory, and disk input/output operations per second (IOPS), and adjust the size as needed.
+Generally, choose an Azure region that is closest to your internal users or customers. Not all VM sizes are available in all regions. For more information, seeServices by region. For a list of the VM sizes available in a specific region, run the following command from the Azure CLI:
+az vm list-sizes --location <location>
+az vm list-sizes --location <location>
+For information about choosing a published VM image, seeFind Linux VM images.
+Disks
+For best disk I/O performance, we recommendPremium Storage, which stores data on solid-state drives (SSDs). Cost is based on the capacity of the provisioned disk. IOPS and throughput (that is, data transfer rate) also depend on disk size, so when you provision a disk, consider all three factors (capacity, IOPS, and throughput). Premium storage also features free bursting, combined with an understanding of workload patterns, offers an effective SKU selection and cost optimization strategy for IaaS infrastructure, enabling high performance without excessive over-provisioning and minimizing the cost of unused capacity.
+Managed Diskssimplify disk management by handling the storage for you. Managed disks don't require a storage account. You specify the size and type of disk and it's deployed as a highly available resource. Managed disks also offer cost optimization by providing desired performance without the need for over-provisioning, accounting for fluctuating workload patterns, and minimizing unused provisioned capacity.
+The OS disk is a VHD stored inAzure Storage, so it persists even when the host machine is down. The VHD can be locally attached NVMe or similar devices available on many VM SKUs.
+Ephemeral disks provide good performance at no extra cost, but come with the significant drawbacks of being non-persistent, having limited capacity, and being restricted to OS and temp disk use only. For Linux VMs, the OS disk is/dev/sda1. We also recommend creating one or moredata disks, which are persistent VHDs used for application data.
+/dev/sda1
+When you create a VHD, it is unformatted. Log in to the VM to format the disk. In the Linux shell, data disks are displayed as/dev/sdc,/dev/sdd, and so on. You can runlsblkto list the block devices, including the disks. To use a data disk, create a partition and file system, and mount the disk. For example:
+/dev/sdc
+/dev/sdd
+lsblk
+# Create a partition.
+
+sudo fdisk /dev/sdc     # Enter 'n' to partition, 'w' to write the change.
+
+# Create a file system.
+
+sudo mkfs -t ext3 /dev/sdc1
+
+# Mount the drive.
+
+sudo mkdir /data1
+sudo mount /dev/sdc1 /data1
+# Create a partition.
+
+sudo fdisk /dev/sdc     # Enter 'n' to partition, 'w' to write the change.
+
+# Create a file system.
+
+sudo mkfs -t ext3 /dev/sdc1
+
+# Mount the drive.
+
+sudo mkdir /data1
+sudo mount /dev/sdc1 /data1
+When you add a data disk, a logical unit number (LUN) ID is assigned to the disk. Optionally, you can specify the LUN ID â for example, if you're replacing a disk and want to retain the same LUN ID, or you have an application that looks for a specific LUN ID. However, remember that LUN IDs must be unique for each disk.
+You may want to change the I/O scheduler to optimize for performance on SSDs because the disks for VMs with premium storage accounts are SSDs. A common recommendation is to use the NOOP scheduler for SSDs, but you should use a tool such asiostatto monitor disk I/O performance for your workload.
+The VM is created with a temporary disk. This disk is stored on a physical drive on the host machine. It isnotsaved in Azure Storage and may be deleted during reboots and other VM lifecycle events. Use this disk only for temporary data, such as page or swap files. For Linux VMs, the temporary disk is/dev/disk/azure/resource-part1and is mounted at/mnt/resourceor/mnt.
+/dev/disk/azure/resource-part1
+/mnt/resource
+/mnt
+Network
+The networking components include the following resources:
+Virtual network. Every VM is deployed into a virtual network that gets segmented into subnets.
+Virtual network. Every VM is deployed into a virtual network that gets segmented into subnets.
+Network interface (NIC). The NIC enables the VM to communicate with the virtual network. If you need multiple NICs for your VM, a maximum number of NICs is defined for eachVM size.
+Network interface (NIC). The NIC enables the VM to communicate with the virtual network. If you need multiple NICs for your VM, a maximum number of NICs is defined for eachVM size.
+Public IP address. A public IP address is needed to communicate with the VM â for example, via Remote Desktop Protocol (RDP). The public IP address can be dynamic or static. The default is dynamic.Reserve astatic IP addressif you need a fixed IP address that doesn't change â for example, if you need to create a DNS 'A' record or add the IP address to a safe list.You can also create a fully qualified domain name (FQDN) for the IP address. You can then register aCNAME recordin DNS that points to the FQDN. For more information, seeCreate a fully qualified domain name in the Azure portal.
+Public IP address. A public IP address is needed to communicate with the VM â for example, via Remote Desktop Protocol (RDP). The public IP address can be dynamic or static. The default is dynamic.
+Reserve astatic IP addressif you need a fixed IP address that doesn't change â for example, if you need to create a DNS 'A' record or add the IP address to a safe list.
+You can also create a fully qualified domain name (FQDN) for the IP address. You can then register aCNAME recordin DNS that points to the FQDN. For more information, seeCreate a fully qualified domain name in the Azure portal.
+Network security group (NSG).Network security groupsare used to allow or deny network traffic to VMs. NSGs can be associated either with subnets or with individual VM instances.All NSGs contain a set ofdefault rules, including a rule that blocks all inbound Internet traffic. The default rules cannot be deleted, but other rules can override them. To enable Internet traffic, create rules that allow inbound traffic to specific ports â for example, port 80 for HTTP. To enable Secure Shell (SSH), add an NSG rule that allows inbound traffic to TCP port 22.
+Network security group (NSG).Network security groupsare used to allow or deny network traffic to VMs. NSGs can be associated either with subnets or with individual VM instances.
+All NSGs contain a set ofdefault rules, including a rule that blocks all inbound Internet traffic. The default rules cannot be deleted, but other rules can override them. To enable Internet traffic, create rules that allow inbound traffic to specific ports â for example, port 80 for HTTP. To enable Secure Shell (SSH), add an NSG rule that allows inbound traffic to TCP port 22.
+Azure NAT Gateway.Network Address Translation (NAT) gatewaysallow all instances in a private subnet to connect outbound to the internet while remaining fully private. Only packets that arrive as response packets to an outbound connection can pass through a NAT gateway. Unsolicited inbound connections from the internet aren't permitted.
+Azure NAT Gateway.Network Address Translation (NAT) gatewaysallow all instances in a private subnet to connect outbound to the internet while remaining fully private. Only packets that arrive as response packets to an outbound connection can pass through a NAT gateway. Unsolicited inbound connections from the internet aren't permitted.
+Azure Bastion.Azure Bastionis a fully managed platform as a service solution that provides secure access to VMs via private IP addresses. With this configuration, VMs don't need a public IP address that exposes them to the internet, which increases their security posture. Azure Bastion provides secure RDP or SSH connectivity to your VMs directly over Transport Layer Security (TLS) through various methods, including the Azure portal or native SSH or RDP clients.
+Azure Bastion.Azure Bastionis a fully managed platform as a service solution that provides secure access to VMs via private IP addresses. With this configuration, VMs don't need a public IP address that exposes them to the internet, which increases their security posture. Azure Bastion provides secure RDP or SSH connectivity to your VMs directly over Transport Layer Security (TLS) through various methods, including the Azure portal or native SSH or RDP clients.
+Operations
+SSH. Before you create a Linux VM, generate a 2048-bit RSA public-private key pair. Use the public key file when you create the VM. For more information, seeHow to Use SSH with Linux and Mac on Azure.
+Diagnostics. Enable monitoring and diagnostics, including basic health metrics, diagnostics infrastructure logs, andboot diagnostics. Boot diagnostics can help you diagnose boot failure if your VM gets into a non-bootable state. Create an Azure Storage account to store the logs. A standard locally redundant storage (LRS) account is sufficient for diagnostic logs. For more information, seeEnable monitoring and diagnostics.
+Availability. Your VM might be affected byplanned maintenanceorunplanned downtime. You can useVM reboot logsto determine whether a VM reboot was caused by planned maintenance. For higher availability, deploy multiple VMs in anavailability setor acrossavailability zonesin a region. Both of these configurations provide a higherservice-level agreement (SLA).
+BackupsTo protect against accidental data loss, use theAzure Backupservice to back up your VMs to geo-redundant storage. Azure Backup provides application-consistent backups.
+Stopping a VM. Azure makes a distinction between "stopped" and "deallocated" states. You are charged when the VM status is stopped, but not when the VM is deallocated. In the Azure portal, theStopbutton deallocates the VM. If you shut down through the OS while logged in, the VM is stopped butnotdeallocated, so you will still be charged.
+Deleting a VM. If you delete a VM, you have the option to delete or keep its disks. That means you can safely delete the VM without losing data. However, you will still be charged for the disks. You can delete managed disks just like any other Azure resource. To prevent accidental deletion, use aresource lockto lock the entire resource group or lock individual resources, such as a VM.
+Considerations
+These considerations implement the pillars of the Azure Well-Architected Framework, which is a set of guiding tenets that can be used to improve the quality of a workload. For more information, seeMicrosoft Azure Well-Architected Framework.
+Security
+Security provides assurances against deliberate attacks and the abuse of your valuable data and systems. For more information, seeDesign review checklist for Security.
+UseMicrosoft Defender for Cloudto get a central view of the security state of your Azure resources. Defender for Cloud monitors potential security issues and provides a comprehensive picture of the security health of your deployment. Defender for Cloud is configured per Azure subscription. Enable security data collection as described inOnboard your Azure subscription to Defender for Cloud Standard. When data collection is enabled, Defender for Cloud automatically scans any VMs created under that subscription.
+Patch management. If enabled, Defender for Cloud checks whether any security and critical updates are missing.
+Antimalware. If enabled, Defender for Cloud checks whether antimalware software is installed. You can also use Defender for Cloud to install antimalware software from inside the Azure portal.
+Access control. UseAzure role-based access control (Azure RBAC)to control access to Azure resources. Azure RBAC lets you assign authorization roles to members of your DevOps team. For example, the Reader role can view Azure resources but not create, manage, or delete them. Some permissions are specific to an Azure resource type. For example, the Virtual Machine Contributor role can restart or deallocate a VM, reset the administrator password, create a new VM, and so on. Otherbuilt-in rolesthat may be useful for this architecture includeDevTest Labs UserandNetwork Contributor.
+Note
+Azure RBAC does not limit the actions that a user logged into a VM can perform. Those permissions are determined by the account type on the guest OS.
+Audit logs. Useaudit logsto see provisioning actions and other VM events.
+Data encryption. UseAzure Disk Encryptionif you need to encrypt the OS and data disks.
+Cost Optimization
+Cost Optimization is about looking at ways to reduce unnecessary expenses and improve operational efficiencies. For more information, seeDesign review checklist for Cost Optimization.
+There are various options for VM sizes depending on the usage and workload. The range includes most economical option of the Bs-series to the newest GPU VMs optimized for machine learning. For information about the available options, seeAzure Linux VM pricing.
+For predictable workloads, useAzure ReservationsandAzure savings plan for computewith a one-year or three-year contract and receive significant savings off pay-as-you-go prices. For workloads with no predictable time of completion or resource consumption, consider thePay as you gooption.
+UseAzure Spot VMsto run workloads the can be interrupted and do not require completion within a predetermined timeframe or an SLA. Azure deploys Spot VMs if there is available capacity and evicts when it needs the capacity back. Costs associated with Spot virtual machines are significantly lower.  Consider Spot VMs for these workloads:
+High-performance computing scenarios, batch processing jobs, or visual rendering applications.
+Test environments, including continuous integration and continuous delivery workloads.
+Large-scale stateless applications.
+Use theAzure Pricing Calculatorto estimates costs.
+For more information, see the cost section inMicrosoft Azure Well-Architected Framework.
+Operational Excellence
+Operational Excellence covers the operations processes that deploy an application and keep it running in production. For more information, seeDesign review checklist for Operational Excellence.
+Use a singleAzure Resource Manager templatefor provisioning the Azure resources and its dependencies. Because all the resources are in the same virtual network, they are isolated in the same basic workload. It makes it easier to associate the workload's specific resources to a DevOps team, so that the team can independently manage all aspects of those resources. This isolation enables the DevOps Team to perform continuous integration and continuous delivery (CI/CD).
+Also, you can use differentAzure Resource Manager templatesand integrate them withAzure DevOps Servicesto provision different environments in minutes, for example to replicate production like scenarios or load testing environments only when needed, saving cost.
+Consider using theAzure Monitorto Analyze and optimize the performance of your infrastructure, Monitor and diagnose networking issues without logging into your virtual machines.
+Next steps
+To create a Linux VM, seeQuickstart: Create a Linux virtual machine in the Azure portal
+To install an NVIDIA driver on a Linux VM, seeInstall NVIDIA GPU drivers on N-series VMs running Linux
+To provision a Linux VM, seeCreate and Manage Linux VMs with the Azure CLI
+Default outbound access in Azure
+Related resource
+Run a Windows VM on Azure

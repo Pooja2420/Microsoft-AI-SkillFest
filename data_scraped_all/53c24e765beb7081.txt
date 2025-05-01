@@ -1,0 +1,481 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Troubleshoot transient connection errors
+Article
+2025-02-10
+13 contributors
+In this article
+Applies to:Azure SQL DatabaseAzure SQL Managed InstanceAzure Synapse AnalyticsSQL database in Fabric
+This article describes how to prevent, troubleshoot, diagnose, and mitigate connection errors and transient errors that your client application encounters when it interacts with Azure SQL Database, SQL database in Microsoft Fabric, Azure SQL Managed Instance, and Azure Synapse Analytics. Learn how to configure retry logic, build the connection string, and adjust other connection settings.
+
+Transient errors (transient faults)
+A transient error, also known as a transient fault, has an underlying cause that soon resolves itself. An occasional cause of transient errors is when the Azure system quickly shifts hardware resources to better load-balance various workloads. Most of these reconfiguration events finish in less than 60 seconds. During this reconfiguration time span, you might have issues with connecting to your database in SQL Database. Applications that connect to your database should be built to expect these transient errors. To handle them, implement retry logic in their code instead of surfacing them to users as application errors.
+If your client program uses ADO.NET, your program is told about the transient error by the throw ofSqlException.
+
+Connection vs. command
+Retry the connection or establish it again, depending on the following:
+A transient error occurs during a connection try
+After a delay of several seconds, retry the connection.
+A transient error occurs during a query command
+Do not immediately retry the command. Instead, after a delay, freshly establish the connection. Then retry the command.
+
+Retry logic for transient errors
+Client programs that occasionally encounter a transient error are more robust when they contain retry logic. When your program communicates with your database in SQL Database through third-party middleware, ask the vendor whether the middleware contains retry logic for transient errors.
+
+Principles for retry
+If the error is transient, retry to open a connection.
+Do not directly retry aSELECTstatement that failed with a transient error. Instead, establish a fresh connection, and then retry theSELECT.
+SELECT
+SELECT
+When anUPDATEstatement fails with a transient error, establish a fresh connection before you retry theUPDATE. The retry logic must ensure that either the entire database transaction finished or that the entire transaction is rolled back.
+UPDATE
+UPDATE
+Other considerations for retry
+A batch program that automatically starts after work hours and finishes before morning can afford to be very patient with long time intervals between its retry attempts.
+A user interface program should account for the human tendency to give up after too long a wait. The solution must not retry every few seconds, because that policy can flood the system with requests.
+Interval increase between retries
+We recommend that you wait for 5 seconds before your first retry. Retrying after a delay shorter than 5 seconds risks overwhelming the cloud service. For each subsequent retry, the delay should grow exponentially, up to a maximum of 60 seconds.
+For a discussion of the blocking period for clients that use ADO.NET, seeConnection pooling (ADO.NET).
+You also might want to set a maximum number of retries before the program self-terminates.
+Code samples with retry logic
+Code examples with retry logic are available at:
+Connect resiliently to Azure SQL with ADO.NET
+Connect resiliently to Azure SQL with PHP
+
+Test your retry logic
+To test your retry logic, you must simulate or cause an error that can be corrected while your program is still running.
+One way you can test your retry logic is to disconnect your client computer from the network while the program is running. The error is:
+SqlException.Number= 11001
+Message: "No such host is known"
+As part of the first retry attempt, you can reconnect your client computer to the network and then attempt to connect.
+To make this test practical, unplug your computer from the network before you start your program. Then your program recognizes a runtime parameter that causes the program to:
+Temporarily add 11001 to its list of errors to consider as transient.
+Attempt its first connection as usual.
+After the error is caught, remove 11001 from the list.
+Display a message that tells the user to plug the computer into the network.
+Pause further execution by using either theConsole.ReadLinemethod or a dialog with an OK button. The user presses the Enter key after the computer is plugged into the network.
+Attempt again to connect, expecting success.
+Your program can purposely misspell the user name before the first connection attempt. The error is:
+SqlException.Number= 18456
+Message: "Login failed for user 'WRONG_MyUserName'."
+As part of the first retry attempt, your program can correct the misspelling and then attempt to connect.
+To make this test practical, your program recognizes a runtime parameter that causes the program to:
+Temporarily add 18456 to its list of errors to consider as transient.
+Purposely add 'WRONG_' to the user name.
+After the error is caught, remove 18456 from the list.
+Remove 'WRONG_' from the user name.
+Attempt again to connect, expecting success.
+
+.NET SqlConnection parameters for connection retry
+If your client program connects to your database in Azure SQL Database by using the .NET Framework classSystem.Data.SqlClient.SqlConnection, use .NET 4.6.1 or a later version (or .NET Core) so that you can use its connection retry feature. For more information about this feature, seeSqlConnection.ConnectionString Property.
+When you build theconnection stringfor yourSqlConnectionobject, coordinate the values among the following parameters:
+ConnectRetryCount:  Default is1. The range is0through255.
+ConnectRetryInterval:  Default is10seconds. The range is1through60.
+Connection Timeout:  Default is15seconds. The range is0through2147483647.
+Command Timeout:  Default is30seconds. The range is0through2147483647.
+The connection retry settings (ConnectRetryCountandConnectRetryInterval) apply to connection resiliency. Connection resiliency includes the following distinct types:
+Open connection resiliency refers to the initialSqlConnection.OpenorOpenAsync()method. The first connection attempt is counted as try zero.ConnectRetryCountapplies to subsequent retries. Therefore, if connection zero fails (this might not occur immediately),ConnectRetryIntervalis applied first followed by subsequentConnectRetryCount(andConnectRetryInterval) attempts. To take advantage of all retry attempts, theConnection Timeoutproperty must provide time for all attempts.
+Open connection resiliency refers to the initialSqlConnection.OpenorOpenAsync()method. The first connection attempt is counted as try zero.ConnectRetryCountapplies to subsequent retries. Therefore, if connection zero fails (this might not occur immediately),ConnectRetryIntervalis applied first followed by subsequentConnectRetryCount(andConnectRetryInterval) attempts. To take advantage of all retry attempts, theConnection Timeoutproperty must provide time for all attempts.
+Idle connection resiliency refers to the automatic detection and reconnection of existing idle connections that were broken. The first attempt to reconnect a broken idle connection is counted as the first retry attempt. To take advantage of all retry attempts, theCommand Timeoutmust provide time for all attempts.
+Idle connection resiliency refers to the automatic detection and reconnection of existing idle connections that were broken. The first attempt to reconnect a broken idle connection is counted as the first retry attempt. To take advantage of all retry attempts, theCommand Timeoutmust provide time for all attempts.
+Example:
+Assume the following values for theConnectRetryCountandConnectRetryIntervalparameters:
+ConnectRetryCount: 3ConnectRetryInterval: 10 seconds
+See how these values are used in the following scenarios:
+Scenario: New connection
+4:10:00 - Connection.Open() - zero attempt
+4:10:01 - Connection failure detected
+4:10:11 - Retry 1 --> First retry occurs afterConnectRetryInterval
+4:10:21 - Retry 2
+4:10:31 - Retry 3
+For this scenario your chosen values should satisfy the following condition:Connection Timeout > = ConnectRetryCount * ConnectionRetryInterval
+Connection Timeout > = ConnectRetryCount * ConnectionRetryInterval
+For example, if the count is 3 and the interval is 10 seconds, a timeout of only 29 seconds doesn't provide enough time for the system's third and final retry to connect:
+29 < 3 * 10
+Scenario: Idle connection
+ConnectRetryCount: 3ConnectRetryInterval: 10 seconds
+4:10:00 - Broken connection detected on command execution
+4:10:00 - Retry 1 -->First retry occurs immediately
+4:10:10 - Retry 2
+4:10:20 - Retry 3
+This isn't the initial connection. Therefore,Connection Timeoutdoesn't apply. However, because the connection recovery occurs during command execution, theCommand Timeoutsetting does apply. TheCommand Timeoutdefault is 30 seconds. Although, connection recovery is fast in typical circumstances, an intermittent outage, could cause the recovery to take some of the command execution time.
+For this scenario, if you want to take full advantage of idle connection recovery retries, your chosen values should satisfy the following condition:Command Timeout > (ConnectRetryCount - 1) * ConnectionRetryInterval
+Command Timeout > (ConnectRetryCount - 1) * ConnectionRetryInterval
+For example, if the count is 3 and the interval is 10 seconds, a command timeout value lower than 20 seconds wouldn't give enough time for the third and final retry to connect: (3 - 1) * 10 = 20`
+Also, consider that the command itself requires time to execute after the connection is recovered.
+Note
+The duration values that are provided in these scenarios are for demonstration only. The actual detection times in both scenarios depend on the underlying infrastructure.
+
+Connection vs. command
+TheConnectRetryCountandConnectRetryIntervalparameters let yourSqlConnectionobject retry the connect operation without telling or bothering your program, such as returning control to your program. The retries can occur in the following situations:
+SqlConnection.Open method call
+SqlConnection.Execute method call
+There is a subtlety. If a transient error occurs while yourqueryis being executed, yourSqlConnectionobject doesn't retry the connect operation. It certainly doesn't retry your query. However,SqlConnectionvery quickly checks the connection before sending your query for execution. If the quick check detects a connection problem,SqlConnectionretries the connect operation. If the retry succeeds, your query is sent for execution.
+Should ConnectRetryCount be combined with application retry logic
+Suppose your application has robust custom retry logic. It might retry the connect operation four times. If you addConnectRetryIntervalandConnectRetryCount=3 to your connection string, you will increase the retry count to 4 * 3 = 12 retries. You might not intend such a high number of retries.
+
+Connections to your database in SQL Database
+
+Connection: Connection string
+The connection string that's necessary to connect to your database is slightly different from the string used to connect to SQL Server. You can copy the connection string for your database from theAzure portal.
+Obtain the connection string from the Azure portal
+Use theAzure portalto obtain the connection string that's necessary for your client program to interact with Azure SQL Database.
+SelectAll services>SQL databases.
+SelectAll services>SQL databases.
+Enter the name of your database into the filter text box near the upper left of theSQL databasespane.
+Enter the name of your database into the filter text box near the upper left of theSQL databasespane.
+Select the row for your database.
+Select the row for your database.
+After the pane appears for your database, for visual convenience select theMinimizebuttons to collapse the blades you used for browsing and database filtering.
+After the pane appears for your database, for visual convenience select theMinimizebuttons to collapse the blades you used for browsing and database filtering.
+On the pane for your database, selectShow database connection strings.
+On the pane for your database, selectShow database connection strings.
+Copy the appropriate connection string. For example, if you intend to use the ADO.NET connection library, copy the appropriate string from theADO.NETtab.
+Copy the appropriate connection string. For example, if you intend to use the ADO.NET connection library, copy the appropriate string from theADO.NETtab.
+
+Edit the connection string as needed. In this example, insert your password into the connection string, or remove<server-name>from the username if the username or server name are too long.
+Edit the connection string as needed. In this example, insert your password into the connection string, or remove<server-name>from the username if the username or server name are too long.
+<server-name>
+In one format or another, paste the connection string information into your client program code.
+In one format or another, paste the connection string information into your client program code.
+For more information, seeConnection strings and configuration files.
+
+Connection: IP address
+You must configure SQL Database to accept communication from the IP address of the computer that hosts your client program. To set up this configuration, edit the firewall settings through theAzure portal.
+If you forget to configure the IP address, your program fails with a handy error message that states the necessary IP address.
+Sign in to theAzure portal.
+Sign in to theAzure portal.
+In the list on the left, selectAll services.
+In the list on the left, selectAll services.
+Scroll and selectSQL servers.
+Scroll and selectSQL servers.
+
+In the filter text box, start typing the name of your server. Your row is displayed.
+In the filter text box, start typing the name of your server. Your row is displayed.
+Select the row for your server. A pane for your server is displayed.
+Select the row for your server. A pane for your server is displayed.
+On your server pane, selectSettings.
+On your server pane, selectSettings.
+SelectFirewall.
+SelectFirewall.
+
+SelectAdd Client IP. Type a name for your new rule in the first text box.
+SelectAdd Client IP. Type a name for your new rule in the first text box.
+Type in the low and high IP address values for the range you want to enable.It can be handy to have the low value end with.0and the high value end with.255.
+Type in the low and high IP address values for the range you want to enable.
+It can be handy to have the low value end with.0and the high value end with.255.
+.0
+.255
+SelectSave.
+SelectSave.
+For more information, seeAzure SQL Database and Azure Synapse IP firewall rules.
+
+Connection: Ports
+Typically, you need to ensure that only port 1433 is open for outbound communication on the computer that hosts your client program.
+For example, when your client program is hosted on a Windows computer, you can use Windows Firewall on the host to open port 1433.
+Open Control Panel.
+SelectAll Control Panel Items>Windows Firewall>Advanced Settings>Outbound Rules>Actions>New Rule.
+If your client program is hosted on an Azure virtual machine (VM), readPorts beyond 1433 for ADO.NET 4.5.
+For background information about configuration of ports and IP addresses in your database, seeAzure SQL Database and Azure Synapse IP firewall rules.
+
+Connection: ADO.NET 4.6.2 or later
+If your program uses ADO.NET classes likeSystem.Data.SqlClient.SqlConnectionto connect to SQL Database, we recommend that you use .NET Framework version 4.6.2 or later.
+
+The connection open attempt to be retried immediately for Azure SQL, thereby improving the performance of cloud-enabled apps.
+
+For SQL Database, reliability is improved when you open a connection by using theSqlConnection.Openmethod. TheOpenmethod now incorporates best-effort retry mechanisms in response to transient faults for certain errors within the connection timeout period.
+Connection pooling is supported, which includes an efficient verification that the connection object it gives your program is functioning.
+When you use a connection object from a connection pool, we recommend that your program temporarily closes the connection when it's not immediately in use. It's not expensive to reopen a connection, but it is to create a new connection.
+If you use ADO.NET 4.0 or earlier, we recommend that you upgrade to the latest ADO.NET. As of August 2018, you candownload ADO.NET 4.6.2.
+
+Diagnostics
+
+Diagnostics: Test whether utilities can connect
+If your program fails to connect to your database in SQL Database, one diagnostic option is to try to connect with a utility program. Ideally, the utility connects by using the same library that your program uses.
+On any Windows computer, you can try these utilities:
+SQL Server Management Studio (ssms.exe), which connects by using ADO.NET
+sqlcmd.exe, which connects by usingODBC
+sqlcmd.exe
+After your program is connected, test whether a short SQL SELECT query works.
+
+Diagnostics: Check the open ports
+If you suspect that connection attempts fail due to port issues, you can run a utility on your computer that reports on the port configurations.
+On Linux, the following utilities might be helpful:
+netstat -nap
+netstat -nap
+nmap -sS -O 127.0.0.1: Change the example value to be your IP address.
+nmap -sS -O 127.0.0.1
+On Windows, thePortQry.exeutility might be helpful. Here's an example execution that queried the port situation on a database in SQL Database and that was run on a laptop computer:
+[C:\Users\johndoe\]
+>> portqry.exe -n johndoesvr9.database.windows.net -p tcp -e 1433
+
+Querying target system called: johndoesvr9.database.windows.net
+
+Attempting to resolve name to IP address...
+Name resolved to 23.100.117.95
+
+querying...
+TCP port 1433 (ms-sql-s service): LISTENING
+
+[C:\Users\johndoe\]
+>>
+[C:\Users\johndoe\]
+>> portqry.exe -n johndoesvr9.database.windows.net -p tcp -e 1433
+
+Querying target system called: johndoesvr9.database.windows.net
+
+Attempting to resolve name to IP address...
+Name resolved to 23.100.117.95
+
+querying...
+TCP port 1433 (ms-sql-s service): LISTENING
+
+[C:\Users\johndoe\]
+>>
+
+Diagnostics: Log your errors
+An intermittent problem is sometimes best diagnosed by detection of a general pattern over days or weeks.
+Your client can assist in a diagnosis by logging all errors it encounters. You might be able to correlate the log entries with error data that SQL Database logs itself internally.
+Enterprise Library 6 (EntLib60) offers .NET managed classes to assist with logging. For more information, see5 - As easy as falling off a log: Use the Logging Application Block.
+
+Diagnostics: Examine system logs for errors
+Here are some Transact-SQL SELECT statements that query error logs and other information.
+SELECT e.*
+FROM sys.event_log AS e
+WHERE e.database_name = 'myDbName'
+AND e.event_category = 'connectivity'
+AND 2 >= DateDiff
+(hour, e.end_time, GetUtcDate())
+ORDER BY e.event_category,
+e.event_type, e.end_time;
+SELECT c.*
+FROM sys.database_connection_stats AS c
+WHERE c.database_name = 'myDbName'
+AND 24 >= DateDiff
+(hour, c.end_time, GetUtcDate())
+ORDER BY c.end_time;
+
+Diagnostics: Search for problem events in the SQL Database log
+You can search for entries about problem events in the SQL Database log. Try the following Transact-SQL SELECT statement in themasterdatabase:
+SELECT
+   object_name
+  ,CAST(f.event_data as XML).value
+      ('(/event/@timestamp)[1]', 'datetime2')                      AS [timestamp]
+  ,CAST(f.event_data as XML).value
+      ('(/event/data[@name="error"]/value)[1]', 'int')             AS [error]
+  ,CAST(f.event_data as XML).value
+      ('(/event/data[@name="state"]/value)[1]', 'int')             AS [state]
+  ,CAST(f.event_data as XML).value
+      ('(/event/data[@name="is_success"]/value)[1]', 'bit')        AS [is_success]
+  ,CAST(f.event_data as XML).value
+      ('(/event/data[@name="database_name"]/value)[1]', 'sysname') AS [database_name]
+FROM
+  sys.fn_xe_telemetry_blob_target_read_file('el', null, null, null) AS f
+WHERE
+  object_name != 'login_event'  -- Login events are numerous.
+  and
+  '2015-06-21' < CAST(f.event_data as XML).value
+        ('(/event/@timestamp)[1]', 'datetime2')
+ORDER BY
+  [timestamp] DESC
+;
+SELECT
+   object_name
+  ,CAST(f.event_data as XML).value
+      ('(/event/@timestamp)[1]', 'datetime2')                      AS [timestamp]
+  ,CAST(f.event_data as XML).value
+      ('(/event/data[@name="error"]/value)[1]', 'int')             AS [error]
+  ,CAST(f.event_data as XML).value
+      ('(/event/data[@name="state"]/value)[1]', 'int')             AS [state]
+  ,CAST(f.event_data as XML).value
+      ('(/event/data[@name="is_success"]/value)[1]', 'bit')        AS [is_success]
+  ,CAST(f.event_data as XML).value
+      ('(/event/data[@name="database_name"]/value)[1]', 'sysname') AS [database_name]
+FROM
+  sys.fn_xe_telemetry_blob_target_read_file('el', null, null, null) AS f
+WHERE
+  object_name != 'login_event'  -- Login events are numerous.
+  and
+  '2015-06-21' < CAST(f.event_data as XML).value
+        ('(/event/@timestamp)[1]', 'datetime2')
+ORDER BY
+  [timestamp] DESC
+;
+The following example shows what a returned row might look like. The null values shown are often not null in other rows.
+object_name                   timestamp                    error  state  is_success  database_name
+
+database_xml_deadlock_report  2015-10-16 20:28:01.0090000  NULL   NULL   NULL        AdventureWorks
+object_name                   timestamp                    error  state  is_success  database_name
+
+database_xml_deadlock_report  2015-10-16 20:28:01.0090000  NULL   NULL   NULL        AdventureWorks
+
+Enterprise Library 6
+Enterprise Library 6 (EntLib60) is a framework of .NET classes that helps you implement robust clients of cloud services, one of which is SQL Database. To locate topics dedicated to each area in which EntLib60 can assist, seeEnterprise Library 6.
+Retry logic for handling transient errors is one area in which EntLib60 can assist. For more information, see4 - Perseverance, secret of all triumphs: Use the Transient Fault Handling Application Block.
+Note
+The source code for EntLib60 is available for public download from theDownload Center. Microsoft has no plans to make further feature updates or maintenance updates to EntLib.
+
+EntLib60 classes for transient errors and retry
+The following EntLib60 classes are particularly useful for retry logic. All these classes are found in or under the namespaceMicrosoft.Practices.EnterpriseLibrary.TransientFaultHandling.
+In the namespaceMicrosoft.Practices.EnterpriseLibrary.TransientFaultHandling:
+RetryPolicyclassExecuteActionmethod
+ExecuteActionmethod
+ExponentialBackoffclass
+SqlDatabaseTransientErrorDetectionStrategyclass
+ReliableSqlConnectionclassExecuteCommandmethod
+ExecuteCommandmethod
+In the namespaceMicrosoft.Practices.EnterpriseLibrary.TransientFaultHandling.TestSupport:
+AlwaysTransientErrorDetectionStrategyclass
+NeverTransientErrorDetectionStrategyclass
+Here are some links to information about EntLib60:
+Free book download:Developer's Guide to Microsoft Enterprise Library, 2nd edition.
+Best practices:Retry general guidancehas an excellent in-depth discussion of retry logic.
+NuGet download:Enterprise Library - Transient Fault Handling Application Block 6.0.
+
+EntLib60: The logging block
+The logging block is a highly flexible and configurable solution that you can use to:Create and store log messages in a wide variety of locations.Categorize and filter messages.Collect contextual information that is useful for debugging and tracing, as well as for auditing and general logging requirements.
+Create and store log messages in a wide variety of locations.
+Categorize and filter messages.
+Collect contextual information that is useful for debugging and tracing, as well as for auditing and general logging requirements.
+The logging block abstracts the logging functionality from the log destination so that the application code is consistent, irrespective of the location and type of the target logging store.
+For more information, see5 - As easy as falling off a log: Use the Logging Application Block.
+
+EntLib60 IsTransient method source code
+Next, from theSqlDatabaseTransientErrorDetectionStrategyclass, is the C# source code for theIsTransientmethod. The source code clarifies which errors were considered transient and worthy of retry.
+public bool IsTransient(Exception ex)
+{
+  if (ex != null)
+  {
+    SqlException sqlException;
+    if ((sqlException = ex as SqlException) != null)
+    {
+      // Enumerate through all errors found in the exception.
+      foreach (SqlError err in sqlException.Errors)
+      {
+        switch (err.Number)
+        {
+            // SQL Error Code: 40501
+            // The service is currently busy. Retry the request after 10 seconds.
+            // Code: (reason code to be decoded).
+          case ThrottlingCondition.ThrottlingErrorNumber:
+            // Decode the reason code from the error message to
+            // determine the grounds for throttling.
+            var condition = ThrottlingCondition.FromError(err);
+
+            // Attach the decoded values as additional attributes to
+            // the original SQL exception.
+            sqlException.Data[condition.ThrottlingMode.GetType().Name] =
+              condition.ThrottlingMode.ToString();
+            sqlException.Data[condition.GetType().Name] = condition;
+
+            return true;
+
+          case 10928:
+          case 10929:
+          case 10053:
+          case 10054:
+          case 10060:
+          case 40197:
+          case 40540:
+          case 40613:
+          case 40143:
+          case 233:
+          case 64:
+            // DBNETLIB Error Code: 20
+            // The instance of SQL Server you attempted to connect to
+            // does not support encryption.
+          case (int)ProcessNetLibErrorCode.EncryptionNotSupported:
+            return true;
+        }
+      }
+    }
+    else if (ex is TimeoutException)
+    {
+      return true;
+    }
+    else
+    {
+      EntityException entityException;
+      if ((entityException = ex as EntityException) != null)
+      {
+        return this.IsTransient(entityException.InnerException);
+      }
+    }
+  }
+
+  return false;
+}
+public bool IsTransient(Exception ex)
+{
+  if (ex != null)
+  {
+    SqlException sqlException;
+    if ((sqlException = ex as SqlException) != null)
+    {
+      // Enumerate through all errors found in the exception.
+      foreach (SqlError err in sqlException.Errors)
+      {
+        switch (err.Number)
+        {
+            // SQL Error Code: 40501
+            // The service is currently busy. Retry the request after 10 seconds.
+            // Code: (reason code to be decoded).
+          case ThrottlingCondition.ThrottlingErrorNumber:
+            // Decode the reason code from the error message to
+            // determine the grounds for throttling.
+            var condition = ThrottlingCondition.FromError(err);
+
+            // Attach the decoded values as additional attributes to
+            // the original SQL exception.
+            sqlException.Data[condition.ThrottlingMode.GetType().Name] =
+              condition.ThrottlingMode.ToString();
+            sqlException.Data[condition.GetType().Name] = condition;
+
+            return true;
+
+          case 10928:
+          case 10929:
+          case 10053:
+          case 10054:
+          case 10060:
+          case 40197:
+          case 40540:
+          case 40613:
+          case 40143:
+          case 233:
+          case 64:
+            // DBNETLIB Error Code: 20
+            // The instance of SQL Server you attempted to connect to
+            // does not support encryption.
+          case (int)ProcessNetLibErrorCode.EncryptionNotSupported:
+            return true;
+        }
+      }
+    }
+    else if (ex is TimeoutException)
+    {
+      return true;
+    }
+    else
+    {
+      EntityException entityException;
+      if ((entityException = ex as EntityException) != null)
+      {
+        return this.IsTransient(entityException.InnerException);
+      }
+    }
+  }
+
+  return false;
+}
+Related content
+Connection libraries for SQL Database and SQL Server
+Connection pooling (ADO.NET)
+Retryingis an Apache 2.0 licensed general-purpose retrying library, written in Python,
+Troubleshooting connectivity issues and other errors with Azure SQL Database and Azure SQL Managed Instance
+Troubleshooting transaction log errors with Azure SQL Database
+Troubleshooting transaction log errors with Azure SQL Managed Instance
+Feedback
+Was this page helpful?
+Additional resources

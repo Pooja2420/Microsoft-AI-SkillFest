@@ -1,0 +1,161 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Create an Azure SQL Managed Instance using the Azure CLI
+Article
+2024-07-31
+8 contributors
+In this article
+Applies to:Azure SQL Managed Instance
+This Azure CLI script example creates an Azure SQL Managed Instance in a dedicated subnet within a new virtual network. It also configures a route table and a network security group for the virtual network. Once the script has been successfully run, the managed instance can be accessed from within the virtual network or from an on-premises environment. SeeConfigure Azure VM to connect to an Azure SQL Managed InstanceandConfigure a point-to-site connection to an Azure SQL Managed Instance from on-premises.
+Important
+For limitations, seesupported regionsandsupported subscription types.
+If you don't have anAzure subscription, create anAzure free accountbefore you begin.
+Prerequisites
+Use the Bash environment inAzure Cloud Shell. For more information, seeGet started with Azure Cloud Shell.
+Use the Bash environment inAzure Cloud Shell. For more information, seeGet started with Azure Cloud Shell.
+
+If you prefer to run CLI reference commands locally,installthe Azure CLI. If you're running on Windows or macOS, consider running Azure CLI in a Docker container. For more information, seeHow to run the Azure CLI in a Docker container.If you're using a local installation, sign in to the Azure CLI by using theaz logincommand. To finish the authentication process, follow the steps displayed in your terminal. For other sign-in options, seeAuthenticate to Azure using Azure CLI.When you're prompted, install the Azure CLI extension on first use. For more information about extensions, seeUse and manage extensions with the Azure CLI.Runaz versionto find the version and dependent libraries that are installed. To upgrade to the latest version, runaz upgrade.
+If you prefer to run CLI reference commands locally,installthe Azure CLI. If you're running on Windows or macOS, consider running Azure CLI in a Docker container. For more information, seeHow to run the Azure CLI in a Docker container.
+If you're using a local installation, sign in to the Azure CLI by using theaz logincommand. To finish the authentication process, follow the steps displayed in your terminal. For other sign-in options, seeAuthenticate to Azure using Azure CLI.
+If you're using a local installation, sign in to the Azure CLI by using theaz logincommand. To finish the authentication process, follow the steps displayed in your terminal. For other sign-in options, seeAuthenticate to Azure using Azure CLI.
+When you're prompted, install the Azure CLI extension on first use. For more information about extensions, seeUse and manage extensions with the Azure CLI.
+When you're prompted, install the Azure CLI extension on first use. For more information about extensions, seeUse and manage extensions with the Azure CLI.
+Runaz versionto find the version and dependent libraries that are installed. To upgrade to the latest version, runaz upgrade.
+Runaz versionto find the version and dependent libraries that are installed. To upgrade to the latest version, runaz upgrade.
+Sample script
+For this script, use Azure CLI locally as it takes too long to run in Cloud Shell.
+Sign in to Azure
+Use the following script to sign in using a specific subscription.
+subscription="<subscriptionId>" # add subscription here
+
+az account set -s $subscription # ...or use 'az login'
+subscription="<subscriptionId>" # add subscription here
+
+az account set -s $subscription # ...or use 'az login'
+For more information, seeset active subscriptionorlog in interactively
+Run the script
+# Create an Azure SQL Managed Instance
+
+
+# Variable block
+let "randomIdentifier=$RANDOM*$RANDOM"
+location="East US"
+resourceGroup="msdocs-azuresql-rg-$randomIdentifier"
+tag="create-managed-instance"
+vNet="msdocs-azuresql-vnet-$randomIdentifier"
+subnet="msdocs-azuresql-subnet-$randomIdentifier"
+nsg="msdocs-azuresql-nsg-$randomIdentifier"
+route="msdocs-azuresql-route-$randomIdentifier"
+instance="msdocs-azuresql-instance-$randomIdentifier"
+login="azureuser"
+password="Pa$$w0rD-$randomIdentifier"
+dbname="SampleDB"
+
+echo "Using resource group $resourceGroup with login: $login, password: $password..."
+
+
+
+echo "Creating $resourceGroup in $location..."
+az group create --name $resourceGroup --location "$location" --tags $tag 
+
+
+
+echo "Creating $vNet with $subnet..."
+az network vnet create --name $vNet --resource-group $resourceGroup --location "$location" --address-prefixes 10.0.0.0/16
+az network vnet subnet create --name $subnet --resource-group $resourceGroup --vnet-name $vNet --address-prefixes 10.0.0.0/24 --delegations Microsoft.Sql/managedInstances
+
+echo "Creating $nsg..."
+az network nsg create --name $nsg --resource-group $resourceGroup --location "$location"
+
+az network nsg rule create --name "allow_management_inbound" --nsg-name $nsg --priority 100 --resource-group $resourceGroup --access Allow --destination-address-prefixes 10.0.0.0/24 --destination-port-ranges 9000 9003 1438 1440 1452 --direction Inbound --protocol Tcp --source-address-prefixes "*" --source-port-ranges "*"
+az network nsg rule create --name "allow_misubnet_inbound" --nsg-name $nsg --priority 200 --resource-group $resourceGroup --access Allow --destination-address-prefixes 10.0.0.0/24 --destination-port-ranges "*" --direction Inbound --protocol "*" --source-address-prefixes 10.0.0.0/24 --source-port-ranges "*"
+az network nsg rule create --name "allow_health_probe_inbound" --nsg-name $nsg --priority 300 --resource-group $resourceGroup --access Allow --destination-address-prefixes 10.0.0.0/24 --destination-port-ranges "*" --direction Inbound --protocol "*" --source-address-prefixes AzureLoadBalancer --source-port-ranges "*"
+az network nsg rule create --name "allow_management_outbound" --nsg-name $nsg --priority 1100 --resource-group $resourceGroup --access Allow --destination-address-prefixes AzureCloud --destination-port-ranges 443 12000 --direction Outbound --protocol Tcp --source-address-prefixes 10.0.0.0/24 --source-port-ranges "*"
+az network nsg rule create --name "allow_misubnet_outbound" --nsg-name $nsg --priority 200 --resource-group $resourceGroup --access Allow --destination-address-prefixes 10.0.0.0/24 --destination-port-ranges "*" --direction Outbound --protocol "*" --source-address-prefixes 10.0.0.0/24 --source-port-ranges "*"
+
+echo "Creating $route..."
+az network route-table create --name $route --resource-group $resourceGroup --location "$location"
+
+az network route-table route create --address-prefix 0.0.0.0/0 --name "primaryToMIManagementService" --next-hop-type Internet --resource-group $resourceGroup --route-table-name $route
+az network route-table route create --address-prefix 10.0.0.0/24 --name "ToLocalClusterNode" --next-hop-type VnetLocal --resource-group $resourceGroup --route-table-name $route
+
+echo "Configuring $subnet with $nsg and $route..."
+az network vnet subnet update --name $subnet --network-security-group $nsg --route-table $route --vnet-name $vNet --resource-group $resourceGroup 
+
+
+# This step will take awhile to complete. You can monitor deployment progress in the activity log within the Azure portal.
+echo "Creating $instance with $vNet and $subnet..."
+az sql mi create --admin-password $password --admin-user $login --name $instance --resource-group $resourceGroup --subnet $subnet --vnet-name $vNet --location "$location"
+
+
+
+az sql midb create -g $resourceGroup --mi $instance -n $dbname --collation Latin1_General_100_CS_AS_SC
+# Create an Azure SQL Managed Instance
+
+
+# Variable block
+let "randomIdentifier=$RANDOM*$RANDOM"
+location="East US"
+resourceGroup="msdocs-azuresql-rg-$randomIdentifier"
+tag="create-managed-instance"
+vNet="msdocs-azuresql-vnet-$randomIdentifier"
+subnet="msdocs-azuresql-subnet-$randomIdentifier"
+nsg="msdocs-azuresql-nsg-$randomIdentifier"
+route="msdocs-azuresql-route-$randomIdentifier"
+instance="msdocs-azuresql-instance-$randomIdentifier"
+login="azureuser"
+password="Pa$$w0rD-$randomIdentifier"
+dbname="SampleDB"
+
+echo "Using resource group $resourceGroup with login: $login, password: $password..."
+
+
+
+echo "Creating $resourceGroup in $location..."
+az group create --name $resourceGroup --location "$location" --tags $tag 
+
+
+
+echo "Creating $vNet with $subnet..."
+az network vnet create --name $vNet --resource-group $resourceGroup --location "$location" --address-prefixes 10.0.0.0/16
+az network vnet subnet create --name $subnet --resource-group $resourceGroup --vnet-name $vNet --address-prefixes 10.0.0.0/24 --delegations Microsoft.Sql/managedInstances
+
+echo "Creating $nsg..."
+az network nsg create --name $nsg --resource-group $resourceGroup --location "$location"
+
+az network nsg rule create --name "allow_management_inbound" --nsg-name $nsg --priority 100 --resource-group $resourceGroup --access Allow --destination-address-prefixes 10.0.0.0/24 --destination-port-ranges 9000 9003 1438 1440 1452 --direction Inbound --protocol Tcp --source-address-prefixes "*" --source-port-ranges "*"
+az network nsg rule create --name "allow_misubnet_inbound" --nsg-name $nsg --priority 200 --resource-group $resourceGroup --access Allow --destination-address-prefixes 10.0.0.0/24 --destination-port-ranges "*" --direction Inbound --protocol "*" --source-address-prefixes 10.0.0.0/24 --source-port-ranges "*"
+az network nsg rule create --name "allow_health_probe_inbound" --nsg-name $nsg --priority 300 --resource-group $resourceGroup --access Allow --destination-address-prefixes 10.0.0.0/24 --destination-port-ranges "*" --direction Inbound --protocol "*" --source-address-prefixes AzureLoadBalancer --source-port-ranges "*"
+az network nsg rule create --name "allow_management_outbound" --nsg-name $nsg --priority 1100 --resource-group $resourceGroup --access Allow --destination-address-prefixes AzureCloud --destination-port-ranges 443 12000 --direction Outbound --protocol Tcp --source-address-prefixes 10.0.0.0/24 --source-port-ranges "*"
+az network nsg rule create --name "allow_misubnet_outbound" --nsg-name $nsg --priority 200 --resource-group $resourceGroup --access Allow --destination-address-prefixes 10.0.0.0/24 --destination-port-ranges "*" --direction Outbound --protocol "*" --source-address-prefixes 10.0.0.0/24 --source-port-ranges "*"
+
+echo "Creating $route..."
+az network route-table create --name $route --resource-group $resourceGroup --location "$location"
+
+az network route-table route create --address-prefix 0.0.0.0/0 --name "primaryToMIManagementService" --next-hop-type Internet --resource-group $resourceGroup --route-table-name $route
+az network route-table route create --address-prefix 10.0.0.0/24 --name "ToLocalClusterNode" --next-hop-type VnetLocal --resource-group $resourceGroup --route-table-name $route
+
+echo "Configuring $subnet with $nsg and $route..."
+az network vnet subnet update --name $subnet --network-security-group $nsg --route-table $route --vnet-name $vNet --resource-group $resourceGroup 
+
+
+# This step will take awhile to complete. You can monitor deployment progress in the activity log within the Azure portal.
+echo "Creating $instance with $vNet and $subnet..."
+az sql mi create --admin-password $password --admin-user $login --name $instance --resource-group $resourceGroup --subnet $subnet --vnet-name $vNet --location "$location"
+
+
+
+az sql midb create -g $resourceGroup --mi $instance -n $dbname --collation Latin1_General_100_CS_AS_SC
+Clean up resources
+Use the following command to remove the resource group and all resources associated with it using theaz group deletecommand - unless you have an ongoing need for these resources. Some of these resources may take a while to create, as well as to delete.
+az group delete --name $resourceGroup
+az group delete --name $resourceGroup
+Sample reference
+This script uses the following commands. Each command in the table links to command specific documentation.
+Next steps
+For more information on Azure CLI, seeAzure CLI documentation.
+Other SQL Database CLI script samples can be found in theAzure SQL Database documentation.
+Feedback
+Was this page helpful?
+Additional resources

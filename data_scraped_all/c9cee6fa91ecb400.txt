@@ -1,0 +1,286 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use the Azure CLI to enable server-side encryption with customer-managed keys for managed disks
+Article
+2024-08-23
+8 contributors
+In this article
+Applies to:âï¸ Linux VMs âï¸ Windows VMs âï¸ Flexible scale sets âï¸ Uniform scale sets
+Azure Disk Storage allows you to manage your own keys when using server-side encryption (SSE) for managed disks, if you choose. For conceptual information on SSE with customer managed keys, as well as other managed disk encryption types, see theCustomer-managed keyssection of our disk encryption article.
+Restrictions
+For now, customer-managed keys have the following restrictions:
+If this feature is enabled for a disk with incremental snapshots, it can't be disabled on that disk or its snapshots.
+To work around this, copy all the data to an entirely different managed disk that isn't using customer-managed keys. You can do that with either theAzure CLIor theAzure PowerShell module.
+A disk and all of its associated incremental snapshots must have the same disk encryption set.
+Onlysoftware and HSM RSA keysof sizes 2,048-bit, 3,072-bit and 4,096-bit are supported, no other keys or sizes.HSMkeys require thepremiumtier of Azure Key vaults.
+HSMkeys require thepremiumtier of Azure Key vaults.
+For Ultra Disks and Premium SSD v2 disks only:User-assigned managed identities aren't supported for Ultra Disks and Premium SSD v2 disks encrypted with customer-managed keys.Encrypting Ultra Disks and Premium SSD v2 disks with customer-managed keys using Azure Key Vaults stored in a different Microsoft Entra ID tenant isn't currently supported.
+User-assigned managed identities aren't supported for Ultra Disks and Premium SSD v2 disks encrypted with customer-managed keys.
+Encrypting Ultra Disks and Premium SSD v2 disks with customer-managed keys using Azure Key Vaults stored in a different Microsoft Entra ID tenant isn't currently supported.
+Most resources related to your customer-managed keys (disk encryption sets, VMs, disks, and snapshots) must be in the same subscription and region.Azure Key Vaults may be used from a different subscription but must be in the same region as your disk encryption set. As a preview, you can use Azure Key Vaults fromdifferent Microsoft Entra tenants.
+Azure Key Vaults may be used from a different subscription but must be in the same region as your disk encryption set. As a preview, you can use Azure Key Vaults fromdifferent Microsoft Entra tenants.
+Disks encrypted with customer-managed keys can only move to another resource group if the VM they are attached to is deallocated.
+Disks, snapshots, and images encrypted with customer-managed keys can't be moved between subscriptions.
+Managed disks currently or previously encrypted using Azure Disk Encryption can't be encrypted using customer-managed keys.
+Can only create up to 5000 disk encryption sets per region per subscription.
+For information about using customer-managed keys with shared image galleries, seePreview: Use customer-managed keys for encrypting images.
+Create resources
+Once the feature is enabled, you'll need to set up a DiskEncryptionSet and either anAzure Key Vaultor anAzure Key Vault Managed HSM.
+Azure Key Vault
+Install the latestAzure CLIand log to an Azure account in withaz login.
+Create an Azure Key Vault and encryption key.
+When creating the Key Vault, you must enable purge protection. Purge protection ensures that a deleted key can't be permanently deleted until the retention period lapses. These settings protect you from losing data due to accidental deletion. These settings are mandatory when using a Key Vault for encrypting managed disks.
+Important
+Don't camel case the region, if you do so, you may experience problems when assigning additional disks to the resource in the Azure portal.
+subscriptionId=yourSubscriptionID
+rgName=yourResourceGroupName
+location=westcentralus
+keyVaultName=yourKeyVaultName
+keyName=yourKeyName
+diskEncryptionSetName=yourDiskEncryptionSetName
+diskName=yourDiskName
+
+az account set --subscription $subscriptionId
+
+az group create --resource-group $rgName --location $location
+
+az keyvault create -n $keyVaultName \
+-g $rgName \
+-l $location \
+--enable-purge-protection true 
+
+az keyvault key create --vault-name $keyVaultName \
+-n $keyName \
+--protection software
+subscriptionId=yourSubscriptionID
+rgName=yourResourceGroupName
+location=westcentralus
+keyVaultName=yourKeyVaultName
+keyName=yourKeyName
+diskEncryptionSetName=yourDiskEncryptionSetName
+diskName=yourDiskName
+
+az account set --subscription $subscriptionId
+
+az group create --resource-group $rgName --location $location
+
+az keyvault create -n $keyVaultName \
+-g $rgName \
+-l $location \
+--enable-purge-protection true 
+
+az keyvault key create --vault-name $keyVaultName \
+-n $keyName \
+--protection software
+Create a DiskEncryptionSet. You can setenable-auto-key-rotationtotrueto enable automatic rotation of the key. When you enable automatic rotation, the system automatically updates all managed disks, snapshots, and images referencing the disk encryption set to use the new version of the key within one hour.
+keyVaultKeyUrl=$(az keyvault key show --vault-name $keyVaultName --name $keyName --query [key.kid] -o tsv)
+
+az disk-encryption-set create -n $diskEncryptionSetName \
+-l $location \
+-g $rgName \
+--key-url $keyVaultKeyUrl \
+--enable-auto-key-rotation false
+keyVaultKeyUrl=$(az keyvault key show --vault-name $keyVaultName --name $keyName --query [key.kid] -o tsv)
+
+az disk-encryption-set create -n $diskEncryptionSetName \
+-l $location \
+-g $rgName \
+--key-url $keyVaultKeyUrl \
+--enable-auto-key-rotation false
+Grant the DiskEncryptionSet resource access to the key vault.
+Note
+It may take few minutes for Azure to create the identity of your DiskEncryptionSet in your Microsoft Entra ID. If you get an error like "Cannot find the Active Directory object" when running the following command, wait a few minutes and try again.
+desIdentity=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [identity.principalId] -o tsv)
+
+az keyvault set-policy -n $keyVaultName \
+-g $rgName \
+--object-id $desIdentity \
+--key-permissions wrapkey unwrapkey get
+desIdentity=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [identity.principalId] -o tsv)
+
+az keyvault set-policy -n $keyVaultName \
+-g $rgName \
+--object-id $desIdentity \
+--key-permissions wrapkey unwrapkey get
+Azure Key Vault Managed HSM
+Alternatively, you can use a Managed HSM to handle your keys.
+To do this, you must complete the following prerequisites:
+Install the latestAzure CLIand log in to an Azure account in withaz login.
+Create and configure a managed HSM.
+Assign permissions to a user, so they can manage your Managed HSM.
+Once you've created a Managed HSM and added permissions, enable purge protection and create an encryption key.
+subscriptionId=yourSubscriptionID
+rgName=yourResourceGroupName
+location=westcentralus
+keyVaultName=yourKeyVaultName
+keyName=yourKeyName
+diskEncryptionSetName=yourDiskEncryptionSetName
+diskName=yourDiskName
+    
+az account set --subscription $subscriptionId
+    
+az keyvault update-hsm --subscription $subscriptionId -g $rgName --hsm-name $keyVaultName --enable-purge-protection true
+    
+az keyvault key create --hsm-name  $keyVaultName --name $keyName --ops wrapKey unwrapKey --kty RSA-HSM --size 2048
+subscriptionId=yourSubscriptionID
+rgName=yourResourceGroupName
+location=westcentralus
+keyVaultName=yourKeyVaultName
+keyName=yourKeyName
+diskEncryptionSetName=yourDiskEncryptionSetName
+diskName=yourDiskName
+    
+az account set --subscription $subscriptionId
+    
+az keyvault update-hsm --subscription $subscriptionId -g $rgName --hsm-name $keyVaultName --enable-purge-protection true
+    
+az keyvault key create --hsm-name  $keyVaultName --name $keyName --ops wrapKey unwrapKey --kty RSA-HSM --size 2048
+Then, create a DiskEncryptionSet.
+keyVaultKeyUrl=$(az keyvault key show --vault-name $keyVaultName --name $keyName --query [key.kid] -o tsv)
+    
+az disk-encryption-set create -n $diskEncryptionSetName \
+-l $location \
+-g $rgName \
+--key-url $keyVaultKeyUrl \
+--enable-auto-key-rotation false
+keyVaultKeyUrl=$(az keyvault key show --vault-name $keyVaultName --name $keyName --query [key.kid] -o tsv)
+    
+az disk-encryption-set create -n $diskEncryptionSetName \
+-l $location \
+-g $rgName \
+--key-url $keyVaultKeyUrl \
+--enable-auto-key-rotation false
+Finally, grant the DiskEncryptionSet access to the Managed HSM.
+desIdentity=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [identity.principalId] -o tsv)
+    
+az keyvault role assignment create --hsm-name $keyVaultName --role "Managed HSM Crypto Service Encryption User" --assignee $desIdentity --scope /keys
+desIdentity=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [identity.principalId] -o tsv)
+    
+az keyvault role assignment create --hsm-name $keyVaultName --role "Managed HSM Crypto Service Encryption User" --assignee $desIdentity --scope /keys
+Now that you've created and configured these resources, you can use them to secure your managed disks. The following links contain example scripts, each with a respective scenario, that you can use to secure your managed disks.
+Examples
+Create a VM using a Marketplace image, encrypting the OS and data disks with customer-managed keys
+rgName=yourResourceGroupName
+vmName=yourVMName
+location=westcentralus
+vmSize=Standard_DS3_V2
+image=LinuxImageURN
+diskEncryptionSetName=yourDiskencryptionSetName
+
+diskEncryptionSetId=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [id] -o tsv)
+
+az vm create -g $rgName -n $vmName -l $location --image $image --size $vmSize --generate-ssh-keys --os-disk-encryption-set $diskEncryptionSetId --data-disk-sizes-gb 128 128 --data-disk-encryption-sets $diskEncryptionSetId $diskEncryptionSetId
+rgName=yourResourceGroupName
+vmName=yourVMName
+location=westcentralus
+vmSize=Standard_DS3_V2
+image=LinuxImageURN
+diskEncryptionSetName=yourDiskencryptionSetName
+
+diskEncryptionSetId=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [id] -o tsv)
+
+az vm create -g $rgName -n $vmName -l $location --image $image --size $vmSize --generate-ssh-keys --os-disk-encryption-set $diskEncryptionSetId --data-disk-sizes-gb 128 128 --data-disk-encryption-sets $diskEncryptionSetId $diskEncryptionSetId
+Encrypt existing managed disks
+Your existing disks must not be attached to a running VM in order for you to encrypt them using the following script:
+rgName=yourResourceGroupName
+diskName=yourDiskName
+diskEncryptionSetName=yourDiskEncryptionSetName
+
+az disk update -n $diskName -g $rgName --encryption-type EncryptionAtRestWithCustomerKey --disk-encryption-set $diskEncryptionSetId
+rgName=yourResourceGroupName
+diskName=yourDiskName
+diskEncryptionSetName=yourDiskEncryptionSetName
+
+az disk update -n $diskName -g $rgName --encryption-type EncryptionAtRestWithCustomerKey --disk-encryption-set $diskEncryptionSetId
+Create a virtual machine scale set using a Marketplace image, encrypting the OS and data disks with customer-managed keys
+rgName=yourResourceGroupName
+vmssName=yourVMSSName
+location=westcentralus
+vmSize=Standard_DS3_V2
+image=LinuxImageURN
+diskEncryptionSetName=yourDiskencryptionSetName
+
+diskEncryptionSetId=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [id] -o tsv)
+az vmss create -g $rgName -n $vmssName --image $image --upgrade-policy automatic --admin-username azureuser --generate-ssh-keys --os-disk-encryption-set $diskEncryptionSetId --data-disk-sizes-gb 64 128 --data-disk-encryption-sets $diskEncryptionSetId $diskEncryptionSetId
+rgName=yourResourceGroupName
+vmssName=yourVMSSName
+location=westcentralus
+vmSize=Standard_DS3_V2
+image=LinuxImageURN
+diskEncryptionSetName=yourDiskencryptionSetName
+
+diskEncryptionSetId=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [id] -o tsv)
+az vmss create -g $rgName -n $vmssName --image $image --upgrade-policy automatic --admin-username azureuser --generate-ssh-keys --os-disk-encryption-set $diskEncryptionSetId --data-disk-sizes-gb 64 128 --data-disk-encryption-sets $diskEncryptionSetId $diskEncryptionSetId
+Create an empty disk encrypted using server-side encryption with customer-managed keys and attach it to a VM
+vmName=yourVMName
+rgName=yourResourceGroupName
+diskName=yourDiskName
+diskSkuName=Premium_LRS
+diskSizeinGiB=30
+location=westcentralus
+diskLUN=2
+diskEncryptionSetName=yourDiskEncryptionSetName
+
+
+diskEncryptionSetId=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [id] -o tsv)
+
+az disk create -n $diskName -g $rgName -l $location --encryption-type EncryptionAtRestWithCustomerKey --disk-encryption-set $diskEncryptionSetId --size-gb $diskSizeinGiB --sku $diskSkuName
+
+diskId=$(az disk show -n $diskName -g $rgName --query [id] -o tsv)
+
+az vm disk attach --vm-name $vmName --lun $diskLUN --ids $diskId
+vmName=yourVMName
+rgName=yourResourceGroupName
+diskName=yourDiskName
+diskSkuName=Premium_LRS
+diskSizeinGiB=30
+location=westcentralus
+diskLUN=2
+diskEncryptionSetName=yourDiskEncryptionSetName
+
+
+diskEncryptionSetId=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [id] -o tsv)
+
+az disk create -n $diskName -g $rgName -l $location --encryption-type EncryptionAtRestWithCustomerKey --disk-encryption-set $diskEncryptionSetId --size-gb $diskSizeinGiB --sku $diskSkuName
+
+diskId=$(az disk show -n $diskName -g $rgName --query [id] -o tsv)
+
+az vm disk attach --vm-name $vmName --lun $diskLUN --ids $diskId
+Change the key of a DiskEncryptionSet to rotate the key for all the resources referencing the DiskEncryptionSet
+rgName=yourResourceGroupName
+keyVaultName=yourKeyVaultName
+keyName=yourKeyName
+diskEncryptionSetName=yourDiskEncryptionSetName
+
+
+keyVaultId=$(az keyvault show --name $keyVaultName--query [id] -o tsv)
+
+keyVaultKeyUrl=$(az keyvault key show --vault-name $keyVaultName --name $keyName --query [key.kid] -o tsv)
+
+az disk-encryption-set update -n keyrotationdes -g keyrotationtesting --key-url $keyVaultKeyUrl --source-vault $keyVaultId
+rgName=yourResourceGroupName
+keyVaultName=yourKeyVaultName
+keyName=yourKeyName
+diskEncryptionSetName=yourDiskEncryptionSetName
+
+
+keyVaultId=$(az keyvault show --name $keyVaultName--query [id] -o tsv)
+
+keyVaultKeyUrl=$(az keyvault key show --vault-name $keyVaultName --name $keyName --query [key.kid] -o tsv)
+
+az disk-encryption-set update -n keyrotationdes -g keyrotationtesting --key-url $keyVaultKeyUrl --source-vault $keyVaultId
+Find the status of server-side encryption of a disk
+az disk show -g yourResourceGroupName -n yourDiskName --query [encryption.type] -o tsv
+az disk show -g yourResourceGroupName -n yourDiskName --query [encryption.type] -o tsv
+Important
+Customer-managed keys rely on managed identities for Azure resources, a feature of Microsoft Entra ID. When you configure customer-managed keys, a managed identity is automatically assigned to your resources under the covers. If you subsequently move the subscription, resource group, or managed disk from one Microsoft Entra directory to another, the managed identity associated with the managed disks is not transferred to the new tenant, so customer-managed keys may no longer work. For more information, seeTransferring a subscription between Microsoft Entra directories.
+Next steps
+Explore the Azure Resource Manager templates for creating encrypted disks with customer-managed keys
+Replicate machines with customer-managed keys enabled disks
+Set up disaster recovery of VMware VMs to Azure with PowerShell
+Set up disaster recovery to Azure for Hyper-V VMs using PowerShell and Azure Resource Manager
+SeeCreate a managed disk from a snapshot with CLIfor a code sample.
+Feedback
+Was this page helpful?
+Additional resources

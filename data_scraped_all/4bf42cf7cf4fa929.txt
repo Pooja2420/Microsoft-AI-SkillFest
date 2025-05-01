@@ -1,0 +1,274 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Integrate Microsoft Entra ID with Azure Kubernetes Service (AKS) using the Azure CLI (legacy)
+Article
+2024-08-01
+28 contributors
+In this article
+Warning
+The feature described in this document, Microsoft Entra Integration (legacy) wasdeprecated on June 1st, 2023. At this time, no new clusters can be created with Microsoft Entra Integration (legacy).
+AKS has a new improvedAKS-managed Microsoft Entra IDexperience that doesn't require you to manage server or client applications. If you want to migrate follow the instructionshere.
+Azure Kubernetes Service (AKS) can be configured to use Microsoft Entra ID for user authentication. In this configuration, you can log into an AKS cluster using a Microsoft Entra authentication token. Cluster operators can also configure Kubernetes role-based access control (Kubernetes RBAC) based on a user's identity or directory group membership.
+This article shows you how to create the required Microsoft Entra components, then deploy a Microsoft Entra ID-enabled cluster and create a basic Kubernetes role in the AKS cluster.
+Limitations
+Microsoft Entra ID can only be enabled on Kubernetes RBAC-enabled cluster.
+Microsoft Entra legacy integration can only be enabled during cluster creation.
+Before you begin
+You need the Azure CLI version 2.0.61 or later installed and configured. Runaz --versionto find the version. If you need to install or upgrade, seeInstall Azure CLI.
+az --version
+Go tohttps://shell.azure.comto open Cloud Shell in your browser.
+For consistency and to help run the commands in this article, create a variable for your desired AKS cluster name. The following example uses the namemyakscluster:
+aksname="myakscluster"
+aksname="myakscluster"
+
+Microsoft Entra authentication overview
+Microsoft Entra authentication is provided to AKS clusters with OpenID Connect. OpenID Connect is an identity layer built on top of the OAuth 2.0 protocol. For more information on OpenID Connect, see theOpenID Connect documentation.
+From inside of the Kubernetes cluster, Webhook Token Authentication is used to verify authentication tokens. Webhook token authentication is configured and managed as part of the AKS cluster. For more information on Webhook token authentication, see thewebhook authentication documentation.
+Note
+When configuring Microsoft Entra ID for AKS authentication, two Microsoft Entra applications are configured. This operation must be completed by an Azure tenant administrator.
+
+Create Microsoft Entra server component
+To integrate with AKS, you create and use a Microsoft Entra application that acts as an endpoint for the identity requests. The first Microsoft Entra application you need gets Microsoft Entra group membership for a user.
+Create the server application component using theaz ad app createcommand, then update the group membership claims using theaz ad app updatecommand. The following example uses theaksnamevariable defined in theBefore you beginsection, and creates a variable
+# Create the Azure AD application
+serverApplicationId=$(az ad app create \
+    --display-name "${aksname}Server" \
+    --identifier-uris "https://${aksname}Server" \
+    --query appId -o tsv)
+
+# Update the application group membership claims
+az ad app update --id $serverApplicationId --set groupMembershipClaims=All
+# Create the Azure AD application
+serverApplicationId=$(az ad app create \
+    --display-name "${aksname}Server" \
+    --identifier-uris "https://${aksname}Server" \
+    --query appId -o tsv)
+
+# Update the application group membership claims
+az ad app update --id $serverApplicationId --set groupMembershipClaims=All
+Now create a service principal for the server app using theaz ad sp createcommand. This service principal is used to authenticate itself within the Azure platform. Then, get the service principal secret using theaz ad sp credential resetcommand and assign to the variable namedserverApplicationSecretfor use in one of the following steps:
+# Create a service principal for the Azure AD application
+az ad sp create --id $serverApplicationId
+
+# Get the service principal secret
+serverApplicationSecret=$(az ad sp credential reset \
+    --name $serverApplicationId \
+    --credential-description "AKSPassword" \
+    --query password -o tsv)
+# Create a service principal for the Azure AD application
+az ad sp create --id $serverApplicationId
+
+# Get the service principal secret
+serverApplicationSecret=$(az ad sp credential reset \
+    --name $serverApplicationId \
+    --credential-description "AKSPassword" \
+    --query password -o tsv)
+The Microsoft Entra service principal needs permissions to perform the following actions:
+Read directory data
+Sign in and read user profile
+Assign these permissions using theaz ad app permission addcommand:
+az ad app permission add \
+    --id $serverApplicationId \
+    --api 00000003-0000-0000-c000-000000000000 \
+    --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope 06da0dbc-49e2-44d2-8312-53f166ab848a=Scope 7ab1d382-f21e-4acd-a863-ba3e13f7da61=Role
+az ad app permission add \
+    --id $serverApplicationId \
+    --api 00000003-0000-0000-c000-000000000000 \
+    --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope 06da0dbc-49e2-44d2-8312-53f166ab848a=Scope 7ab1d382-f21e-4acd-a863-ba3e13f7da61=Role
+Finally, grant the permissions assigned in the previous step for the server application using theaz ad app permission grantcommand. This step fails if the current account is not a tenant admin. You also need to add permissions for Microsoft Entra application to request information that may otherwise require administrative consent using theaz ad app permission admin-consent:
+az ad app permission grant --id $serverApplicationId --api 00000003-0000-0000-c000-000000000000
+az ad app permission admin-consent --id  $serverApplicationId
+az ad app permission grant --id $serverApplicationId --api 00000003-0000-0000-c000-000000000000
+az ad app permission admin-consent --id  $serverApplicationId
+
+Create Microsoft Entra client component
+The second Microsoft Entra application is used when a user logs to the AKS cluster with the Kubernetes CLI (kubectl). This client application takes the authentication request from the user and verifies their credentials and permissions. Create the Microsoft Entra app for the client component using theaz ad app createcommand:
+kubectl
+clientApplicationId=$(az ad app create \
+    --display-name "${aksname}Client" \
+    --native-app \
+    --reply-urls "https://${aksname}Client" \
+    --query appId -o tsv)
+clientApplicationId=$(az ad app create \
+    --display-name "${aksname}Client" \
+    --native-app \
+    --reply-urls "https://${aksname}Client" \
+    --query appId -o tsv)
+Create a service principal for the client application using theaz ad sp createcommand:
+az ad sp create --id $clientApplicationId
+az ad sp create --id $clientApplicationId
+Get the oAuth2 ID for the server app to allow the authentication flow between the two app components using theaz ad app showcommand. This oAuth2 ID is used in the next step.
+oAuthPermissionId=$(az ad app show --id $serverApplicationId --query "oauth2Permissions[0].id" -o tsv)
+oAuthPermissionId=$(az ad app show --id $serverApplicationId --query "oauth2Permissions[0].id" -o tsv)
+Add the permissions for the client application and server application components to use the oAuth2 communication flow using theaz ad app permission addcommand. Then, grant permissions for the client application to communication with the server application using theaz ad app permission grantcommand:
+az ad app permission add --id $clientApplicationId --api $serverApplicationId --api-permissions ${oAuthPermissionId}=Scope
+az ad app permission grant --id $clientApplicationId --api $serverApplicationId
+az ad app permission add --id $clientApplicationId --api $serverApplicationId --api-permissions ${oAuthPermissionId}=Scope
+az ad app permission grant --id $clientApplicationId --api $serverApplicationId
+Deploy the cluster
+With the two Microsoft Entra applications created, now create the AKS cluster itself. First, create a resource group using theaz group createcommand. The following example creates the resource group in theEastUSregion:
+Create a resource group for the cluster:
+az group create --name myResourceGroup --location EastUS
+az group create --name myResourceGroup --location EastUS
+Get the tenant ID of your Azure subscription using theaz account showcommand. Then, create the AKS cluster using theaz aks createcommand. The command to create the AKS cluster provides the server and client application IDs, the server application service principal secret, and your tenant ID:
+tenantId=$(az account show --query tenantId -o tsv)
+
+az aks create \
+    --resource-group myResourceGroup \
+    --name $aksname \
+    --node-count 1 \
+    --generate-ssh-keys \
+    --aad-server-app-id $serverApplicationId \
+    --aad-server-app-secret $serverApplicationSecret \
+    --aad-client-app-id $clientApplicationId \
+    --aad-tenant-id $tenantId
+tenantId=$(az account show --query tenantId -o tsv)
+
+az aks create \
+    --resource-group myResourceGroup \
+    --name $aksname \
+    --node-count 1 \
+    --generate-ssh-keys \
+    --aad-server-app-id $serverApplicationId \
+    --aad-server-app-secret $serverApplicationSecret \
+    --aad-client-app-id $clientApplicationId \
+    --aad-tenant-id $tenantId
+Finally, get the cluster admin credentials using theaz aks get-credentialscommand. In one of the following steps, you get the regularusercluster credentials to see the Microsoft Entra authentication flow in action.
+az aks get-credentials --resource-group myResourceGroup --name $aksname --admin
+az aks get-credentials --resource-group myResourceGroup --name $aksname --admin
+Create Kubernetes RBAC binding
+Before a Microsoft Entra account can be used with the AKS cluster, a role binding or cluster role binding needs to be created.Rolesdefine the permissions to grant, andbindingsapply them to desired users. These assignments can be applied to a given namespace, or across the entire cluster. For more information, seeUsing Kubernetes RBAC authorization.
+Get the user principal name (UPN) for the user currently logged in using theaz ad signed-in-user showcommand. This user account is enabled for Microsoft Entra integration in the next step.
+az ad signed-in-user show --query userPrincipalName -o tsv
+az ad signed-in-user show --query userPrincipalName -o tsv
+Important
+If the user you grant the Kubernetes RBAC binding for is in the same Microsoft Entra tenant, assign permissions based on theuserPrincipalName. If the user is in a different Microsoft Entra tenant, query for and use theobjectIdproperty instead.
+Create a YAML manifest namedbasic-azure-ad-binding.yamland paste the following contents. On the last line, replaceuserPrincipalName_or_objectIdwith the UPN or object ID output from the previous command:
+basic-azure-ad-binding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: contoso-cluster-admins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: User
+  name: userPrincipalName_or_objectId
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: contoso-cluster-admins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: User
+  name: userPrincipalName_or_objectId
+Create the ClusterRoleBinding using thekubectl applycommand and specify the filename of your YAML manifest:
+kubectl apply -f basic-azure-ad-binding.yaml
+kubectl apply -f basic-azure-ad-binding.yaml
+
+Access cluster with Microsoft Entra ID
+Now let's test the integration of Microsoft Entra authentication for the AKS cluster. Set thekubectlconfig context to use regular user credentials. This context passes all authentication requests back through Microsoft Entra ID.
+kubectl
+az aks get-credentials --resource-group myResourceGroup --name $aksname --overwrite-existing
+az aks get-credentials --resource-group myResourceGroup --name $aksname --overwrite-existing
+Now use thekubectl get podscommand to view pods across all namespaces:
+kubectl get pods --all-namespaces
+kubectl get pods --all-namespaces
+You receive a sign in prompt to authenticate using Microsoft Entra credentials using a web browser. After you've successfully authenticated, thekubectlcommand displays the pods in the AKS cluster, as shown in the following example output:
+kubectl
+kubectl get pods --all-namespaces
+kubectl get pods --all-namespaces
+To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code BYMK7UXVD to authenticate.
+
+NAMESPACE     NAME                                    READY   STATUS    RESTARTS   AGE
+kube-system   coredns-754f947b4-2v75r                 1/1     Running   0          23h
+kube-system   coredns-754f947b4-tghwh                 1/1     Running   0          23h
+kube-system   coredns-autoscaler-6fcdb7d64-4wkvp      1/1     Running   0          23h
+kube-system   heapster-5fb7488d97-t5wzk               2/2     Running   0          23h
+kube-system   kube-proxy-2nd5m                        1/1     Running   0          23h
+kube-system   kube-svc-redirect-swp9r                 2/2     Running   0          23h
+kube-system   kubernetes-dashboard-847bb4ddc6-trt7m   1/1     Running   0          23h
+kube-system   metrics-server-7b97f9cd9-btxzz          1/1     Running   0          23h
+kube-system   tunnelfront-6ff887cffb-xkfmq            1/1     Running   0          23h
+To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code BYMK7UXVD to authenticate.
+
+NAMESPACE     NAME                                    READY   STATUS    RESTARTS   AGE
+kube-system   coredns-754f947b4-2v75r                 1/1     Running   0          23h
+kube-system   coredns-754f947b4-tghwh                 1/1     Running   0          23h
+kube-system   coredns-autoscaler-6fcdb7d64-4wkvp      1/1     Running   0          23h
+kube-system   heapster-5fb7488d97-t5wzk               2/2     Running   0          23h
+kube-system   kube-proxy-2nd5m                        1/1     Running   0          23h
+kube-system   kube-svc-redirect-swp9r                 2/2     Running   0          23h
+kube-system   kubernetes-dashboard-847bb4ddc6-trt7m   1/1     Running   0          23h
+kube-system   metrics-server-7b97f9cd9-btxzz          1/1     Running   0          23h
+kube-system   tunnelfront-6ff887cffb-xkfmq            1/1     Running   0          23h
+The authentication token received forkubectlis cached. You are only reprompted to sign in when the token has expired or the Kubernetes config file is re-created.
+kubectl
+If you see an authorization error message after you've successfully signed in using a web browser as in the following example output, check the following possible issues:
+error: You must be logged in to the server (Unauthorized)
+error: You must be logged in to the server (Unauthorized)
+You defined the appropriate object ID or UPN, depending on if the user account is in the same Microsoft Entra tenant or not.
+The user is not a member of more than 200 groups.
+Secret defined in the application registration for server matches the value configured using--aad-server-app-secret
+--aad-server-app-secret
+Be sure that only one version of kubectl is installed on your machine at a time. Conflicting versions can cause issues during authorization. To install the latest version, useaz aks install-cli.
+
+Frequently asked questions about migration from Microsoft Entra Integration to AKS-managed Microsoft Entra ID
+1. What is the plan for migration?
+Microsoft Entra Integration (legacy) will be deprecated on 1st June 2023. After this date, you won't be able to create new clusters with Microsoft Entra ID (legacy). We'll migrate all Microsoft Entra Integration (legacy) AKS clusters to AKS-managed Microsoft Entra ID automatically starting from 1st August 2023.
+We send notification emails to impacted subscription admins biweekly to remind them of migration.
+2. What will happen if I don't take any action?
+Your Microsoft Entra Integration (legacy) AKS clusters will continue working after 1st June 2023. We'll automatically migrate your clusters to AKS-managed Microsoft Entra ID starting from 1st August 2023. You may experience API server downtime during the migration.
+The kubeconfig content changes after the migration. You need to merge the new credentials into the kubeconfig file using theaz aks get-credentials --resource-group <AKS resource group name> --name <AKS cluster name>.
+az aks get-credentials --resource-group <AKS resource group name> --name <AKS cluster name>
+We recommend updating your AKS cluster toAKS-managed Microsoft Entra IDmanually before 1st August. This way you can manage the downtime during non-business hours when it's more convenient.
+3. Why do I still receive the notification email after manual migration?
+It takes several days for the email to send. If your cluster wasn't migrated before we initiate the email-sending process, you may still receive a notification.
+4. How can I check whether my cluster my cluster is migrated to AKS-managed Microsoft Entra ID?
+Confirm your AKS cluster is migrated to the AKS-managed Microsoft Entra ID using theaz aks showcommand.
+az aks show
+az aks show -g <RGName> -n <ClusterName>  --query "aadProfile"
+az aks show -g <RGName> -n <ClusterName>  --query "aadProfile"
+If your cluster is using the AKS-managed Microsoft Entra ID, the output showsmanagedistrue.  For example:
+managed
+true
+{
+      "adminGroupObjectIDs": [
+        "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      ],
+      "adminUsers": null,
+      "clientAppId": null,
+      "enableAzureRbac": null,
+      "managed": true,
+      "serverAppId": null,
+      "serverAppSecret": null,
+      "tenantId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    }
+{
+      "adminGroupObjectIDs": [
+        "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+      ],
+      "adminUsers": null,
+      "clientAppId": null,
+      "enableAzureRbac": null,
+      "managed": true,
+      "serverAppId": null,
+      "serverAppSecret": null,
+      "tenantId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    }
+Next steps
+For the complete script that contains the commands shown in this article, see the [Microsoft Entra integration script in the AKS samples repo][complete-script].
+To use Microsoft Entra users and groups to control access to cluster resources, seeControl access to cluster resources using Kubernetes role-based access control and Microsoft Entra identities in AKS.
+For more information about how to secure Kubernetes clusters, seeAccess and identity options for AKS).
+For best practices on identity and resource control, seeBest practices for authentication and authorization in AKS.
+Azure Kubernetes Service
+
+Additional resources

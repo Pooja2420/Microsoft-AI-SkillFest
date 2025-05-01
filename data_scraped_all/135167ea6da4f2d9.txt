@@ -1,0 +1,469 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use PowerShell to create a managed instance
+Article
+2024-02-26
+8 contributors
+In this article
+Applies to:Azure SQL Managed Instance
+This PowerShell script example creates a managed instance in a dedicated subnet within a new virtual network. It also configures a route table and a network security group for the virtual network. Once the script has been successfully run, the managed instance can be accessed from within the virtual network or from an on-premises environment. SeeConfigure Azure VM to connect to Azure SQL Database Managed InstanceandConfigure a point-to-site connection to Azure SQL Managed Instance from on-premises.
+Important
+For limitations, seesupported regionsandsupported subscription types.
+Use Azure Cloud Shell
+Azure hosts Azure Cloud Shell, an interactive shell environment that you can use through your browser. You can use either Bash or PowerShell with Cloud Shell to work with Azure services. You can use the Cloud Shell preinstalled commands to run the code in this article, without having to install anything on your local environment.
+To start Azure Cloud Shell:
+To run the code in this article in Azure Cloud Shell:
+Start Cloud Shell.
+Start Cloud Shell.
+Select theCopybutton on a code block to copy the code.
+Select theCopybutton on a code block to copy the code.
+Paste the code into the Cloud Shell session by selectingCtrl+Shift+Von Windows and Linux, or by selectingCmd+Shift+Von macOS.
+Paste the code into the Cloud Shell session by selectingCtrl+Shift+Von Windows and Linux, or by selectingCmd+Shift+Von macOS.
+SelectEnterto run the code.
+SelectEnterto run the code.
+If you choose to install and use PowerShell locally, this tutorial requires Azure PowerShell 1.4.0 or later. If you need to upgrade, seeInstall Azure PowerShell module. If you are running PowerShell locally, you also need to runConnect-AzAccountto create a connection with Azure.
+Connect-AzAccount
+Sample script
+# <SetVariables>
+$NSnetworkModels = "Microsoft.Azure.Commands.Network.Models"
+$NScollections = "System.Collections.Generic"
+
+# The SubscriptionId in which to create these objects
+$SubscriptionId = '<Enter subscription ID>'
+# Set the resource group name and location for your managed instance
+$resourceGroupName = "myResourceGroup-$(Get-Random)"
+$location = "eastus2"
+# Set the networking values for your managed instance
+$vNetName = "myVnet-$(Get-Random)"
+$vNetAddressPrefix = "10.0.0.0/16"
+$defaultSubnetName = "myDefaultSubnet-$(Get-Random)"
+$defaultSubnetAddressPrefix = "10.0.0.0/24"
+$miSubnetName = "MISubnet-$(Get-Random)"
+$miSubnetAddressPrefix = "10.0.0.0/24"
+#Set the managed instance name for the new managed instance
+$instanceName = "mi-name-$(Get-Random)"
+# Set the admin login and password for your managed instance
+$miAdminSqlLogin = "SqlAdmin"
+$miAdminSqlPassword = "ChangeThisPassword!!"
+# Set the managed instance service tier, compute level, and license mode
+$edition = "General Purpose"
+$vCores = 8
+$maxStorage = 256
+$computeGeneration = "Gen5"
+$license = "LicenseIncluded" #"BasePrice" or LicenseIncluded if you have don't have SQL Server licence that can be used for AHB discount
+$dbname = 'SampleDB'
+
+# </SetVariables>
+
+# <CreateResourceGroup>
+
+# Set subscription context
+Connect-AzAccount
+$subscriptionContextParams = @{
+    SubscriptionId = $SubscriptionId
+}
+Set-AzContext @subscriptionContextParams
+
+# Create a resource group
+$resourceGroupParams = @{
+    Name = $resourceGroupName
+    Location = $location
+    Tag = @{Owner="SQLDB-Samples"}
+}
+$resourceGroup = New-AzResourceGroup @resourceGroupParams
+
+# </CreateResourceGroup>
+
+# <CreateVirtualNetwork>
+
+# Configure virtual network, subnets, network security group, and routing table
+$networkSecurityGroupParams = @{
+    Name = 'myNetworkSecurityGroupMiManagementService'
+    ResourceGroupName = $resourceGroupName
+    Location = $location
+}
+$networkSecurityGroupMiManagementService = New-AzNetworkSecurityGroup @networkSecurityGroupParams
+
+$routeTableParams = @{
+    Name = 'myRouteTableMiManagementService'
+    ResourceGroupName = $resourceGroupName
+    Location = $location
+}
+$routeTableMiManagementService = New-AzRouteTable @routeTableParams
+
+$virtualNetworkParams = @{
+    ResourceGroupName = $resourceGroupName
+    Location = $location
+    Name = $vNetName
+    AddressPrefix = $vNetAddressPrefix
+}
+
+$virtualNetwork = New-AzVirtualNetwork @virtualNetworkParams
+
+$subnetConfigParams = @{
+    Name = $miSubnetName
+    VirtualNetwork = $virtualNetwork
+    AddressPrefix = $miSubnetAddressPrefix
+    NetworkSecurityGroup = $networkSecurityGroupMiManagementService
+    RouteTable = $routeTableMiManagementService
+}
+
+$subnetConfig = Add-AzVirtualNetworkSubnetConfig @subnetConfigParams | Set-AzVirtualNetwork
+
+$virtualNetwork = Get-AzVirtualNetwork -Name $vNetName -ResourceGroupName $resourceGroupName
+
+$subnet= $virtualNetwork.Subnets[0]
+
+# Create a delegation
+$subnet.Delegations = New-Object "$NScollections.List``1[$NSnetworkModels.PSDelegation]"
+$delegationName = "dgManagedInstance" + (Get-Random -Maximum 1000)
+$delegationParams = @{
+    Name = $delegationName
+    ServiceName = "Microsoft.Sql/managedInstances"
+}
+$delegation = New-AzDelegation @delegationParams
+$subnet.Delegations.Add($delegation)
+
+Set-AzVirtualNetwork -VirtualNetwork $virtualNetwork
+
+$miSubnetConfigId = $subnet.Id
+
+$allowParameters = @{
+    Access = 'Allow'
+    Protocol = 'Tcp'
+    Direction= 'Inbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = 'VirtualNetwork'
+    DestinationAddressPrefix = '*'
+}
+$denyInParameters = @{
+    Access = 'Deny'
+    Protocol = '*'
+    Direction = 'Inbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = '*'
+    DestinationPortRange = '*'
+    DestinationAddressPrefix = '*'
+}
+$denyOutParameters = @{
+    Access = 'Deny'
+    Protocol = '*'
+    Direction = 'Outbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = '*'
+    DestinationPortRange = '*'
+    DestinationAddressPrefix = '*'
+}
+
+$networkSecurityGroupParams = @{
+    ResourceGroupName = $resourceGroupName
+    Name = "myNetworkSecurityGroupMiManagementService"
+}
+
+$networkSecurityGroup = Get-AzNetworkSecurityGroup @networkSecurityGroupParams
+
+$allowRuleParams = @{
+    Access = 'Allow'
+    Protocol = 'Tcp'
+    Direction = 'Inbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = 'VirtualNetwork'
+    DestinationAddressPrefix = '*'
+}
+
+$denyInRuleParams = @{
+    Access = 'Deny'
+    Protocol = '*'
+    Direction = 'Inbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = '*'
+    DestinationPortRange = '*'
+    DestinationAddressPrefix = '*'
+}
+
+$denyOutRuleParams = @{
+    Access = 'Deny'
+    Protocol = '*'
+    Direction = 'Outbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = '*'
+    DestinationPortRange = '*'
+    DestinationAddressPrefix = '*'
+}
+
+$networkSecurityGroup |
+    Add-AzNetworkSecurityRuleConfig @allowRuleParams -Priority 1000 -Name "allow_tds_inbound" -DestinationPortRange 1433 |
+    Add-AzNetworkSecurityRuleConfig @allowRuleParams -Priority 1100 -Name "allow_redirect_inbound" -DestinationPortRange 11000-11999 |
+    Add-AzNetworkSecurityRuleConfig @denyInRuleParams -Priority 4096 -Name "deny_all_inbound" |
+    Add-AzNetworkSecurityRuleConfig @denyOutRuleParams -Priority 4096 -Name "deny_all_outbound" |
+    Set-AzNetworkSecurityGroup
+
+
+# </CreateVirtualNetwork>
+
+# <CreateManagedInstance>
+
+# Create credentials
+$secpassword = ConvertTo-SecureString $miAdminSqlPassword -AsPlainText -Force
+$credential = New-Object System.Management.Automation.PSCredential -ArgumentList @($miAdminSqlLogin, $secpassword)
+
+$managedInstanceParams = @{
+    Name = $instanceName
+    ResourceGroupName = $resourceGroupName
+    Location = $location
+    SubnetId = $miSubnetConfigId
+    AdministratorCredential = $credential
+    StorageSizeInGB = $maxStorage
+    VCore = $vCores
+    Edition = $edition
+    ComputeGeneration = $computeGeneration
+    LicenseType = $license
+}
+
+New-AzSqlInstance @managedInstanceParams
+
+# </CreateManagedInstance>
+
+# <CreateDatabase>
+
+$databaseParams = @{
+    ResourceGroupName = $resourceGroupName
+    InstanceName = $instanceName
+    Name = $dbname
+    Collation = 'Latin1_General_100_CS_AS_SC'
+}
+
+New-AzSqlInstanceDatabase @databaseParams
+
+# </CreateDatabase>
+
+# Clean up deployment 
+# Remove-AzResourceGroup -ResourceGroupName $resourceGroupName
+# <SetVariables>
+$NSnetworkModels = "Microsoft.Azure.Commands.Network.Models"
+$NScollections = "System.Collections.Generic"
+
+# The SubscriptionId in which to create these objects
+$SubscriptionId = '<Enter subscription ID>'
+# Set the resource group name and location for your managed instance
+$resourceGroupName = "myResourceGroup-$(Get-Random)"
+$location = "eastus2"
+# Set the networking values for your managed instance
+$vNetName = "myVnet-$(Get-Random)"
+$vNetAddressPrefix = "10.0.0.0/16"
+$defaultSubnetName = "myDefaultSubnet-$(Get-Random)"
+$defaultSubnetAddressPrefix = "10.0.0.0/24"
+$miSubnetName = "MISubnet-$(Get-Random)"
+$miSubnetAddressPrefix = "10.0.0.0/24"
+#Set the managed instance name for the new managed instance
+$instanceName = "mi-name-$(Get-Random)"
+# Set the admin login and password for your managed instance
+$miAdminSqlLogin = "SqlAdmin"
+$miAdminSqlPassword = "ChangeThisPassword!!"
+# Set the managed instance service tier, compute level, and license mode
+$edition = "General Purpose"
+$vCores = 8
+$maxStorage = 256
+$computeGeneration = "Gen5"
+$license = "LicenseIncluded" #"BasePrice" or LicenseIncluded if you have don't have SQL Server licence that can be used for AHB discount
+$dbname = 'SampleDB'
+
+# </SetVariables>
+
+# <CreateResourceGroup>
+
+# Set subscription context
+Connect-AzAccount
+$subscriptionContextParams = @{
+    SubscriptionId = $SubscriptionId
+}
+Set-AzContext @subscriptionContextParams
+
+# Create a resource group
+$resourceGroupParams = @{
+    Name = $resourceGroupName
+    Location = $location
+    Tag = @{Owner="SQLDB-Samples"}
+}
+$resourceGroup = New-AzResourceGroup @resourceGroupParams
+
+# </CreateResourceGroup>
+
+# <CreateVirtualNetwork>
+
+# Configure virtual network, subnets, network security group, and routing table
+$networkSecurityGroupParams = @{
+    Name = 'myNetworkSecurityGroupMiManagementService'
+    ResourceGroupName = $resourceGroupName
+    Location = $location
+}
+$networkSecurityGroupMiManagementService = New-AzNetworkSecurityGroup @networkSecurityGroupParams
+
+$routeTableParams = @{
+    Name = 'myRouteTableMiManagementService'
+    ResourceGroupName = $resourceGroupName
+    Location = $location
+}
+$routeTableMiManagementService = New-AzRouteTable @routeTableParams
+
+$virtualNetworkParams = @{
+    ResourceGroupName = $resourceGroupName
+    Location = $location
+    Name = $vNetName
+    AddressPrefix = $vNetAddressPrefix
+}
+
+$virtualNetwork = New-AzVirtualNetwork @virtualNetworkParams
+
+$subnetConfigParams = @{
+    Name = $miSubnetName
+    VirtualNetwork = $virtualNetwork
+    AddressPrefix = $miSubnetAddressPrefix
+    NetworkSecurityGroup = $networkSecurityGroupMiManagementService
+    RouteTable = $routeTableMiManagementService
+}
+
+$subnetConfig = Add-AzVirtualNetworkSubnetConfig @subnetConfigParams | Set-AzVirtualNetwork
+
+$virtualNetwork = Get-AzVirtualNetwork -Name $vNetName -ResourceGroupName $resourceGroupName
+
+$subnet= $virtualNetwork.Subnets[0]
+
+# Create a delegation
+$subnet.Delegations = New-Object "$NScollections.List``1[$NSnetworkModels.PSDelegation]"
+$delegationName = "dgManagedInstance" + (Get-Random -Maximum 1000)
+$delegationParams = @{
+    Name = $delegationName
+    ServiceName = "Microsoft.Sql/managedInstances"
+}
+$delegation = New-AzDelegation @delegationParams
+$subnet.Delegations.Add($delegation)
+
+Set-AzVirtualNetwork -VirtualNetwork $virtualNetwork
+
+$miSubnetConfigId = $subnet.Id
+
+$allowParameters = @{
+    Access = 'Allow'
+    Protocol = 'Tcp'
+    Direction= 'Inbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = 'VirtualNetwork'
+    DestinationAddressPrefix = '*'
+}
+$denyInParameters = @{
+    Access = 'Deny'
+    Protocol = '*'
+    Direction = 'Inbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = '*'
+    DestinationPortRange = '*'
+    DestinationAddressPrefix = '*'
+}
+$denyOutParameters = @{
+    Access = 'Deny'
+    Protocol = '*'
+    Direction = 'Outbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = '*'
+    DestinationPortRange = '*'
+    DestinationAddressPrefix = '*'
+}
+
+$networkSecurityGroupParams = @{
+    ResourceGroupName = $resourceGroupName
+    Name = "myNetworkSecurityGroupMiManagementService"
+}
+
+$networkSecurityGroup = Get-AzNetworkSecurityGroup @networkSecurityGroupParams
+
+$allowRuleParams = @{
+    Access = 'Allow'
+    Protocol = 'Tcp'
+    Direction = 'Inbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = 'VirtualNetwork'
+    DestinationAddressPrefix = '*'
+}
+
+$denyInRuleParams = @{
+    Access = 'Deny'
+    Protocol = '*'
+    Direction = 'Inbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = '*'
+    DestinationPortRange = '*'
+    DestinationAddressPrefix = '*'
+}
+
+$denyOutRuleParams = @{
+    Access = 'Deny'
+    Protocol = '*'
+    Direction = 'Outbound'
+    SourcePortRange = '*'
+    SourceAddressPrefix = '*'
+    DestinationPortRange = '*'
+    DestinationAddressPrefix = '*'
+}
+
+$networkSecurityGroup |
+    Add-AzNetworkSecurityRuleConfig @allowRuleParams -Priority 1000 -Name "allow_tds_inbound" -DestinationPortRange 1433 |
+    Add-AzNetworkSecurityRuleConfig @allowRuleParams -Priority 1100 -Name "allow_redirect_inbound" -DestinationPortRange 11000-11999 |
+    Add-AzNetworkSecurityRuleConfig @denyInRuleParams -Priority 4096 -Name "deny_all_inbound" |
+    Add-AzNetworkSecurityRuleConfig @denyOutRuleParams -Priority 4096 -Name "deny_all_outbound" |
+    Set-AzNetworkSecurityGroup
+
+
+# </CreateVirtualNetwork>
+
+# <CreateManagedInstance>
+
+# Create credentials
+$secpassword = ConvertTo-SecureString $miAdminSqlPassword -AsPlainText -Force
+$credential = New-Object System.Management.Automation.PSCredential -ArgumentList @($miAdminSqlLogin, $secpassword)
+
+$managedInstanceParams = @{
+    Name = $instanceName
+    ResourceGroupName = $resourceGroupName
+    Location = $location
+    SubnetId = $miSubnetConfigId
+    AdministratorCredential = $credential
+    StorageSizeInGB = $maxStorage
+    VCore = $vCores
+    Edition = $edition
+    ComputeGeneration = $computeGeneration
+    LicenseType = $license
+}
+
+New-AzSqlInstance @managedInstanceParams
+
+# </CreateManagedInstance>
+
+# <CreateDatabase>
+
+$databaseParams = @{
+    ResourceGroupName = $resourceGroupName
+    InstanceName = $instanceName
+    Name = $dbname
+    Collation = 'Latin1_General_100_CS_AS_SC'
+}
+
+New-AzSqlInstanceDatabase @databaseParams
+
+# </CreateDatabase>
+
+# Clean up deployment 
+# Remove-AzResourceGroup -ResourceGroupName $resourceGroupName
+Clean up deployment
+Use the following command to remove  the resource group and all resources associated with it.
+Remove-AzResourceGroup -ResourceGroupName $resourcegroupname
+Remove-AzResourceGroup -ResourceGroupName $resourcegroupname
+Script explanation
+This script uses some of the following commands. For more information about used and other commands in the table below, click on the links to command specific documentation.
+Next steps
+For more information on Azure PowerShell, seeAzure PowerShell documentation.
+Additional PowerShell script samples for Azure SQL Managed Instance can be found inAzure SQL Managed Instance PowerShell scripts.
+Feedback
+Was this page helpful?
+Additional resources

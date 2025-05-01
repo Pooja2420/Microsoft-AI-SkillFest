@@ -1,0 +1,542 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Delta table streaming reads and writes
+Article
+2025-02-13
+5 contributors
+In this article
+Delta Lake is deeply integrated withSpark Structured StreamingthroughreadStreamandwriteStream. Delta Lake overcomes many of the limitations typically associated with streaming systems and files, including:
+readStream
+writeStream
+Coalescing small files produced by low latency ingest.
+Maintaining âexactly-onceâ processing with more than one stream (or concurrent batch jobs).
+Efficiently discovering which files are new when using files as the source for a stream.
+Note
+This article describes using Delta Lake tables as streaming sources and sinks. To learn how to load data using streaming tables in Databricks SQL, seeUse streaming tables in Databricks SQL.
+For information on stream-static joins with Delta Lake, seeStream-static joins.
+Delta table as a source
+Structured Streaming incrementally reads Delta tables. While a streaming query is active against a Delta table, new records are processed idempotently as new table versions commit to the source table.
+The follow code examples show configuring a streaming read using either the table name or file path.
+Python
+spark.readStream.table("table_name")
+
+spark.readStream.load("/path/to/table")
+spark.readStream.table("table_name")
+
+spark.readStream.load("/path/to/table")
+Scala
+spark.readStream.table("table_name")
+
+spark.readStream.load("/path/to/table")
+spark.readStream.table("table_name")
+
+spark.readStream.load("/path/to/table")
+Important
+If the schema for a Delta table changes after a streaming read begins against the table, the query fails. For most schema changes, you can restart the stream to resolve schema mismatch and continue processing.
+In Databricks Runtime 12.2 LTS and below, you cannot stream from a Delta table with column mapping enabled that has undergone non-additive schema evolution such as renaming or dropping columns. For details, seeStreaming with column mapping and schema changes.
+Limit input rate
+The following options are available to control micro-batches:
+maxFilesPerTrigger: How many new files to be considered in every micro-batch. The default is 1000.
+maxFilesPerTrigger
+maxBytesPerTrigger: How much data gets processed in each micro-batch. This option sets a âsoft maxâ, meaning that a batch processes approximately this amount of data and may process more than the limit in order to make the streaming query move forward in cases when the smallest input unit is larger than this limit. This is not set by default.
+maxBytesPerTrigger
+If you usemaxBytesPerTriggerin conjunction withmaxFilesPerTrigger, the micro-batch processes data until either themaxFilesPerTriggerormaxBytesPerTriggerlimit is reached.
+maxBytesPerTrigger
+maxFilesPerTrigger
+maxFilesPerTrigger
+maxBytesPerTrigger
+Note
+In cases when the source table transactions are cleaned up due to thelogRetentionDurationconfigurationand the streaming query tries to process those versions, by default the query fails to avoid data loss. You can set the optionfailOnDataLosstofalseto ignore lost data and continue processing.
+logRetentionDuration
+failOnDataLoss
+false
+Stream a Delta Lake change data capture (CDC) feed
+Delta Lakechange data feedrecords changes to a Delta table, including updates and deletes. When enabled, you can stream from a change data feed and write logic to process inserts, updates, and deletes into downstream tables. Although change data feed data output differs slightly from the Delta table it describes, this provides a solution for propagating incremental changes to downstream tables in amedallion architecture.
+Important
+In Databricks Runtime 12.2 LTS and below, you cannot stream from the change data feed for a Delta table with column mapping enabled that has undergone non-additive schema evolution such as renaming or dropping columns. SeeStreaming with column mapping and schema changes.
+Ignore updates and deletes
+Structured Streaming does not handle input that is not an append and throws an exception if any modifications occur on the table being used as a source. There are two main strategies for dealing with changes that cannot be automatically propagated downstream:
+You can delete the output and checkpoint and restart the stream from the beginning.
+You can set either of these two options:ignoreDeletes: ignore transactions that delete data at partition boundaries.skipChangeCommits: ignore transactions that delete or modify existing records.skipChangeCommitssubsumesignoreDeletes.
+ignoreDeletes: ignore transactions that delete data at partition boundaries.
+ignoreDeletes
+skipChangeCommits: ignore transactions that delete or modify existing records.skipChangeCommitssubsumesignoreDeletes.
+skipChangeCommits
+skipChangeCommits
+ignoreDeletes
+Note
+In Databricks Runtime 12.2 LTS and above,skipChangeCommitsdeprecates the previous settingignoreChanges. In Databricks Runtime 11.3 LTS and lower,ignoreChangesis the only supported option.
+skipChangeCommits
+ignoreChanges
+ignoreChanges
+The semantics forignoreChangesdiffer greatly fromskipChangeCommits. WithignoreChangesenabled, rewritten data files in the source table are re-emitted after a data changing operation such asUPDATE,MERGE INTO,DELETE(within partitions), orOVERWRITE. Unchanged rows are often emitted alongside new rows, so downstream consumers must be able to handle duplicates. Deletes are not propagated downstream.ignoreChangessubsumesignoreDeletes.
+ignoreChanges
+skipChangeCommits
+ignoreChanges
+UPDATE
+MERGE INTO
+DELETE
+OVERWRITE
+ignoreChanges
+ignoreDeletes
+skipChangeCommitsdisregards file changing operations entirely. Data files that are rewritten in the source table due to data changing operation such asUPDATE,MERGE INTO,DELETE, andOVERWRITEare ignored entirely. In order to reflect changes in upstream source tables, you must implement separate logic to propagate these changes.
+skipChangeCommits
+UPDATE
+MERGE INTO
+DELETE
+OVERWRITE
+Workloads configured withignoreChangescontinue to operate using known semantics, but Databricks recommends usingskipChangeCommitsfor all new workloads. Migrating workloads usingignoreChangestoskipChangeCommitsrequires refactoring logic.
+ignoreChanges
+skipChangeCommits
+ignoreChanges
+skipChangeCommits
+Example
+For example, suppose you have a tableuser_eventswithdate,user_email, andactioncolumns that is partitioned bydate. You stream out of theuser_eventstable and you need to delete data from it due to GDPR.
+user_events
+date
+user_email
+action
+date
+user_events
+When you delete at partition boundaries (that is, theWHEREis on a partition column), the files are already segmented by value so the delete just drops those files from the metadata. When you delete an entire partition of data, you can use the following:
+WHERE
+spark.readStream
+  .option("ignoreDeletes", "true")
+  .table("user_events")
+spark.readStream
+  .option("ignoreDeletes", "true")
+  .table("user_events")
+If you delete data in multiple partitions (in this example, filtering onuser_email), use the following syntax:
+user_email
+spark.readStream
+  .option("skipChangeCommits", "true")
+  .table("user_events")
+spark.readStream
+  .option("skipChangeCommits", "true")
+  .table("user_events")
+If you update auser_emailwith theUPDATEstatement, the file containing theuser_emailin question is rewritten. UseskipChangeCommitsto ignore the changed data files.
+user_email
+UPDATE
+user_email
+skipChangeCommits
+Specify initial position
+You can use the following options to specify the starting point of the Delta Lake streaming source without processing the entire table.
+startingVersion: The Delta Lake version to start from. Databricks recommends omitting this option for most workloads. When not set, the stream starts from the latest available version including a complete snapshot of the table at that moment.If specified, the stream reads all changes to the Delta table starting with the specified version (inclusive). If the specified version is no longer available, the stream fails to start. You can obtain the commit versions from theversioncolumn of theDESCRIBE HISTORYcommand output.To return only the latest changes, specifylatest.
+startingVersion: The Delta Lake version to start from. Databricks recommends omitting this option for most workloads. When not set, the stream starts from the latest available version including a complete snapshot of the table at that moment.
+startingVersion
+If specified, the stream reads all changes to the Delta table starting with the specified version (inclusive). If the specified version is no longer available, the stream fails to start. You can obtain the commit versions from theversioncolumn of theDESCRIBE HISTORYcommand output.
+version
+To return only the latest changes, specifylatest.
+latest
+startingTimestamp: The timestamp to start from. All table changes committed at or after the timestamp (inclusive) are read by the streaming reader. If the provided timestamp precedes all table commits, the streaming read begins with the earliest available timestamp. One of:A timestamp string. For example,"2019-01-01T00:00:00.000Z".A date string. For example,"2019-01-01".
+startingTimestamp: The timestamp to start from. All table changes committed at or after the timestamp (inclusive) are read by the streaming reader. If the provided timestamp precedes all table commits, the streaming read begins with the earliest available timestamp. One of:
+startingTimestamp
+A timestamp string. For example,"2019-01-01T00:00:00.000Z".
+"2019-01-01T00:00:00.000Z"
+A date string. For example,"2019-01-01".
+"2019-01-01"
+You cannot set both options at the same time. They take effect only when starting a new streaming query. If a streaming query has started and the progress has been recorded in its checkpoint, these options are ignored.
+Important
+Although you can start the streaming source from a specified version or timestamp, the schema of the streaming source is always the latest schema of the Delta table. You must ensure there is no incompatible schema change to the Delta table after the specified version or timestamp. Otherwise, the streaming source may return incorrect results when reading the data with an incorrect schema.
+Example
+For example, suppose you have a tableuser_events. If you want to read changes since version 5, use:
+user_events
+spark.readStream
+  .option("startingVersion", "5")
+  .table("user_events")
+spark.readStream
+  .option("startingVersion", "5")
+  .table("user_events")
+If you want to read changes since 2018-10-18, use:
+spark.readStream
+  .option("startingTimestamp", "2018-10-18")
+  .table("user_events")
+spark.readStream
+  .option("startingTimestamp", "2018-10-18")
+  .table("user_events")
+Process initial snapshot without data being dropped
+This feature is available on Databricks Runtime 11.3 LTS and above.
+When using a Delta table as a stream source, the query first processes all of the data present in the table. The Delta table at this version is called the initial snapshot. By default, the Delta tableâs data files are processed based on which file was last modified. However, the last modification time does not necessarily represent the record event time order.
+In a stateful streaming query with a defined watermark, processing files by modification time can result in records being processed in the wrong order. This could lead to records dropping as late events by the watermark.
+You can avoid the data drop issue by enabling the following option:
+withEventTimeOrder: Whether the initial snapshot should be processed with event time order.
+With event time order enabled, the event time range of initial snapshot data is divided into time buckets. Each micro batch processes a bucket by filtering data within the time range. The maxFilesPerTrigger and maxBytesPerTrigger configuration options are still applicable to control the microbatch size but only in an approximate way due to the nature of the processing.
+The graphic below shows this process:
+
+Notable information about this feature:
+The data drop issue only happens when the initial Delta snapshot of a stateful streaming query is processed in the default order.
+You cannot changewithEventTimeOrderonce the stream query is started while the initial snapshot is still being processed. To restart withwithEventTimeOrderchanged, you need to delete the checkpoint.
+withEventTimeOrder
+withEventTimeOrder
+If you are running a stream query with withEventTimeOrder enabled, you cannot downgrade it to a DBR version which doesnât support this feature until the initial snapshot processing is completed. If you need to downgrade, you can wait for the initial snapshot to finish, or delete the checkpoint and restart the query.
+This feature is not supported in the following uncommon scenarios:The event time column is a generated column and there are non-projection transformations between the Delta source and watermark.There is a watermark that has more than one Delta source in the stream query.
+The event time column is a generated column and there are non-projection transformations between the Delta source and watermark.
+There is a watermark that has more than one Delta source in the stream query.
+With event time order enabled, the performance of the Delta initial snapshot processing might be slower.
+Each micro batch scans the initial snapshot to filter data within the corresponding event time range. For faster filter action, it is advised to use a Delta source column as the event time so that data skipping can be applied (checkData skipping for Delta Lakefor when itâs applicable). Additionally, table partitioning along the event time column can further speed the processing. You can check Spark UI to see how many delta files are scanned for a specific micro batch.
+Example
+Suppose you have a tableuser_eventswith anevent_timecolumn. Your streaming query is an aggregation query. If you want to ensure no data drop during the initial snapshot processing, you can use:
+user_events
+event_time
+spark.readStream
+  .option("withEventTimeOrder", "true")
+  .table("user_events")
+  .withWatermark("event_time", "10 seconds")
+spark.readStream
+  .option("withEventTimeOrder", "true")
+  .table("user_events")
+  .withWatermark("event_time", "10 seconds")
+Note
+You can also enable this with Spark config on the cluster which will apply to all streaming queries:spark.databricks.delta.withEventTimeOrder.enabled true
+spark.databricks.delta.withEventTimeOrder.enabled true
+Delta table as a sink
+You can also write data into a Delta table using Structured Streaming. The transaction log enables Delta Lake to guarantee exactly-once processing, even when there are other streams or batch queries running concurrently against the table.
+Note
+The Delta LakeVACUUMfunction removes all files not managed by Delta Lake but skips any directories that begin with_. You can safely store checkpoints alongside other data and metadata for a Delta table using a directory structure such as<table-name>/_checkpoints.
+VACUUM
+_
+<table-name>/_checkpoints
+Metrics
+You can find out the number of bytes and number of files yet to be processed in astreaming query processas thenumBytesOutstandingandnumFilesOutstandingmetrics. Additional metrics include:
+numBytesOutstanding
+numFilesOutstanding
+numNewListedFiles: Number of Delta Lake files that were listed in order to calculate the backlog for this batch.backlogEndOffset: The table version used to calculate the backlog.
+numNewListedFiles
+backlogEndOffset: The table version used to calculate the backlog.
+backlogEndOffset
+If you are running the stream in a notebook, you can see these metrics under theRaw Datatab in the streaming query progress dashboard:
+{
+  "sources": [
+    {
+      "description": "DeltaSource[file:/path/to/source]",
+      "metrics": {
+        "numBytesOutstanding": "3456",
+        "numFilesOutstanding": "8"
+      }
+    }
+  ]
+}
+{
+  "sources": [
+    {
+      "description": "DeltaSource[file:/path/to/source]",
+      "metrics": {
+        "numBytesOutstanding": "3456",
+        "numFilesOutstanding": "8"
+      }
+    }
+  ]
+}
+Append mode
+By default, streams run in append mode, which adds new records to the table.
+Use thetoTablemethod when streaming to tables, as in the following example:
+toTable
+(events.writeStream
+   .outputMode("append")
+   .option("checkpointLocation", "/tmp/delta/events/_checkpoints/")
+   .toTable("events")
+)
+(events.writeStream
+   .outputMode("append")
+   .option("checkpointLocation", "/tmp/delta/events/_checkpoints/")
+   .toTable("events")
+)
+events.writeStream
+  .outputMode("append")
+  .option("checkpointLocation", "/tmp/delta/events/_checkpoints/")
+  .toTable("events")
+events.writeStream
+  .outputMode("append")
+  .option("checkpointLocation", "/tmp/delta/events/_checkpoints/")
+  .toTable("events")
+Complete mode
+You can also use Structured Streaming to replace the entire table with every batch. One example use case is to compute a summary using aggregation:
+(spark.readStream
+  .table("events")
+  .groupBy("customerId")
+  .count()
+  .writeStream
+  .outputMode("complete")
+  .option("checkpointLocation", "/tmp/delta/eventsByCustomer/_checkpoints/")
+  .toTable("events_by_customer")
+)
+(spark.readStream
+  .table("events")
+  .groupBy("customerId")
+  .count()
+  .writeStream
+  .outputMode("complete")
+  .option("checkpointLocation", "/tmp/delta/eventsByCustomer/_checkpoints/")
+  .toTable("events_by_customer")
+)
+spark.readStream
+  .table("events")
+  .groupBy("customerId")
+  .count()
+  .writeStream
+  .outputMode("complete")
+  .option("checkpointLocation", "/tmp/delta/eventsByCustomer/_checkpoints/")
+  .toTable("events_by_customer")
+spark.readStream
+  .table("events")
+  .groupBy("customerId")
+  .count()
+  .writeStream
+  .outputMode("complete")
+  .option("checkpointLocation", "/tmp/delta/eventsByCustomer/_checkpoints/")
+  .toTable("events_by_customer")
+The preceding example continuously updates a table that contains the aggregate number of events by customer.
+For applications with more lenient latency requirements, you can save computing resources with one-time triggers. Use these to update summary aggregation tables on a given schedule, processing only new data that has arrived since the last update.
+Upsert from streaming queries usingforeachBatch
+foreachBatch
+You can use a combination ofmergeandforeachBatchto write complex upserts from a streaming query into a Delta table. SeeUse foreachBatch to write to arbitrary data sinks.
+merge
+foreachBatch
+This pattern has many applications, including the following:
+Write streaming aggregates in Update Mode: This is much more efficient than Complete Mode.
+Write a stream of database changes into a Delta table: Themerge query for writing change datacan be used inforeachBatchto continuously apply a stream of changes to a Delta table.
+foreachBatch
+Write a stream of data into Delta table with deduplication: Theinsert-only merge query for deduplicationcan be used inforeachBatchto continuously write data (with duplicates) to a Delta table with automatic deduplication.
+foreachBatch
+Note
+Make sure that yourmergestatement insideforeachBatchis idempotent as restarts of the streaming query can apply the operation on the same batch of data multiple times.
+merge
+foreachBatch
+Whenmergeis used inforeachBatch, the input data rate of the streaming query (reported throughStreamingQueryProgressand visible in the notebook rate graph) may be reported as a multiple of the actual rate at which data is generated at the source. This is becausemergereads the input data multiple times causing the input metrics to be multiplied. If this is a bottleneck, you can cache the batch DataFrame beforemergeand then uncache it aftermerge.
+merge
+foreachBatch
+StreamingQueryProgress
+merge
+merge
+merge
+The following example demonstrates how you can use SQL withinforeachBatchto accomplish this task:
+foreachBatch
+Scala
+// Function to upsert microBatchOutputDF into Delta table using merge
+def upsertToDelta(microBatchOutputDF: DataFrame, batchId: Long) {
+  // Set the dataframe to view name
+  microBatchOutputDF.createOrReplaceTempView("updates")
+
+  // Use the view name to apply MERGE
+  // NOTE: You have to use the SparkSession that has been used to define the `updates` dataframe
+  microBatchOutputDF.sparkSession.sql(s"""
+    MERGE INTO aggregates t
+    USING updates s
+    ON s.key = t.key
+    WHEN MATCHED THEN UPDATE SET *
+    WHEN NOT MATCHED THEN INSERT *
+  """)
+}
+
+// Write the output of a streaming aggregation query into Delta table
+streamingAggregatesDF.writeStream
+  .foreachBatch(upsertToDelta _)
+  .outputMode("update")
+  .start()
+// Function to upsert microBatchOutputDF into Delta table using merge
+def upsertToDelta(microBatchOutputDF: DataFrame, batchId: Long) {
+  // Set the dataframe to view name
+  microBatchOutputDF.createOrReplaceTempView("updates")
+
+  // Use the view name to apply MERGE
+  // NOTE: You have to use the SparkSession that has been used to define the `updates` dataframe
+  microBatchOutputDF.sparkSession.sql(s"""
+    MERGE INTO aggregates t
+    USING updates s
+    ON s.key = t.key
+    WHEN MATCHED THEN UPDATE SET *
+    WHEN NOT MATCHED THEN INSERT *
+  """)
+}
+
+// Write the output of a streaming aggregation query into Delta table
+streamingAggregatesDF.writeStream
+  .foreachBatch(upsertToDelta _)
+  .outputMode("update")
+  .start()
+Python
+# Function to upsert microBatchOutputDF into Delta table using merge
+def upsertToDelta(microBatchOutputDF, batchId):
+  # Set the dataframe to view name
+  microBatchOutputDF.createOrReplaceTempView("updates")
+
+  # Use the view name to apply MERGE
+  # NOTE: You have to use the SparkSession that has been used to define the `updates` dataframe
+
+  # In Databricks Runtime 10.5 and below, you must use the following:
+  # microBatchOutputDF._jdf.sparkSession().sql("""
+  microBatchOutputDF.sparkSession.sql("""
+    MERGE INTO aggregates t
+    USING updates s
+    ON s.key = t.key
+    WHEN MATCHED THEN UPDATE SET *
+    WHEN NOT MATCHED THEN INSERT *
+  """)
+
+# Write the output of a streaming aggregation query into Delta table
+(streamingAggregatesDF.writeStream
+  .foreachBatch(upsertToDelta)
+  .outputMode("update")
+  .start()
+)
+# Function to upsert microBatchOutputDF into Delta table using merge
+def upsertToDelta(microBatchOutputDF, batchId):
+  # Set the dataframe to view name
+  microBatchOutputDF.createOrReplaceTempView("updates")
+
+  # Use the view name to apply MERGE
+  # NOTE: You have to use the SparkSession that has been used to define the `updates` dataframe
+
+  # In Databricks Runtime 10.5 and below, you must use the following:
+  # microBatchOutputDF._jdf.sparkSession().sql("""
+  microBatchOutputDF.sparkSession.sql("""
+    MERGE INTO aggregates t
+    USING updates s
+    ON s.key = t.key
+    WHEN MATCHED THEN UPDATE SET *
+    WHEN NOT MATCHED THEN INSERT *
+  """)
+
+# Write the output of a streaming aggregation query into Delta table
+(streamingAggregatesDF.writeStream
+  .foreachBatch(upsertToDelta)
+  .outputMode("update")
+  .start()
+)
+You can also choose to use the Delta Lake APIs to perform streaming upserts, as in the following example:
+Scala
+import io.delta.tables.*
+
+val deltaTable = DeltaTable.forName(spark, "table_name")
+
+// Function to upsert microBatchOutputDF into Delta table using merge
+def upsertToDelta(microBatchOutputDF: DataFrame, batchId: Long) {
+  deltaTable.as("t")
+    .merge(
+      microBatchOutputDF.as("s"),
+      "s.key = t.key")
+    .whenMatched().updateAll()
+    .whenNotMatched().insertAll()
+    .execute()
+}
+
+// Write the output of a streaming aggregation query into Delta table
+streamingAggregatesDF.writeStream
+  .foreachBatch(upsertToDelta _)
+  .outputMode("update")
+  .start()
+import io.delta.tables.*
+
+val deltaTable = DeltaTable.forName(spark, "table_name")
+
+// Function to upsert microBatchOutputDF into Delta table using merge
+def upsertToDelta(microBatchOutputDF: DataFrame, batchId: Long) {
+  deltaTable.as("t")
+    .merge(
+      microBatchOutputDF.as("s"),
+      "s.key = t.key")
+    .whenMatched().updateAll()
+    .whenNotMatched().insertAll()
+    .execute()
+}
+
+// Write the output of a streaming aggregation query into Delta table
+streamingAggregatesDF.writeStream
+  .foreachBatch(upsertToDelta _)
+  .outputMode("update")
+  .start()
+Python
+from delta.tables import *
+
+deltaTable = DeltaTable.forName(spark, "table_name")
+
+# Function to upsert microBatchOutputDF into Delta table using merge
+def upsertToDelta(microBatchOutputDF, batchId):
+  (deltaTable.alias("t").merge(
+      microBatchOutputDF.alias("s"),
+      "s.key = t.key")
+    .whenMatchedUpdateAll()
+    .whenNotMatchedInsertAll()
+    .execute()
+  )
+
+# Write the output of a streaming aggregation query into Delta table
+(streamingAggregatesDF.writeStream
+  .foreachBatch(upsertToDelta)
+  .outputMode("update")
+  .start()
+)
+from delta.tables import *
+
+deltaTable = DeltaTable.forName(spark, "table_name")
+
+# Function to upsert microBatchOutputDF into Delta table using merge
+def upsertToDelta(microBatchOutputDF, batchId):
+  (deltaTable.alias("t").merge(
+      microBatchOutputDF.alias("s"),
+      "s.key = t.key")
+    .whenMatchedUpdateAll()
+    .whenNotMatchedInsertAll()
+    .execute()
+  )
+
+# Write the output of a streaming aggregation query into Delta table
+(streamingAggregatesDF.writeStream
+  .foreachBatch(upsertToDelta)
+  .outputMode("update")
+  .start()
+)
+Idempotent table writes inforeachBatch
+foreachBatch
+Note
+Databricks recommends configuring a separate streaming write for each sink you want to update instead of usingforeachBatch. This is because writes to multiple tables are serialized when using âforeachBatch`, which reduces parallelization and increases overall latency.
+foreachBatch
+Delta tables support the followingDataFrameWriteroptions to make writes to multiple tables withinforeachBatchidempotent:
+DataFrameWriter
+foreachBatch
+txnAppId: A unique string that you can pass on each DataFrame write. For example, you can use the StreamingQuery ID astxnAppId.
+txnAppId
+txnAppId
+txnVersion: A monotonically increasing number that acts as transaction version.
+txnVersion
+Delta Lake uses the combination oftxnAppIdandtxnVersionto identify duplicate writes and ignore them.
+txnAppId
+txnVersion
+If a batch write is interrupted with a failure, re-running the batch uses the same application and batch ID to help the runtime correctly identify duplicate writes and ignore them. Application ID (txnAppId) can be any user-generated unique string and does not have to be related to the stream ID. SeeUse foreachBatch to write to arbitrary data sinks.
+txnAppId
+Warning
+If you delete the streaming checkpoint and restart the query with a new checkpoint, you must provide a differenttxnAppId. New checkpoints start with a batch ID of0. Delta Lake uses the batch ID andtxnAppIdas a unique key, and skips batches with already seen values.
+txnAppId
+0
+txnAppId
+The following code example demonstrates this pattern:
+Python
+app_id = ... # A unique string that is used as an application ID.
+
+def writeToDeltaLakeTableIdempotent(batch_df, batch_id):
+  batch_df.write.format(...).option("txnVersion", batch_id).option("txnAppId", app_id).save(...) # location 1
+  batch_df.write.format(...).option("txnVersion", batch_id).option("txnAppId", app_id).save(...) # location 2
+
+streamingDF.writeStream.foreachBatch(writeToDeltaLakeTableIdempotent).start()
+app_id = ... # A unique string that is used as an application ID.
+
+def writeToDeltaLakeTableIdempotent(batch_df, batch_id):
+  batch_df.write.format(...).option("txnVersion", batch_id).option("txnAppId", app_id).save(...) # location 1
+  batch_df.write.format(...).option("txnVersion", batch_id).option("txnAppId", app_id).save(...) # location 2
+
+streamingDF.writeStream.foreachBatch(writeToDeltaLakeTableIdempotent).start()
+Scala
+val appId = ... // A unique string that is used as an application ID.
+streamingDF.writeStream.foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+  batchDF.write.format(...).option("txnVersion", batchId).option("txnAppId", appId).save(...)  // location 1
+  batchDF.write.format(...).option("txnVersion", batchId).option("txnAppId", appId).save(...)  // location 2
+}
+val appId = ... // A unique string that is used as an application ID.
+streamingDF.writeStream.foreachBatch { (batchDF: DataFrame, batchId: Long) =>
+  batchDF.write.format(...).option("txnVersion", batchId).option("txnAppId", appId).save(...)  // location 1
+  batchDF.write.format(...).option("txnVersion", batchId).option("txnAppId", appId).save(...)  // location 2
+}
+Feedback
+Was this page helpful?
+Additional resources

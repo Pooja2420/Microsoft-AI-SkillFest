@@ -1,0 +1,692 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Getting started with Always Encrypted
+Article
+2024-09-04
+5 contributors
+In this article
+Applies to:SQL ServerAzure SQL DatabaseAzure SQL Managed Instance
+This tutorial teaches you how to get started withAlways Encrypted. It will show you:
+How to encrypt selected columns in your database.
+How to query encrypted columns.
+Note
+If you're looking for information onAlways Encrypted with secure enclaves, see the following tutorials instead:
+Getting started using Always Encrypted with secure enclaves
+Tutorial: Getting started using Always Encrypted with secure enclaves in SQL Server
+Prerequisites
+For this tutorial, you need:
+Anemptydatabase in Azure SQL Database, Azure SQL Managed Instance, or SQL Server. The below instructions assume the database name isContosoHR. You need to be an owner of the database (a member of thedb_ownerrole). For information on how to create a database, seeQuickstart: Create a single database - Azure SQL DatabaseorCreate a database in SQL Server.
+Optional, but recommended, especially if your database is in Azure: a key vault in Azure Key Vault. For information on how to create a key vault, seeQuickstart: Create a key vault using the Azure portal.If your key vault uses the access policy permissions model, make sure you have the following key permissions in the key vault:get,list,create,unwrap key,wrap key,verify,sign. SeeAssign a Key Vault access policy.If you're using the Azure role-based access control (RBAC) permission model, make you sure you're a member of theKey Vault Crypto Officerrole for your key vault. SeeProvide access to Key Vault keys, certificates, and secrets with an Azure role-based access control.
+If your key vault uses the access policy permissions model, make sure you have the following key permissions in the key vault:get,list,create,unwrap key,wrap key,verify,sign. SeeAssign a Key Vault access policy.
+get
+list
+create
+unwrap key
+wrap key
+verify
+sign
+If you're using the Azure role-based access control (RBAC) permission model, make you sure you're a member of theKey Vault Crypto Officerrole for your key vault. SeeProvide access to Key Vault keys, certificates, and secrets with an Azure role-based access control.
+The latest version ofSQL Server Management Studio (SSMS)or the latest version of theSqlServerandAzPowerShell modules. The Az PowerShell module is required only if you're using Azure Key Vault.
+Step 1: Create and populate the database schema
+In this step, you'll create theHRschema and theEmployeestable. Then, you'll populate the table with some data.
+SSMS
+PowerShell
+Connect to your database. For instructions on how to connect to a database from SSMS, seeQuickstart: Connect and query an Azure SQL Database or an Azure SQL Managed Instance using SQL Server Management Studio (SSMS)orQuickstart: Connect and query a SQL Server instance using SQL Server Management Studio (SSMS).
+Connect to your database. For instructions on how to connect to a database from SSMS, seeQuickstart: Connect and query an Azure SQL Database or an Azure SQL Managed Instance using SQL Server Management Studio (SSMS)orQuickstart: Connect and query a SQL Server instance using SQL Server Management Studio (SSMS).
+Open a new query window for theContosoHRdatabase.
+Open a new query window for theContosoHRdatabase.
+Paste in and execute the below statements to create a new table, namedEmployees.CREATE SCHEMA [HR];
+GO
+
+CREATE TABLE [HR].[Employees]
+(
+    [EmployeeID] [int] IDENTITY(1,1) NOT NULL
+    , [SSN] [char](11) NOT NULL
+    , [FirstName] [nvarchar](50) NOT NULL
+    , [LastName] [nvarchar](50) NOT NULL
+    , [Salary] [money] NOT NULL
+) ON [PRIMARY];
+Paste in and execute the below statements to create a new table, namedEmployees.
+CREATE SCHEMA [HR];
+GO
+
+CREATE TABLE [HR].[Employees]
+(
+    [EmployeeID] [int] IDENTITY(1,1) NOT NULL
+    , [SSN] [char](11) NOT NULL
+    , [FirstName] [nvarchar](50) NOT NULL
+    , [LastName] [nvarchar](50) NOT NULL
+    , [Salary] [money] NOT NULL
+) ON [PRIMARY];
+CREATE SCHEMA [HR];
+GO
+
+CREATE TABLE [HR].[Employees]
+(
+    [EmployeeID] [int] IDENTITY(1,1) NOT NULL
+    , [SSN] [char](11) NOT NULL
+    , [FirstName] [nvarchar](50) NOT NULL
+    , [LastName] [nvarchar](50) NOT NULL
+    , [Salary] [money] NOT NULL
+) ON [PRIMARY];
+Paste in and execute the below statements to add a few employee records to theEmployeestable.INSERT INTO [HR].[Employees]
+(
+    [SSN]
+    , [FirstName]
+    , [LastName]
+    , [Salary]
+)
+VALUES
+(
+    '795-73-9838'
+    , N'Catherine'
+    , N'Abel'
+    , $31692
+);
+
+INSERT INTO [HR].[Employees]
+(
+    [SSN]
+    , [FirstName]
+    , [LastName]
+    , [Salary]
+)
+VALUES
+(
+    '990-00-6818'
+    , N'Kim'
+    , N'Abercrombie'
+    , $55415
+);
+Paste in and execute the below statements to add a few employee records to theEmployeestable.
+INSERT INTO [HR].[Employees]
+(
+    [SSN]
+    , [FirstName]
+    , [LastName]
+    , [Salary]
+)
+VALUES
+(
+    '795-73-9838'
+    , N'Catherine'
+    , N'Abel'
+    , $31692
+);
+
+INSERT INTO [HR].[Employees]
+(
+    [SSN]
+    , [FirstName]
+    , [LastName]
+    , [Salary]
+)
+VALUES
+(
+    '990-00-6818'
+    , N'Kim'
+    , N'Abercrombie'
+    , $55415
+);
+INSERT INTO [HR].[Employees]
+(
+    [SSN]
+    , [FirstName]
+    , [LastName]
+    , [Salary]
+)
+VALUES
+(
+    '795-73-9838'
+    , N'Catherine'
+    , N'Abel'
+    , $31692
+);
+
+INSERT INTO [HR].[Employees]
+(
+    [SSN]
+    , [FirstName]
+    , [LastName]
+    , [Salary]
+)
+VALUES
+(
+    '990-00-6818'
+    , N'Kim'
+    , N'Abercrombie'
+    , $55415
+);
+In a PowerShell session, execute the following commands. Make sure you update the connection string with the address of your server and authentication settings that are valid for your database.
+Import-Module "SqlServer"
+
+# Set your database connection string
+$connectionString = "Server = myServerAddress; Database = ContosoHR; ..."
+
+# Create a new table, named Employees.
+$query = @'
+    CREATE SCHEMA [HR];
+    GO
+    
+    CREATE TABLE [HR].[Employees]
+    (
+        [EmployeeID] [int] IDENTITY(1,1) NOT NULL
+        , [SSN] [char](11) NOT NULL
+        , [FirstName] [nvarchar](50) NOT NULL
+        , [LastName] [nvarchar](50) NOT NULL
+        , [Salary] [money] NOT NULL
+    ) ON [PRIMARY];
+'@
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+
+# Add a few rows to the Employees table.
+$query = @'
+    INSERT INTO [HR].[Employees]
+    (
+        [SSN]
+        , [FirstName]
+        , [LastName]
+        , [Salary]
+    )
+    VALUES
+    (
+        '795-73-9838'
+        , N'Catherine'
+        , N'Abel'
+        , $31692
+    );
+
+    INSERT INTO [HR].[Employees]
+    (
+        [SSN]
+        , [FirstName]
+        , [LastName]
+        , [Salary]
+    )
+    VALUES
+    (
+        '990-00-6818'
+        , N'Kim'
+        , N'Abercrombie'
+        , $55415
+    );
+'@
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+Import-Module "SqlServer"
+
+# Set your database connection string
+$connectionString = "Server = myServerAddress; Database = ContosoHR; ..."
+
+# Create a new table, named Employees.
+$query = @'
+    CREATE SCHEMA [HR];
+    GO
+    
+    CREATE TABLE [HR].[Employees]
+    (
+        [EmployeeID] [int] IDENTITY(1,1) NOT NULL
+        , [SSN] [char](11) NOT NULL
+        , [FirstName] [nvarchar](50) NOT NULL
+        , [LastName] [nvarchar](50) NOT NULL
+        , [Salary] [money] NOT NULL
+    ) ON [PRIMARY];
+'@
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+
+# Add a few rows to the Employees table.
+$query = @'
+    INSERT INTO [HR].[Employees]
+    (
+        [SSN]
+        , [FirstName]
+        , [LastName]
+        , [Salary]
+    )
+    VALUES
+    (
+        '795-73-9838'
+        , N'Catherine'
+        , N'Abel'
+        , $31692
+    );
+
+    INSERT INTO [HR].[Employees]
+    (
+        [SSN]
+        , [FirstName]
+        , [LastName]
+        , [Salary]
+    )
+    VALUES
+    (
+        '990-00-6818'
+        , N'Kim'
+        , N'Abercrombie'
+        , $55415
+    );
+'@
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+Step 2: Encrypt columns
+In this step, you'll provision a column master key and a column encryption key for Always Encrypted. Then, you'll encrypt theSSNandSalarycolumns in theEmployeestable.
+SSMS
+PowerShell
+SSMS provides a wizard that helps you easily configure Always Encrypted by setting up a column master key, a column encryption key, and encrypt selected columns.
+InObject Explorer, expandDatabases>ContosoHR>Tables.
+InObject Explorer, expandDatabases>ContosoHR>Tables.
+Right-click theEmployeestable and selectEncrypt Columnsto open the Always Encrypted wizard.
+Right-click theEmployeestable and selectEncrypt Columnsto open the Always Encrypted wizard.
+
+SelectNexton theIntroductionpage of the wizard.
+SelectNexton theIntroductionpage of the wizard.
+On theColumn Selectionpage.Select theSSNandSalarycolumns. Choose deterministic encryption for theSSNcolumn and randomized encryption for theSalarycolumn. Deterministic encryption supports queries, such as point lookup searches that involve equality comparisons on encrypted columns. Randomized encryption doesn't support any computations on encrypted columns.LeaveCEK-Auto1 (New)as the column encryption key for both columns. This key doesn't exist yet and will be generated by the wizard.SelectNext.
+On theColumn Selectionpage.
+Select theSSNandSalarycolumns. Choose deterministic encryption for theSSNcolumn and randomized encryption for theSalarycolumn. Deterministic encryption supports queries, such as point lookup searches that involve equality comparisons on encrypted columns. Randomized encryption doesn't support any computations on encrypted columns.
+LeaveCEK-Auto1 (New)as the column encryption key for both columns. This key doesn't exist yet and will be generated by the wizard.
+SelectNext.
+
+On theMaster Key Configurationpage, configure a new column master key that will be generated by the wizard. First, you need to select where you want to store your column master key. The wizard supports two key store types:Azure Key Vault - recommended if your database is in AzureWindows certificate storeIn general, Azure Key Vault is the recommended option, especially if your database is in Azure.To use Azure Key Vault:SelectAzure Key Vault.SelectSign inand complete signing in to Azure.After you've signed in, the page will display the list of subscriptions and key vaults, you have access to. Select an Azure subscription containing the key vault, you want to use.Select your key vault.SelectNext.To use Windows certificate store:SelectWindows certificate store.Leave the default selection ofCurrent User- this will instruct the wizard to generate a certificate (your new column master key) in theCurrent Userstore.SelectNext.
+On theMaster Key Configurationpage, configure a new column master key that will be generated by the wizard. First, you need to select where you want to store your column master key. The wizard supports two key store types:
+Azure Key Vault - recommended if your database is in Azure
+Windows certificate store
+In general, Azure Key Vault is the recommended option, especially if your database is in Azure.
+To use Azure Key Vault:SelectAzure Key Vault.SelectSign inand complete signing in to Azure.After you've signed in, the page will display the list of subscriptions and key vaults, you have access to. Select an Azure subscription containing the key vault, you want to use.Select your key vault.SelectNext.
+To use Azure Key Vault:
+SelectAzure Key Vault.
+SelectSign inand complete signing in to Azure.
+After you've signed in, the page will display the list of subscriptions and key vaults, you have access to. Select an Azure subscription containing the key vault, you want to use.
+Select your key vault.
+SelectNext.
+
+To use Windows certificate store:SelectWindows certificate store.Leave the default selection ofCurrent User- this will instruct the wizard to generate a certificate (your new column master key) in theCurrent Userstore.SelectNext.
+To use Windows certificate store:
+SelectWindows certificate store.
+SelectWindows certificate store.
+Leave the default selection ofCurrent User- this will instruct the wizard to generate a certificate (your new column master key) in theCurrent Userstore.
+Leave the default selection ofCurrent User- this will instruct the wizard to generate a certificate (your new column master key) in theCurrent Userstore.
+
+SelectNext.
+SelectNext.
+On theIn-Place Encryption Settingspage, no additional configuration is required because the database does not have an enclave enabled. SelectNext.
+On theIn-Place Encryption Settingspage, no additional configuration is required because the database does not have an enclave enabled. SelectNext.
+On theRun Settingspage, you're asked if you want to proceed with encryption or generate a PowerShell script to be executed later. Leave the default settings and selectNext.
+On theRun Settingspage, you're asked if you want to proceed with encryption or generate a PowerShell script to be executed later. Leave the default settings and selectNext.
+On theSummarypage, the wizard informs you about the actions it will execute. Check all the information is correct and selectFinish.
+On theSummarypage, the wizard informs you about the actions it will execute. Check all the information is correct and selectFinish.
+On theResultspage, you can monitor the progress of the wizard's operations. Wait until all operations complete successfully and selectClose.
+On theResultspage, you can monitor the progress of the wizard's operations. Wait until all operations complete successfully and selectClose.
+
+(Optional) Explore the changes the wizard has made in your database.ExpandContosoHR>Security>Always Encrypted Keysto explore the metadata objects for the column master key and the column encryption that the wizard created.You can also run the below queries against the system catalog views that contain key metadata.SELECT * FROM sys.column_master_keys;
+SELECT * FROM sys.column_encryption_keys
+SELECT * FROM sys.column_encryption_key_valuesInObject Explorer, right-click theEmployeestable and selectScript Table as>CREATE To>New Query Editor Window. This will open a new query window with theCREATE TABLEstatement for theEmployeestable. Note theENCRYPTED WITHclause that appears in the definitions of theSSNandSalarycolumns.You can also run the below query againstsys.columnsto retrieve column-level encryption metadata for the two encrypted columns.SELECT
+[name]
+, [encryption_type]
+, [encryption_type_desc]
+, [encryption_algorithm_name]
+, [column_encryption_key_id]
+FROM sys.columns
+WHERE [encryption_type] IS NOT NULL;
+(Optional) Explore the changes the wizard has made in your database.
+ExpandContosoHR>Security>Always Encrypted Keysto explore the metadata objects for the column master key and the column encryption that the wizard created.
+ExpandContosoHR>Security>Always Encrypted Keysto explore the metadata objects for the column master key and the column encryption that the wizard created.
+You can also run the below queries against the system catalog views that contain key metadata.SELECT * FROM sys.column_master_keys;
+SELECT * FROM sys.column_encryption_keys
+SELECT * FROM sys.column_encryption_key_values
+You can also run the below queries against the system catalog views that contain key metadata.
+SELECT * FROM sys.column_master_keys;
+SELECT * FROM sys.column_encryption_keys
+SELECT * FROM sys.column_encryption_key_values
+SELECT * FROM sys.column_master_keys;
+SELECT * FROM sys.column_encryption_keys
+SELECT * FROM sys.column_encryption_key_values
+InObject Explorer, right-click theEmployeestable and selectScript Table as>CREATE To>New Query Editor Window. This will open a new query window with theCREATE TABLEstatement for theEmployeestable. Note theENCRYPTED WITHclause that appears in the definitions of theSSNandSalarycolumns.
+InObject Explorer, right-click theEmployeestable and selectScript Table as>CREATE To>New Query Editor Window. This will open a new query window with theCREATE TABLEstatement for theEmployeestable. Note theENCRYPTED WITHclause that appears in the definitions of theSSNandSalarycolumns.
+You can also run the below query againstsys.columnsto retrieve column-level encryption metadata for the two encrypted columns.SELECT
+[name]
+, [encryption_type]
+, [encryption_type_desc]
+, [encryption_algorithm_name]
+, [column_encryption_key_id]
+FROM sys.columns
+WHERE [encryption_type] IS NOT NULL;
+You can also run the below query againstsys.columnsto retrieve column-level encryption metadata for the two encrypted columns.
+SELECT
+[name]
+, [encryption_type]
+, [encryption_type_desc]
+, [encryption_algorithm_name]
+, [column_encryption_key_id]
+FROM sys.columns
+WHERE [encryption_type] IS NOT NULL;
+SELECT
+[name]
+, [encryption_type]
+, [encryption_type_desc]
+, [encryption_algorithm_name]
+, [column_encryption_key_id]
+FROM sys.columns
+WHERE [encryption_type] IS NOT NULL;
+Create a column master key in your key store.If you're using Azure Key Vault, execute the below commands to create an asymmetric key in your key vault. Make sure you provide the correct ID of your subscription, the name of the resource group containing your key vault, and your key vault name.Import-Module "Az"
+Connect-AzAccount
+$subscriptionId = "<your Azure subscription ID"
+$resourceGroup = "your resource group name containing your key vault"
+$keyVaultName = "your vault name"
+$keyVaultKeyName = "your key name"
+
+# Switch to your subscription.
+Set-AzConteXt -SubscriptionId $subscriptionId
+
+# To validate the above key vault settings, get the key vault properties.
+Get-AzKeyVault -VaultName $keyVaultName -ResourceGroupName $resourceGroup 
+
+# Create a key in the key vault.
+$keyVaultKey = Add-AzKeyVaultKey -VaultName $keyVaultName -Name $keyVaultKeyName -Destination "Software"
+$keyVaultKeyIf you're using Windows certificate store, execute the below commands to create a certificate in your Current User store.$cert = New-SelfSignedCertificate -Subject "HRCMK" -CertStoreLocation Cert:CurrentUser\My -KeyExportPolicy Exportable -Type DocumentEncryptionCert -KeyUsage DataEncipherment -KeySpec KeyExchange
+Create a column master key in your key store.
+If you're using Azure Key Vault, execute the below commands to create an asymmetric key in your key vault. Make sure you provide the correct ID of your subscription, the name of the resource group containing your key vault, and your key vault name.Import-Module "Az"
+Connect-AzAccount
+$subscriptionId = "<your Azure subscription ID"
+$resourceGroup = "your resource group name containing your key vault"
+$keyVaultName = "your vault name"
+$keyVaultKeyName = "your key name"
+
+# Switch to your subscription.
+Set-AzConteXt -SubscriptionId $subscriptionId
+
+# To validate the above key vault settings, get the key vault properties.
+Get-AzKeyVault -VaultName $keyVaultName -ResourceGroupName $resourceGroup 
+
+# Create a key in the key vault.
+$keyVaultKey = Add-AzKeyVaultKey -VaultName $keyVaultName -Name $keyVaultKeyName -Destination "Software"
+$keyVaultKey
+If you're using Azure Key Vault, execute the below commands to create an asymmetric key in your key vault. Make sure you provide the correct ID of your subscription, the name of the resource group containing your key vault, and your key vault name.
+Import-Module "Az"
+Connect-AzAccount
+$subscriptionId = "<your Azure subscription ID"
+$resourceGroup = "your resource group name containing your key vault"
+$keyVaultName = "your vault name"
+$keyVaultKeyName = "your key name"
+
+# Switch to your subscription.
+Set-AzConteXt -SubscriptionId $subscriptionId
+
+# To validate the above key vault settings, get the key vault properties.
+Get-AzKeyVault -VaultName $keyVaultName -ResourceGroupName $resourceGroup 
+
+# Create a key in the key vault.
+$keyVaultKey = Add-AzKeyVaultKey -VaultName $keyVaultName -Name $keyVaultKeyName -Destination "Software"
+$keyVaultKey
+Import-Module "Az"
+Connect-AzAccount
+$subscriptionId = "<your Azure subscription ID"
+$resourceGroup = "your resource group name containing your key vault"
+$keyVaultName = "your vault name"
+$keyVaultKeyName = "your key name"
+
+# Switch to your subscription.
+Set-AzConteXt -SubscriptionId $subscriptionId
+
+# To validate the above key vault settings, get the key vault properties.
+Get-AzKeyVault -VaultName $keyVaultName -ResourceGroupName $resourceGroup 
+
+# Create a key in the key vault.
+$keyVaultKey = Add-AzKeyVaultKey -VaultName $keyVaultName -Name $keyVaultKeyName -Destination "Software"
+$keyVaultKey
+If you're using Windows certificate store, execute the below commands to create a certificate in your Current User store.$cert = New-SelfSignedCertificate -Subject "HRCMK" -CertStoreLocation Cert:CurrentUser\My -KeyExportPolicy Exportable -Type DocumentEncryptionCert -KeyUsage DataEncipherment -KeySpec KeyExchange
+If you're using Windows certificate store, execute the below commands to create a certificate in your Current User store.
+$cert = New-SelfSignedCertificate -Subject "HRCMK" -CertStoreLocation Cert:CurrentUser\My -KeyExportPolicy Exportable -Type DocumentEncryptionCert -KeyUsage DataEncipherment -KeySpec KeyExchange
+$cert = New-SelfSignedCertificate -Subject "HRCMK" -CertStoreLocation Cert:CurrentUser\My -KeyExportPolicy Exportable -Type DocumentEncryptionCert -KeyUsage DataEncipherment -KeySpec KeyExchange
+Connect to your database, using the SqlServer PowerShell module. Make sure you provide a valid connection string for your database.$database = Get-SqlDatabase -ConnectionString $connectionString
+$database
+Connect to your database, using the SqlServer PowerShell module. Make sure you provide a valid connection string for your database.
+$database = Get-SqlDatabase -ConnectionString $connectionString
+$database
+$database = Get-SqlDatabase -ConnectionString $connectionString
+$database
+Provision a column master key metadata object (that references the physical column master key that you've created in your key store) in your database.If you're using Azure Key Vault, execute the below commands.# Sign in to Azure for the SqlServer PowerShell module
+Add-SqlAzureAuthenticationContext -Interactive
+
+# Create a SqlColumnMasterKeySettings in-memory object referencing the key you've created in your key vault. 
+$cmkSettings = New-SqlAzureKeyVaultColumnMasterKeySettings -KeyURL $keyVaultKey.Key.Kid
+
+# Create column master key metadata object (referencing your certificate), named CMK1, in the database.
+$cmkName = "CMK1"
+New-SqlColumnMasterKey -Name $cmkName -InputObject $database -ColumnMasterKeySettings $cmkSettingsIf you're using Windows certificate store, execute the below commands.# Create a SqlColumnMasterKeySettings in-memory object referencing your certificate.
+$cmkSettings = New-SqlCertificateStoreColumnMasterKeySettings -CertificateStoreLocation "CurrentUser" -Thumbprint $cert.Thumbprint
+
+# Create column master key metadata object, named CMK1, in the database.
+$cmkName = "CMK1"
+New-SqlColumnMasterKey -Name $cmkName -InputObject $database -ColumnMasterKeySettings $cmkSettings
+Provision a column master key metadata object (that references the physical column master key that you've created in your key store) in your database.
+If you're using Azure Key Vault, execute the below commands.# Sign in to Azure for the SqlServer PowerShell module
+Add-SqlAzureAuthenticationContext -Interactive
+
+# Create a SqlColumnMasterKeySettings in-memory object referencing the key you've created in your key vault. 
+$cmkSettings = New-SqlAzureKeyVaultColumnMasterKeySettings -KeyURL $keyVaultKey.Key.Kid
+
+# Create column master key metadata object (referencing your certificate), named CMK1, in the database.
+$cmkName = "CMK1"
+New-SqlColumnMasterKey -Name $cmkName -InputObject $database -ColumnMasterKeySettings $cmkSettings
+If you're using Azure Key Vault, execute the below commands.
+# Sign in to Azure for the SqlServer PowerShell module
+Add-SqlAzureAuthenticationContext -Interactive
+
+# Create a SqlColumnMasterKeySettings in-memory object referencing the key you've created in your key vault. 
+$cmkSettings = New-SqlAzureKeyVaultColumnMasterKeySettings -KeyURL $keyVaultKey.Key.Kid
+
+# Create column master key metadata object (referencing your certificate), named CMK1, in the database.
+$cmkName = "CMK1"
+New-SqlColumnMasterKey -Name $cmkName -InputObject $database -ColumnMasterKeySettings $cmkSettings
+# Sign in to Azure for the SqlServer PowerShell module
+Add-SqlAzureAuthenticationContext -Interactive
+
+# Create a SqlColumnMasterKeySettings in-memory object referencing the key you've created in your key vault. 
+$cmkSettings = New-SqlAzureKeyVaultColumnMasterKeySettings -KeyURL $keyVaultKey.Key.Kid
+
+# Create column master key metadata object (referencing your certificate), named CMK1, in the database.
+$cmkName = "CMK1"
+New-SqlColumnMasterKey -Name $cmkName -InputObject $database -ColumnMasterKeySettings $cmkSettings
+If you're using Windows certificate store, execute the below commands.# Create a SqlColumnMasterKeySettings in-memory object referencing your certificate.
+$cmkSettings = New-SqlCertificateStoreColumnMasterKeySettings -CertificateStoreLocation "CurrentUser" -Thumbprint $cert.Thumbprint
+
+# Create column master key metadata object, named CMK1, in the database.
+$cmkName = "CMK1"
+New-SqlColumnMasterKey -Name $cmkName -InputObject $database -ColumnMasterKeySettings $cmkSettings
+If you're using Windows certificate store, execute the below commands.
+# Create a SqlColumnMasterKeySettings in-memory object referencing your certificate.
+$cmkSettings = New-SqlCertificateStoreColumnMasterKeySettings -CertificateStoreLocation "CurrentUser" -Thumbprint $cert.Thumbprint
+
+# Create column master key metadata object, named CMK1, in the database.
+$cmkName = "CMK1"
+New-SqlColumnMasterKey -Name $cmkName -InputObject $database -ColumnMasterKeySettings $cmkSettings
+# Create a SqlColumnMasterKeySettings in-memory object referencing your certificate.
+$cmkSettings = New-SqlCertificateStoreColumnMasterKeySettings -CertificateStoreLocation "CurrentUser" -Thumbprint $cert.Thumbprint
+
+# Create column master key metadata object, named CMK1, in the database.
+$cmkName = "CMK1"
+New-SqlColumnMasterKey -Name $cmkName -InputObject $database -ColumnMasterKeySettings $cmkSettings
+Generate a column encryption key, encrypt it with the column master key you've created, and create a column encryption key metadata object in the database.$cekName = "CEK1"
+New-SqlColumnEncryptionKey -Name $cekName -InputObject $database -ColumnMasterKey $cmkName
+Generate a column encryption key, encrypt it with the column master key you've created, and create a column encryption key metadata object in the database.
+$cekName = "CEK1"
+New-SqlColumnEncryptionKey -Name $cekName -InputObject $database -ColumnMasterKey $cmkName
+$cekName = "CEK1"
+New-SqlColumnEncryptionKey -Name $cekName -InputObject $database -ColumnMasterKey $cmkName
+EncryptSSNandSalarycolumns in theEmployeesTable. Choose deterministic encryption for theSSNcolumn and randomized encryption for theSalarycolumn. Deterministic encryption supports queries, such as point lookup searches that involve equality comparisons on encrypted columns. Randomized encryption doesn't support any computations on encrypted columns.# Encrypt the SSN and Salary columns 
+$ces = @()
+$ces += New-SqlColumnEncryptionSettings -ColumnName "HR.Employees.SSN" -EncryptionType "Deterministic" -EncryptionKey $cekName
+$ces += New-SqlColumnEncryptionSettings -ColumnName "HR.Employees.Salary" -EncryptionType "Randomized" -EncryptionKey $cekName
+Set-SqlColumnEncryption -InputObject $database -ColumnEncryptionSettings $ces -LogFileDirectory .
+EncryptSSNandSalarycolumns in theEmployeesTable. Choose deterministic encryption for theSSNcolumn and randomized encryption for theSalarycolumn. Deterministic encryption supports queries, such as point lookup searches that involve equality comparisons on encrypted columns. Randomized encryption doesn't support any computations on encrypted columns.
+# Encrypt the SSN and Salary columns 
+$ces = @()
+$ces += New-SqlColumnEncryptionSettings -ColumnName "HR.Employees.SSN" -EncryptionType "Deterministic" -EncryptionKey $cekName
+$ces += New-SqlColumnEncryptionSettings -ColumnName "HR.Employees.Salary" -EncryptionType "Randomized" -EncryptionKey $cekName
+Set-SqlColumnEncryption -InputObject $database -ColumnEncryptionSettings $ces -LogFileDirectory .
+# Encrypt the SSN and Salary columns 
+$ces = @()
+$ces += New-SqlColumnEncryptionSettings -ColumnName "HR.Employees.SSN" -EncryptionType "Deterministic" -EncryptionKey $cekName
+$ces += New-SqlColumnEncryptionSettings -ColumnName "HR.Employees.Salary" -EncryptionType "Randomized" -EncryptionKey $cekName
+Set-SqlColumnEncryption -InputObject $database -ColumnEncryptionSettings $ces -LogFileDirectory .
+(Optional) Explore the changes, you've made in your database.Run the below commands to query system catalog views that contain metadata about the column master key and the column encryption key that you created.$query = @'
+SELECT * FROM sys.column_master_keys;
+SELECT * FROM sys.column_encryption_keys
+SELECT * FROM sys.column_encryption_key_values
+'@
+
+Invoke-SqlCmd -ConnectionString $connectionString -Query $queryRun the below commands to querysys.columnsto retrieve column-level encryption metadata for the two encrypted columns.$query = @'
+SELECT
+[name]
+, [encryption_type]
+, [encryption_type_desc]
+, [encryption_algorithm_name]
+, [column_encryption_key_id]
+FROM sys.columns
+WHERE [encryption_type] IS NOT NULL;
+'@
+
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+(Optional) Explore the changes, you've made in your database.
+Run the below commands to query system catalog views that contain metadata about the column master key and the column encryption key that you created.$query = @'
+SELECT * FROM sys.column_master_keys;
+SELECT * FROM sys.column_encryption_keys
+SELECT * FROM sys.column_encryption_key_values
+'@
+
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+Run the below commands to query system catalog views that contain metadata about the column master key and the column encryption key that you created.
+$query = @'
+SELECT * FROM sys.column_master_keys;
+SELECT * FROM sys.column_encryption_keys
+SELECT * FROM sys.column_encryption_key_values
+'@
+
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+$query = @'
+SELECT * FROM sys.column_master_keys;
+SELECT * FROM sys.column_encryption_keys
+SELECT * FROM sys.column_encryption_key_values
+'@
+
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+Run the below commands to querysys.columnsto retrieve column-level encryption metadata for the two encrypted columns.$query = @'
+SELECT
+[name]
+, [encryption_type]
+, [encryption_type_desc]
+, [encryption_algorithm_name]
+, [column_encryption_key_id]
+FROM sys.columns
+WHERE [encryption_type] IS NOT NULL;
+'@
+
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+Run the below commands to querysys.columnsto retrieve column-level encryption metadata for the two encrypted columns.
+$query = @'
+SELECT
+[name]
+, [encryption_type]
+, [encryption_type_desc]
+, [encryption_algorithm_name]
+, [column_encryption_key_id]
+FROM sys.columns
+WHERE [encryption_type] IS NOT NULL;
+'@
+
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+$query = @'
+SELECT
+[name]
+, [encryption_type]
+, [encryption_type_desc]
+, [encryption_algorithm_name]
+, [column_encryption_key_id]
+FROM sys.columns
+WHERE [encryption_type] IS NOT NULL;
+'@
+
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+Step 3: Query encrypted columns
+SSMS
+PowerShell
+Connect to your database with Always Encrypted disabled for your connection.Open a new query window.Right-click anywhere in the query window and selectConnection>Change Connection. This will open theConnect to Database Enginedialog.SelectOptions <<. This will show additional tabs in theConnect to Database Enginedialog.Select theAlways Encryptedtab.Make sureEnable Always Encrypted (column encryption)isn't selected.SelectConnect.
+Connect to your database with Always Encrypted disabled for your connection.
+Open a new query window.
+Right-click anywhere in the query window and selectConnection>Change Connection. This will open theConnect to Database Enginedialog.
+SelectOptions <<. This will show additional tabs in theConnect to Database Enginedialog.
+Select theAlways Encryptedtab.
+Make sureEnable Always Encrypted (column encryption)isn't selected.
+SelectConnect.
+
+Paste in and execute the following query. The query should return binary encrypted data.SELECT [SSN], [Salary] FROM [HR].[Employees]
+Paste in and execute the following query. The query should return binary encrypted data.
+SELECT [SSN], [Salary] FROM [HR].[Employees]
+SELECT [SSN], [Salary] FROM [HR].[Employees]
+
+Connect to your database with Always Encrypted enabled for your connection.Right-click anywhere in the query window and selectConnection>Change Connection. This will open theConnect to Database Enginedialog.SelectOptions <<. This will show additional tabs in theConnect to Database Enginedialog.Select theAlways Encryptedtab.SelectEnable Always Encrypted (column encryption).SelectConnect.
+Connect to your database with Always Encrypted enabled for your connection.
+Right-click anywhere in the query window and selectConnection>Change Connection. This will open theConnect to Database Enginedialog.
+SelectOptions <<. This will show additional tabs in theConnect to Database Enginedialog.
+Select theAlways Encryptedtab.
+SelectEnable Always Encrypted (column encryption).
+SelectConnect.
+
+Rerun the same query. Since you're connected with Always Encrypted enabled for your database connection, the client driver in SSMS will attempt to decrypt data stored in both encrypted columns. If you use Azure Key Vault, you may be prompted to sign into Azure.
+Rerun the same query. Since you're connected with Always Encrypted enabled for your database connection, the client driver in SSMS will attempt to decrypt data stored in both encrypted columns. If you use Azure Key Vault, you may be prompted to sign into Azure.
+
+EnableParameterization for Always Encrypted. This feature allows you to run queries that filter data by encrypted columns (or insert data to encrypted columns).SelectQueryfrom the main menu of SSMS.SelectQuery Options....Navigate toExecution>Advanced.Make sureEnable Parameterization for Always Encryptedis checked.SelectOK.
+EnableParameterization for Always Encrypted. This feature allows you to run queries that filter data by encrypted columns (or insert data to encrypted columns).
+SelectQueryfrom the main menu of SSMS.
+SelectQuery Options....
+Navigate toExecution>Advanced.
+Make sureEnable Parameterization for Always Encryptedis checked.
+SelectOK.
+
+Paste in and execute the below query, which filters data by the encryptedSSNcolumn. The query should return one row containing plaintext values.DECLARE @SSN [char](11) = '795-73-9838'
+SELECT [SSN], [Salary] FROM [HR].[Employees]
+WHERE [SSN] = @SSN
+Paste in and execute the below query, which filters data by the encryptedSSNcolumn. The query should return one row containing plaintext values.
+DECLARE @SSN [char](11) = '795-73-9838'
+SELECT [SSN], [Salary] FROM [HR].[Employees]
+WHERE [SSN] = @SSN
+DECLARE @SSN [char](11) = '795-73-9838'
+SELECT [SSN], [Salary] FROM [HR].[Employees]
+WHERE [SSN] = @SSN
+Optionally, if you're using Azure Key Vault configured with the access policy permissions model, follow the below steps to see what happens when a user tries to retrieve plaintext data from encrypted columns without having access to the column master key protecting the data.Remove the keyunwrappermission for yourself in the access policy for your key vault. For more information, seeAssign a Key Vault access policy.Since the client driver in SSMS caches the column encryption keys acquired from a key vault for 2 hours, close SSMS and open it again. This will ensure the key cache is empty.Connect to your database with Always Encrypted enabled for your connection.Paste in and execute the following query. The query should fail with the error message indicating you're missing the requiredunwrappermission.SELECT [SSN], [Salary] FROM [HR].[Employees]
+Optionally, if you're using Azure Key Vault configured with the access policy permissions model, follow the below steps to see what happens when a user tries to retrieve plaintext data from encrypted columns without having access to the column master key protecting the data.
+Remove the keyunwrappermission for yourself in the access policy for your key vault. For more information, seeAssign a Key Vault access policy.
+unwrap
+Since the client driver in SSMS caches the column encryption keys acquired from a key vault for 2 hours, close SSMS and open it again. This will ensure the key cache is empty.
+Connect to your database with Always Encrypted enabled for your connection.
+Paste in and execute the following query. The query should fail with the error message indicating you're missing the requiredunwrappermission.
+unwrap
+SELECT [SSN], [Salary] FROM [HR].[Employees]
+SELECT [SSN], [Salary] FROM [HR].[Employees]
+Connect to your database with Always Encrypted disabled and run a query to read data from encrypted columns. The query should return encrypted data as binary arrays.$query = "SELECT [SSN], [Salary] FROM [HR].[Employees]"
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+Connect to your database with Always Encrypted disabled and run a query to read data from encrypted columns. The query should return encrypted data as binary arrays.
+$query = "SELECT [SSN], [Salary] FROM [HR].[Employees]"
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+$query = "SELECT [SSN], [Salary] FROM [HR].[Employees]"
+Invoke-SqlCmd -ConnectionString $connectionString -Query $query
+Connect to your database with Always Encrypted enabled and run a query to read data from encrypted columns. Since you have access to the column master key protecting your encrypted columns, the query should return plaintext data.$query = "SELECT [SSN], [Salary] FROM [HR].[Employees]"
+Invoke-SqlCmd -ConnectionString "$connectionString; Column Encryption Setting = Enabled" -Query $query
+Connect to your database with Always Encrypted enabled and run a query to read data from encrypted columns. Since you have access to the column master key protecting your encrypted columns, the query should return plaintext data.
+$query = "SELECT [SSN], [Salary] FROM [HR].[Employees]"
+Invoke-SqlCmd -ConnectionString "$connectionString; Column Encryption Setting = Enabled" -Query $query
+$query = "SELECT [SSN], [Salary] FROM [HR].[Employees]"
+Invoke-SqlCmd -ConnectionString "$connectionString; Column Encryption Setting = Enabled" -Query $query
+Note
+Invoke-SqlCmddoesn't support queries that can filter by or insert data to encrypted columns. Such queries need to be parameterized, andInvoke-SqlCmddoesn't support parameterized queries.
+Next steps
+Develop applications using Always Encrypted
+See also
+Always Encrypted documentation
+Always Encrypted with secure enclaves documentation
+Provision Always Encrypted keys using SQL Server Management Studio
+Configure Always Encrypted using PowerShell
+Always Encrypted wizard
+Query columns using Always Encrypted with SQL Server Management Studio
+Feedback
+Was this page helpful?
+Additional resources

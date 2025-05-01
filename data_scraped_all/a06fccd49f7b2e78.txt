@@ -1,0 +1,665 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Enable customer-managed keys for managed services
+Article
+2025-02-27
+3 contributors
+In this article
+Note
+This feature requires thePremium plan.
+For additional control of your data, you can add your own key to protect and control access to some types of data. Azure Databricks has multiple customer-managed key features. To compare the related features, seeCustomer-managed keys for encryption.
+Tip
+This article describes how to configure your own key from Azure Key Vault vaults for managed services. For instructions on using a key from Azure Key Vault Managed HSM, seeEnable HSM customer-managed keys for managed services.
+Managed services data in the Azure Databrickscontrol planeis encrypted at rest. You can add a customer-managed key for managed services to help protect and control access to the following types of encrypted data:
+Notebook source in the Azure Databrickscontrol plane.
+Notebook results for notebooks run interactively (not as jobs) that are stored in the control plane. By default, larger results are also stored in your workspace root bucket. You can configure Azure Databricks tostore all interactive notebook results in your cloud account.
+Secrets stored by thesecret manager APIs.
+Databricks SQLqueries and query history.
+Personal access tokens (PAT) or other credentials used toset up Git integration with Databricks Git folders.
+After you add a customer-managed key encryption for a workspace, Azure Databricks uses your key to control access to the key that encrypts future write operations to your workspaceâs managed services data. Existing data is not re-encrypted. The data encryption key is cached in memory for several read and write operations and evicted from memory at a regular interval. New requests for that data require another request to your cloud serviceâs key management system. If you delete or revoke your key, reading or writing to the protected data fails at the end of the cache time interval.
+You can rotate (update) the customer-managed key at a later time. SeeRotate the key at a later time.
+This feature does not encrypt data stored outside of thecontrol plane. For other customer-managed key features, seeCustomer-managed keys for encryption
+Requirements
+To use the Azure CLI for these tasks,install the Azure CLI tooland install the Databricks extension:az extension add --name databricks
+To use the Azure CLI for these tasks,install the Azure CLI tooland install the Databricks extension:
+az extension add --name databricks
+az extension add --name databricks
+To use Powershell for these tasks,install Azure PowerShelland installthe Databricks Powershell module. You must also log in:Connect-AzAccountTo log in to your Azure account as a user, seePowerShell login with an Azure Databricks user account. To log in to your Azure account as a service principal, seePowerShell login with a Microsoft Entra ID service principal.
+To use Powershell for these tasks,install Azure PowerShelland installthe Databricks Powershell module. You must also log in:
+Connect-AzAccount
+Connect-AzAccount
+To log in to your Azure account as a user, seePowerShell login with an Azure Databricks user account. To log in to your Azure account as a service principal, seePowerShell login with a Microsoft Entra ID service principal.
+Step 1: Set up a key vault
+You must create an Azure Key Vault instance and set its permissions. You can do this through the Azure portal, CLI, or APIs.
+Important
+The key vault must be in the same Azure tenant as your Azure Databricks workspace.
+These instructions offer details multiple deployment options:
+Use the Azure portal
+Use the Azure CLI
+Use Azure Powershell
+Use the Azure portal
+Create or select a key vault:To create a key vault, go to theAzure portal page for creating a key vault. Click+ Create. Enter the resource group name, key vault name, region, and pricing tier. ClickReview + createand then clickCreate.To use an existing key vault, copy its key vault name for the next step.
+Create or select a key vault:
+To create a key vault, go to theAzure portal page for creating a key vault. Click+ Create. Enter the resource group name, key vault name, region, and pricing tier. ClickReview + createand then clickCreate.
+To use an existing key vault, copy its key vault name for the next step.
+Get the object ID of theAzureDatabricksapplication:In the Azure portal, go to Microsoft Entra ID.SelectEnterprise Applicationsfrom the sidebar menu.Search forAzureDatabricksand click the Enterprise Application in the results.FromProperties, copy the object ID.
+Get the object ID of theAzureDatabricksapplication:
+In the Azure portal, go to Microsoft Entra ID.
+SelectEnterprise Applicationsfrom the sidebar menu.
+Search forAzureDatabricksand click the Enterprise Application in the results.
+AzureDatabricks
+FromProperties, copy the object ID.
+Grant permissions to key vault using Azure RBAC:
+Grant permissions to key vault using Azure RBAC:
+Navigate to the Azure Key Vault instance that you will use to configure customer managed keys for managed services for your workspace.
+Navigate to the Azure Key Vault instance that you will use to configure customer managed keys for managed services for your workspace.
+In the sidebar, clickAccess control (IAM).
+In the sidebar, clickAccess control (IAM).
+Click+ Add > Add role assignment.
+Click+ Add > Add role assignment.
+On theRoletab, selectKey Vault Crypto Service Encryption User.
+On theRoletab, selectKey Vault Crypto Service Encryption User.
+Key Vault Crypto Service Encryption User
+On theMemberstab, click+ Select members.
+On theMemberstab, click+ Select members.
+Search for and select Azure Databricks storage account managed identity.
+Search for and select Azure Databricks storage account managed identity.
+InSelect members, also search for and selectAzureDatabricks.
+InSelect members, also search for and selectAzureDatabricks.
+AzureDatabricks
+ClickReview + assign > Review + assign.
+ClickReview + assign > Review + assign.
+Note
+If your key vault is using access policies instead of RBAC, follow these instructions:
+Add an access policy to key vault using the Azure portal:Navigate to the Azure Key Vault instances that you will use to configure customer managed keys for managed services for your workspace.Click theAccess policiestab from the left-side panel.Select theCreate buttonfound at the top of the page.Under theKey permissionssection in thePermissionstab, enableGet,Unwrap Key, andWrap key.ClickNext.On thePrincipaltab, typeAzureDatabricksand scroll to the first Enterprise Application result that has an Application ID of2ff814a6-3304-4ab8-85cb-cd0e6f879c1dand select it.Continue to theReview + createtab and click b.
+Add an access policy to key vault using the Azure portal:
+Navigate to the Azure Key Vault instances that you will use to configure customer managed keys for managed services for your workspace.
+Click theAccess policiestab from the left-side panel.
+Select theCreate buttonfound at the top of the page.
+Under theKey permissionssection in thePermissionstab, enableGet,Unwrap Key, andWrap key.
+ClickNext.
+On thePrincipaltab, typeAzureDatabricksand scroll to the first Enterprise Application result that has an Application ID of2ff814a6-3304-4ab8-85cb-cd0e6f879c1dand select it.
+AzureDatabricks
+2ff814a6-3304-4ab8-85cb-cd0e6f879c1d
+Continue to theReview + createtab and click b.
+Use the Azure CLI
+Use theAzure CLIto complete the following instructions.
+Create a key vault or select an existing key vault:To create a key vault, use the following Azure CLI command and replace the items in brackets with your region, key vault name, resource group name, and location:az keyvault create --location <region> \
+                   --name <key-vault-name> \
+                   --resource-group <resource-group-name> \
+                   --location <location> \
+                   --enable-purge-protectionTo use an existing key vault, copy the key vault name for the next step.
+Create a key vault or select an existing key vault:
+To create a key vault, use the following Azure CLI command and replace the items in brackets with your region, key vault name, resource group name, and location:az keyvault create --location <region> \
+                   --name <key-vault-name> \
+                   --resource-group <resource-group-name> \
+                   --location <location> \
+                   --enable-purge-protection
+To create a key vault, use the following Azure CLI command and replace the items in brackets with your region, key vault name, resource group name, and location:
+az keyvault create --location <region> \
+                   --name <key-vault-name> \
+                   --resource-group <resource-group-name> \
+                   --location <location> \
+                   --enable-purge-protection
+az keyvault create --location <region> \
+                   --name <key-vault-name> \
+                   --resource-group <resource-group-name> \
+                   --location <location> \
+                   --enable-purge-protection
+To use an existing key vault, copy the key vault name for the next step.
+To use an existing key vault, copy the key vault name for the next step.
+Get the object ID of theAzureDatabricksapplication with the Azure CLI.az ad sp show --id "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d" \
+              --query "id" \
+              --output tsv
+Get the object ID of theAzureDatabricksapplication with the Azure CLI.
+az ad sp show --id "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d" \
+              --query "id" \
+              --output tsv
+az ad sp show --id "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d" \
+              --query "id" \
+              --output tsv
+Confirm that you are using the correct Azure subscription:az account set --subscription {subscription_id}
+Confirm that you are using the correct Azure subscription:
+az account set --subscription {subscription_id}
+az account set --subscription {subscription_id}
+Use Azure Powershell
+You can create a new key vault or use an existing one.
+Create a key vault:
+$keyVault = New-AzKeyVault -Name <key-vault-name> \
+-ResourceGroupName <resource-group-name> \
+-Location <location> \
+-sku <sku> \
+-EnablePurgeProtection
+$keyVault = New-AzKeyVault -Name <key-vault-name> \
+-ResourceGroupName <resource-group-name> \
+-Location <location> \
+-sku <sku> \
+-EnablePurgeProtection
+Use an existing key vault:
+$keyVault = Get-AzKeyVault -VaultName <key-vault-name>
+$keyVault = Get-AzKeyVault -VaultName <key-vault-name>
+Step 2: Prepare a key
+You can create a key or use an existing key. Use whatever tooling you prefer to use: Azure portal, Azure CLI, or other tooling.
+Use Azure CLI
+Create a key under the key vault. The KeyType must beRSA.
+To create the key in CLI, run this command:
+az keyvault key create --name <key-name> \
+                       --vault-name <key-vault-name> \
+                       --protection software
+az keyvault key create --name <key-name> \
+                       --vault-name <key-vault-name> \
+                       --protection software
+Make note of the following values, which you can get from the key ID in thekidproperty in the response. You will use them in subsequent steps:
+kid
+Key vault URL: The beginning part of the key ID that includes the key vault name. It has the formhttps://<key-vault-name>.vault.azure.net.
+https://<key-vault-name>.vault.azure.net
+Key name: Name of your key.
+Key version: Version of the key.
+The full key ID usually has the formhttps://<key-vault-name>.vault.azure.net/keys/<key-name>/<key-version>. Azure Key Vault keys that are in a non-public cloud have a different form.
+https://<key-vault-name>.vault.azure.net/keys/<key-name>/<key-version>
+To use an existing key instead of creating one, get and copy these values for your key so you can use them in the next steps. Check to confirm that your existing key is enabled before proceeding.
+Use Azure Powershell
+You can either create a key or retrieve an existing key:Create a key:$key = Add-AzKeyVaultKey \
+-VaultName $keyVault.VaultName \
+-Name <key-name> \
+-Destination 'Software'Retrieve an existing key:$key = Get-AzKeyVaultKey \
+-VaultName $keyVault.VaultName \
+-Name <key-name>
+You can either create a key or retrieve an existing key:
+Create a key:$key = Add-AzKeyVaultKey \
+-VaultName $keyVault.VaultName \
+-Name <key-name> \
+-Destination 'Software'
+Create a key:
+$key = Add-AzKeyVaultKey \
+-VaultName $keyVault.VaultName \
+-Name <key-name> \
+-Destination 'Software'
+$key = Add-AzKeyVaultKey \
+-VaultName $keyVault.VaultName \
+-Name <key-name> \
+-Destination 'Software'
+Retrieve an existing key:$key = Get-AzKeyVaultKey \
+-VaultName $keyVault.VaultName \
+-Name <key-name>
+Retrieve an existing key:
+$key = Get-AzKeyVaultKey \
+-VaultName $keyVault.VaultName \
+-Name <key-name>
+$key = Get-AzKeyVaultKey \
+-VaultName $keyVault.VaultName \
+-Name <key-name>
+Grant the Key Vault Crypto Service Encryption User role to your Azure Databricks workspace and your Azure Databricks storage account managed identity on the key vault:$azureDatabricks = Get-AzureADServicePrincipal \
+ -Filter "appId eq '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d'"
+
+ New-AzKeyVaultRoleAssignment -RoleDefinitionName "Key Vault Crypto Service Encryption User" -ObjectId $azureDatabricks.ObjectId
+
+ New-AzKeyVaultRoleAssignment -RoleDefinitionName "Key Vault Crypto Service Encryption User" -ObjectId $managedService.ObjectId
+Grant the Key Vault Crypto Service Encryption User role to your Azure Databricks workspace and your Azure Databricks storage account managed identity on the key vault:
+$azureDatabricks = Get-AzureADServicePrincipal \
+ -Filter "appId eq '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d'"
+
+ New-AzKeyVaultRoleAssignment -RoleDefinitionName "Key Vault Crypto Service Encryption User" -ObjectId $azureDatabricks.ObjectId
+
+ New-AzKeyVaultRoleAssignment -RoleDefinitionName "Key Vault Crypto Service Encryption User" -ObjectId $managedService.ObjectId
+$azureDatabricks = Get-AzureADServicePrincipal \
+ -Filter "appId eq '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d'"
+
+ New-AzKeyVaultRoleAssignment -RoleDefinitionName "Key Vault Crypto Service Encryption User" -ObjectId $azureDatabricks.ObjectId
+
+ New-AzKeyVaultRoleAssignment -RoleDefinitionName "Key Vault Crypto Service Encryption User" -ObjectId $managedService.ObjectId
+Note
+If your key vault is using access policies instead of RBAC, use the following command:
+$managedService = Get-AzureADServicePrincipal \
+-Filter "appId eq '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d'"
+
+Set-AzKeyVaultAccessPolicy -VaultName $keyVault.VaultName \
+-ObjectId $managedService.ObjectId \
+-PermissionsToKeys wrapkey,unwrapkey,get
+$managedService = Get-AzureADServicePrincipal \
+-Filter "appId eq '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d'"
+
+Set-AzKeyVaultAccessPolicy -VaultName $keyVault.VaultName \
+-ObjectId $managedService.ObjectId \
+-PermissionsToKeys wrapkey,unwrapkey,get
+Step 3: Add a key to a workspace
+You can deploy a new workspace with a customer-managed key for managed services or add a key to an existing workspace. You can do both with Azure CLI, Powershell, ARM templates, Azure portal, or other tools. This section includes details for multiple deployment options:
+Use the Azure portal with no template
+Use the Azure CLI with no template
+Use Powershell with no template
+Apply changes with an ARM template
+Use the Azure portal with no template
+Go to theAzure Portal homepage.
+Go to theAzure Portal homepage.
+ClickCreate a resourcein the top left corner of the page.
+ClickCreate a resourcein the top left corner of the page.
+Within the search bar, typeAzure Databricksand click theAzure Databricksoption.
+Within the search bar, typeAzure Databricksand click theAzure Databricksoption.
+Azure Databricks
+ClickCreatein the Azure Databricks widget.
+ClickCreatein the Azure Databricks widget.
+Enter values for the input fields on theBasicsandNetworkingtabs.
+Enter values for the input fields on theBasicsandNetworkingtabs.
+After you reach theEncryptiontab:For creating a workspace, enableUse your own keyin the Managed Services section.For updating a workspace, enableManaged Services.
+After you reach theEncryptiontab:
+For creating a workspace, enableUse your own keyin the Managed Services section.
+For updating a workspace, enableManaged Services.
+Set the encryption fields.In theKey Identifierfield, paste the Key Identifier of your Azure Key Vault key.In theSubscriptiondropdown, enter the subscription name of your Azure Key Vault key.
+Set the encryption fields.
+
+In theKey Identifierfield, paste the Key Identifier of your Azure Key Vault key.
+In theSubscriptiondropdown, enter the subscription name of your Azure Key Vault key.
+Complete the remaining tabs and clickReview + Create(for new workspace) orSave(for updating a workspace).
+Complete the remaining tabs and clickReview + Create(for new workspace) orSave(for updating a workspace).
+Important
+If you rotate the key, you must keep the old key available for 24 hours.
+Use the Azure CLI with no template
+Grant the Key Vault Crypto Service Encryption User role to Azure Databricks and your Azure Databricks storage account managed identity on your key vault:az keyvault role assignment create \
+                        --role "Key Vault Crypto Service Encryption User"  \
+                       --assignee-object-id <azure-databricks-service-object-id>
+
+az keyvault role assignment create \
+                        --role "Key Vault Crypto Service Encryption User"  \
+                       --assignee <storage-account-managed-identity>
+Grant the Key Vault Crypto Service Encryption User role to Azure Databricks and your Azure Databricks storage account managed identity on your key vault:
+az keyvault role assignment create \
+                        --role "Key Vault Crypto Service Encryption User"  \
+                       --assignee-object-id <azure-databricks-service-object-id>
+
+az keyvault role assignment create \
+                        --role "Key Vault Crypto Service Encryption User"  \
+                       --assignee <storage-account-managed-identity>
+az keyvault role assignment create \
+                        --role "Key Vault Crypto Service Encryption User"  \
+                       --assignee-object-id <azure-databricks-service-object-id>
+
+az keyvault role assignment create \
+                        --role "Key Vault Crypto Service Encryption User"  \
+                       --assignee <storage-account-managed-identity>
+Note
+If your key vault is using access policies instead of RBAC, follow these instructions:
+Replace<key-vault-name>with the vault name that you used in the previous step and replace<object-id>with the object ID of theAzureDatabricksapplication.
+<key-vault-name>
+<object-id>
+AzureDatabricks
+az keyvault set-policy -n <key-vault-name> \
+                       --key-permissions get wrapKey unwrapKey  \
+                       --object-id <object-id>
+az keyvault set-policy -n <key-vault-name> \
+                       --key-permissions get wrapKey unwrapKey  \
+                       --object-id <object-id>
+Create or update a workspace:For both creation and update, add these fields to the command:managed-services-key-name: Key namemanaged-services-key-vault: Key vault URImanaged-services-key-version: Key version. Use the specific key version and notlatest.Example creation of a workspace using these fields:az databricks workspace create --name <workspace-name> \
+--resource-group <resource-group-name> \
+--location <location> \
+--sku premium \
+--managed-services-key-name <key-name> \
+--managed-services-key-vault <key-vault-uri> \
+--managed-services-key-version <key-version>Example update of a workspace using these fields:az databricks workspace update --name <workspace-name> \
+--resource-group <resource-group-name> \
+--managed-services-key-name <key-name> \
+--managed-services-key-vault <key-vault-uri> \
+--managed-services-key-version <key-version>
+Create or update a workspace:
+For both creation and update, add these fields to the command:
+managed-services-key-name: Key name
+managed-services-key-name
+managed-services-key-vault: Key vault URI
+managed-services-key-vault
+managed-services-key-version: Key version. Use the specific key version and notlatest.
+managed-services-key-version
+latest
+Example creation of a workspace using these fields:
+az databricks workspace create --name <workspace-name> \
+--resource-group <resource-group-name> \
+--location <location> \
+--sku premium \
+--managed-services-key-name <key-name> \
+--managed-services-key-vault <key-vault-uri> \
+--managed-services-key-version <key-version>
+az databricks workspace create --name <workspace-name> \
+--resource-group <resource-group-name> \
+--location <location> \
+--sku premium \
+--managed-services-key-name <key-name> \
+--managed-services-key-vault <key-vault-uri> \
+--managed-services-key-version <key-version>
+Example update of a workspace using these fields:
+az databricks workspace update --name <workspace-name> \
+--resource-group <resource-group-name> \
+--managed-services-key-name <key-name> \
+--managed-services-key-vault <key-vault-uri> \
+--managed-services-key-version <key-version>
+az databricks workspace update --name <workspace-name> \
+--resource-group <resource-group-name> \
+--managed-services-key-name <key-name> \
+--managed-services-key-vault <key-vault-uri> \
+--managed-services-key-version <key-version>
+Important
+If you rotate the key, you must keep the old key available for 24 hours.
+Use Powershell with no template
+To create or update a workspace, add the following parameters to the command for your new key:
+ManagedServicesKeyVaultPropertiesKeyName: Key name
+ManagedServicesKeyVaultPropertiesKeyName
+ManagedServicesKeyVaultPropertiesKeyVaultUri: Key URI
+ManagedServicesKeyVaultPropertiesKeyVaultUri
+ManagedServicesKeyVaultPropertiesKeyVersion: Key version. Use the specific key version and notlatest.
+ManagedServicesKeyVaultPropertiesKeyVersion
+latest
+Example workspace creation with these fields:
+New-AzDatabricksWorkspace -Name <workspace-name> \
+-ResourceGroupName <resource-group-name> \
+-location $keyVault.Location \
+-sku premium \
+-ManagedServicesKeyVaultPropertiesKeyName $key.Name \
+-ManagedServicesKeyVaultPropertiesKeyVaultUri $keyVault.VaultUri \
+-ManagedServicesKeyVaultPropertiesKeyVersion $key.Version
+New-AzDatabricksWorkspace -Name <workspace-name> \
+-ResourceGroupName <resource-group-name> \
+-location $keyVault.Location \
+-sku premium \
+-ManagedServicesKeyVaultPropertiesKeyName $key.Name \
+-ManagedServicesKeyVaultPropertiesKeyVaultUri $keyVault.VaultUri \
+-ManagedServicesKeyVaultPropertiesKeyVersion $key.Version
+Example workspace update with these fields:
+Update-AzDatabricksWorkspace -Name <workspace-name> \
+-ResourceGroupName <resource-group-name> \
+-sku premium \
+-ManagedServicesKeyVaultPropertiesKeyName $key.Name \
+-ManagedServicesKeyVaultPropertiesKeyVaultUri $keyVault.VaultUri \
+-ManagedServicesKeyVaultPropertiesKeyVersion $key.Version
+Update-AzDatabricksWorkspace -Name <workspace-name> \
+-ResourceGroupName <resource-group-name> \
+-sku premium \
+-ManagedServicesKeyVaultPropertiesKeyName $key.Name \
+-ManagedServicesKeyVaultPropertiesKeyVaultUri $keyVault.VaultUri \
+-ManagedServicesKeyVaultPropertiesKeyVersion $key.Version
+Important
+If you rotate the key, you must keep the old key available for 24 hours.
+Apply changes with an ARM template
+The following ARM template creates a new workspace with a customer-managed key, using the API version2023-02-01for resourceMicrosoft.Databricks/workspaces. Save this text locally to a file nameddatabricks-cmk-template.json.
+2023-02-01
+Microsoft.Databricks/workspaces
+databricks-cmk-template.json
+This example template does not include all possible Azure Databricks features, such as providing your ownVNetin which to deploy the workspace.
+Important
+If you already use a template, merge this templateâs extra parameters, resources, and outputs into your existing template.
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name of the Azure Databricks workspace to create."
+      }
+    },
+    "pricingTier": {
+      "type": "string",
+      "defaultValue": "premium",
+      "allowedValues": ["standard", "premium"],
+      "metadata": {
+        "description": "The pricing tier of workspace."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "apiVersion": {
+      "type": "string",
+      "defaultValue": "2023-02-01",
+      "allowedValues": ["2023-02-01", "2021-04-01-preview"],
+      "metadata": {
+        "description": "The api version to create the workspace resources"
+      }
+    },
+    "keyvaultUri": {
+      "type": "string",
+      "metadata": {
+        "description": "The Key Vault URI for customer-managed key for managed services"
+      }
+    },
+    "keyName": {
+      "type": "string",
+      "metadata": {
+        "description": "The key name used for customer-managed key for managed services"
+      }
+    },
+    "keyVersion": {
+      "type": "string",
+      "metadata": {
+        "description": "The key version used for customer-managed key for managed services. Use the specific key version and not `latest`."
+      }
+    }
+  },
+  "variables": {
+    "managedResourceGroupName": "[concat('databricks-rg-', parameters('workspaceName'), '-', uniqueString(parameters('workspaceName'), resourceGroup().id))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Databricks/workspaces",
+      "name": "[parameters('workspaceName')]",
+      "location": "[parameters('location')]",
+      "apiVersion": "[parameters('apiVersion')]",
+      "sku": {
+        "name": "[parameters('pricingTier')]"
+      },
+      "properties": {
+        "ManagedResourceGroupId": "[concat(subscription().id, '/resourceGroups/', variables('managedResourceGroupName'))]",
+        "encryption": {
+          "entities": {
+            "managedServices": {
+              "keySource": "Microsoft.Keyvault",
+              "keyVaultProperties": {
+                "keyVaultUri": "[parameters('keyvaultUri')]",
+                "keyName": "[parameters('keyName')]",
+                "keyVersion": "[parameters('keyVersion')]"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "workspace": {
+      "type": "object",
+      "value": "[reference(resourceId('Microsoft.Databricks/workspaces', parameters('workspaceName')))]"
+    }
+  }
+}
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name of the Azure Databricks workspace to create."
+      }
+    },
+    "pricingTier": {
+      "type": "string",
+      "defaultValue": "premium",
+      "allowedValues": ["standard", "premium"],
+      "metadata": {
+        "description": "The pricing tier of workspace."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "apiVersion": {
+      "type": "string",
+      "defaultValue": "2023-02-01",
+      "allowedValues": ["2023-02-01", "2021-04-01-preview"],
+      "metadata": {
+        "description": "The api version to create the workspace resources"
+      }
+    },
+    "keyvaultUri": {
+      "type": "string",
+      "metadata": {
+        "description": "The Key Vault URI for customer-managed key for managed services"
+      }
+    },
+    "keyName": {
+      "type": "string",
+      "metadata": {
+        "description": "The key name used for customer-managed key for managed services"
+      }
+    },
+    "keyVersion": {
+      "type": "string",
+      "metadata": {
+        "description": "The key version used for customer-managed key for managed services. Use the specific key version and not `latest`."
+      }
+    }
+  },
+  "variables": {
+    "managedResourceGroupName": "[concat('databricks-rg-', parameters('workspaceName'), '-', uniqueString(parameters('workspaceName'), resourceGroup().id))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Databricks/workspaces",
+      "name": "[parameters('workspaceName')]",
+      "location": "[parameters('location')]",
+      "apiVersion": "[parameters('apiVersion')]",
+      "sku": {
+        "name": "[parameters('pricingTier')]"
+      },
+      "properties": {
+        "ManagedResourceGroupId": "[concat(subscription().id, '/resourceGroups/', variables('managedResourceGroupName'))]",
+        "encryption": {
+          "entities": {
+            "managedServices": {
+              "keySource": "Microsoft.Keyvault",
+              "keyVaultProperties": {
+                "keyVaultUri": "[parameters('keyvaultUri')]",
+                "keyName": "[parameters('keyName')]",
+                "keyVersion": "[parameters('keyVersion')]"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "workspace": {
+      "type": "object",
+      "value": "[reference(resourceId('Microsoft.Databricks/workspaces', parameters('workspaceName')))]"
+    }
+  }
+}
+If you use another template already, you can merge this templateâs parameters, resources, and outputs into your existing template.
+To use this template to create or update a workspace, choose one of these deployment options:
+Apply a template with the Azure CLI
+Apply a template with the Azure portal
+Apply a template with the Azure CLI
+To create a new workspace with Azure CLI, run the following command:
+az deployment group create --resource-group <resource-group-name>  \
+                           --template-file <file-name>.json \
+                           --parameters workspaceName=<new-workspace-name> \
+                           keyvaultUri=<keyvaultUrl> \
+                           keyName=<keyName> keyVersion=<keyVersion>
+az deployment group create --resource-group <resource-group-name>  \
+                           --template-file <file-name>.json \
+                           --parameters workspaceName=<new-workspace-name> \
+                           keyvaultUri=<keyvaultUrl> \
+                           keyName=<keyName> keyVersion=<keyVersion>
+Note
+Use the specific key version and notlatest.
+latest
+To update an existing workspace to use a customer-managed key workspace (or to rotate the existing key) using Azure CLI:
+If your ARM template that deployed the workspace never added customer-managed keys, add theresources.properties.encryptionsection and its related parameters. See the template earlier in this article.Add theresources.properties.encryptionsection from the template.In theparameterssection, add three new parameterskeyvaultUri,keyName, andkeyVersionfrom the template.In theparameterssection, remove"type": "string",from the template.
+If your ARM template that deployed the workspace never added customer-managed keys, add theresources.properties.encryptionsection and its related parameters. See the template earlier in this article.
+resources.properties.encryption
+Add theresources.properties.encryptionsection from the template.
+resources.properties.encryption
+In theparameterssection, add three new parameterskeyvaultUri,keyName, andkeyVersionfrom the template.
+parameters
+keyvaultUri
+keyName
+keyVersion
+In theparameterssection, remove"type": "string",from the template.
+parameters
+"type": "string",
+Run the same command as for creating a new workspace. As long as the resource group name and the workspace name are identical to your existing workspace, this command updates the existing workspace rather than creating a new workspace.az deployment group create --resource-group <existing-resource-group-name>  \
+                           --template-file <file-name>.json \
+                           --parameters workspaceName=<existing-workspace-name> \
+                           keyvaultUri=<keyvaultUrl> \
+                           keyName=<keyName> keyVersion=<keyVersion>Other than changes in the key-related parameters, use the same parameters that were used for creating the workspace.ImportantIf you rotate the key, you must keep the old key available for 24 hours.
+Run the same command as for creating a new workspace. As long as the resource group name and the workspace name are identical to your existing workspace, this command updates the existing workspace rather than creating a new workspace.
+az deployment group create --resource-group <existing-resource-group-name>  \
+                           --template-file <file-name>.json \
+                           --parameters workspaceName=<existing-workspace-name> \
+                           keyvaultUri=<keyvaultUrl> \
+                           keyName=<keyName> keyVersion=<keyVersion>
+az deployment group create --resource-group <existing-resource-group-name>  \
+                           --template-file <file-name>.json \
+                           --parameters workspaceName=<existing-workspace-name> \
+                           keyvaultUri=<keyvaultUrl> \
+                           keyName=<keyName> keyVersion=<keyVersion>
+Other than changes in the key-related parameters, use the same parameters that were used for creating the workspace.
+Important
+If you rotate the key, you must keep the old key available for 24 hours.
+Apply a template with the Azure portal
+To use the template in the Azure portal to create or update a workspace:
+Go to theCustom deploymentpage.
+Go to theCustom deploymentpage.
+ClickBuild your own template in the editor.
+ClickBuild your own template in the editor.
+Paste in the JSON.
+Paste in the JSON.
+ClickSave.
+ClickSave.
+Fill in the parameters.To update an existing workspace, use the same parameters that you used to create the workspace. To add a key for the first time, add the three key-related parameters. To rotate the key, change some or all of the key-related parameters. Ensure the resource group name and the workspace name are identical to your existing workspace. If they are the same, this command updates the existing workspace rather than creating a new workspace.Other than changes in the key-related parameters, use the same parameters that were used for creating the workspace.
+Fill in the parameters.
+To update an existing workspace, use the same parameters that you used to create the workspace. To add a key for the first time, add the three key-related parameters. To rotate the key, change some or all of the key-related parameters. Ensure the resource group name and the workspace name are identical to your existing workspace. If they are the same, this command updates the existing workspace rather than creating a new workspace.
+Other than changes in the key-related parameters, use the same parameters that were used for creating the workspace.
+ClickReview + Create.
+ClickReview + Create.
+If there are no validation issues, clickCreate.ImportantIf you rotate the key, you must keep the old key available for 24 hours.
+If there are no validation issues, clickCreate.
+Important
+If you rotate the key, you must keep the old key available for 24 hours.
+For more details, see the Azure articleQuickstart: Create and deploy ARM templates by using the Azure portal.
+Step 4 (optional): Re-import notebooks
+After you initially add a key for managed services for an existing workspace, only future write operations use your key. Existing data is not re-encrypted.
+You can export all notebooks and then re-import them so the key that encrypts the data is protected and controlled by your key. You can use theExport and Import Workspace APIs.
+Rotate the key at a later time
+If you are already using a customer-managed key for managed services, you can update the workspace with a new key version, or an entirely new key. This is calledkey rotation.
+Create a new key or rotate your existing key in the key vault. SeeStep 1: Set up a key vault.Ensure the new key has the proper permissions.
+Create a new key or rotate your existing key in the key vault. SeeStep 1: Set up a key vault.
+Ensure the new key has the proper permissions.
+Confirm that your template has the correct API version. It must be equal to or higher than2021-04-01-preview.
+Confirm that your template has the correct API version. It must be equal to or higher than2021-04-01-preview.
+2021-04-01-preview
+Update the workspace with your new key using the portal, CLI, or PowerShell. SeeStep 3: Add a key to a workspaceand follow instructions for workspace update. Be sure that you use the same values for the resource group name and the workspace name so it updates the existing workspace, rather than creating a new workspace. Other than changes in the key-related parameters, use the same parameters that were used for creating the workspace.ImportantIf you rotate the key, you must keep the old key available for 24 hours.
+Update the workspace with your new key using the portal, CLI, or PowerShell. SeeStep 3: Add a key to a workspaceand follow instructions for workspace update. Be sure that you use the same values for the resource group name and the workspace name so it updates the existing workspace, rather than creating a new workspace. Other than changes in the key-related parameters, use the same parameters that were used for creating the workspace.
+Important
+If you rotate the key, you must keep the old key available for 24 hours.
+Optionallyexport and re-import existing notebooksto ensure that all your existing notebooks use your new key.
+Optionallyexport and re-import existing notebooksto ensure that all your existing notebooks use your new key.
+Troubleshooting
+Accidental deletion of a key
+If you delete your key in the Azure Key Vault, the workspace login will start failing and no notebooks will be readable by Azure Databricks. To avoid this, we recommend that you enable soft deletes. This option ensures that if a key is deleted, it can be recovered within a 30 day period. If soft delete is enabled, you can simply re-enable the key in order to resolve the issue.
+Key update failure due to key vault permissions
+If you have trouble creating your workspace, check if your key vault has correct permissions. The error that is returned from Azure may not correctly indicate this as the root cause. Also, the required permissions areget,wrapKey, andunwrapKey. SeeStep 1: Set up a key vault.
+get
+wrapKey
+unwrapKey
+Lost keys are unrecoverable
+If you lose your key and cannot recover it, all the notebook data encrypted by the key is unrecoverable.
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,943 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Quickstart: Create a Windows Virtual Machine Scale Set with an ARM template
+Article
+2024-08-22
+10 contributors
+In this article
+Applies to:âï¸ Windows VMs âï¸ Uniform scale sets
+Note
+The following article is for Uniform Virtual Machine Scale Sets. We recommend using Flexible Virtual Machine Scale Sets for new workloads. Learn more about this new orchestration mode in ourFlexible Virtual Machine Scale Sets overview.
+A Virtual Machine Scale Set allows you to deploy and manage a set of auto-scaling virtual machines. You can scale the number of VMs in the scale set manually, or define rules to autoscale based on resource usage like CPU, memory demand, or network traffic. An Azure load balancer then distributes traffic to the VM instances in the scale set. In this quickstart, you create a Virtual Machine Scale Set and deploy a sample application with an Azure Resource Manager template (ARM template).
+AnAzure Resource Manager templateis a JavaScript Object Notation (JSON) file that defines the infrastructure and configuration for your project. The template uses declarative syntax. You describe your intended deployment without writing the sequence of programming commands to create the deployment.
+ARM templates let you deploy groups of related resources. In a single template, you can create the Virtual Machine Scale Set, install applications, and configure autoscale rules. With the use of variables and parameters, this template can be reused to update existing, or create additional, scale sets. You can deploy templates through the Azure portal, Azure CLI, Azure PowerShell, or from continuous integration / continuous delivery (CI/CD) pipelines.
+If your environment meets the prerequisites and you're familiar with using ARM templates, select theDeploy to Azurebutton. The template will open in the Azure portal.
+
+Prerequisites
+If you don't have an Azure subscription, create afree accountbefore you begin.
+Review the template
+The template used in this quickstart is fromAzure Quickstart templates.
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.29.47.4906",
+      "templateHash": "11422221168065527308"
+    }
+  },
+  "parameters": {
+    "vmssName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 61,
+      "metadata": {
+        "description": "String used as a base for naming resources. Must be 3-61 characters in length and globally unique across Azure. A hash is prepended to this string for some resources, and resource-specific information is appended."
+      }
+    },
+    "vmSku": {
+      "type": "string",
+      "defaultValue": "Standard_D2s_v3",
+      "metadata": {
+        "description": "Size of VMs in the VM Scale Set."
+      }
+    },
+    "windowsOSVersion": {
+      "type": "string",
+      "defaultValue": "2022-datacenter-azure-edition",
+      "allowedValues": [
+        "2019-DataCenter-GenSecond",
+        "2016-DataCenter-GenSecond",
+        "2022-datacenter-azure-edition"
+      ],
+      "metadata": {
+        "description": "The Windows version for the VM. This will pick a fully patched image of this given Windows version. Allowed values: 2008-R2-SP1, 2012-Datacenter, 2012-R2-Datacenter & 2016-Datacenter, 2019-Datacenter."
+      }
+    },
+    "securityType": {
+      "type": "string",
+      "defaultValue": "TrustedLaunch",
+      "allowedValues": [
+        "Standard",
+        "TrustedLaunch"
+      ],
+      "metadata": {
+        "description": "Security Type of the Virtual Machine."
+      }
+    },
+    "instanceCount": {
+      "type": "int",
+      "defaultValue": 3,
+      "minValue": 1,
+      "maxValue": 100,
+      "metadata": {
+        "description": "Number of VM instances (100 or less)."
+      }
+    },
+    "singlePlacementGroup": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "When true this limits the scale set to a single placement group, of max size 100 virtual machines. NOTE: If singlePlacementGroup is true, it may be modified to false. However, if singlePlacementGroup is false, it may not be modified to true."
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "vmssadmin",
+      "metadata": {
+        "description": "Admin username on all VMs."
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Admin password on all VMs."
+      }
+    },
+    "_artifactsLocation": {
+      "type": "string",
+      "defaultValue": "[deployment().properties.templateLink.uri]",
+      "metadata": {
+        "description": "The base URI where artifacts required by this template are located. For example, if stored on a public GitHub repo, you'd use the following URI: https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/201-vmss-windows-webapp-dsc-autoscale/."
+      }
+    },
+    "_artifactsLocationSasToken": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "The sasToken required to access _artifactsLocation.  If your artifacts are stored on a public repo or public storage account you can leave this blank."
+      }
+    },
+    "powershelldscZip": {
+      "type": "string",
+      "defaultValue": "DSC/InstallIIS.zip",
+      "metadata": {
+        "description": "Location of the PowerShell DSC zip file relative to the URI specified in the _artifactsLocation, i.e. DSC/IISInstall.ps1.zip"
+      }
+    },
+    "webDeployPackage": {
+      "type": "string",
+      "defaultValue": "WebDeploy/DefaultASPWebApp.v1.0.zip",
+      "metadata": {
+        "description": "Location of the  of the WebDeploy package zip file relative to the URI specified in _artifactsLocation, i.e. WebDeploy/DefaultASPWebApp.v1.0.zip"
+      }
+    },
+    "powershelldscUpdateTagVersion": {
+      "type": "string",
+      "defaultValue": "1.0",
+      "metadata": {
+        "description": "Version number of the DSC deployment. Changing this value on subsequent deployments will trigger the extension to run."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "platformFaultDomainCount": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Fault Domain count for each placement group."
+      }
+    }
+  },
+  "variables": {
+    "vmScaleSetName": "[toLower(substring(format('vmssName{0}', uniqueString(resourceGroup().id)), 0, 9))]",
+    "longvmScaleSet": "[toLower(parameters('vmssName'))]",
+    "addressPrefix": "10.0.0.0/16",
+    "subnetPrefix": "10.0.0.0/24",
+    "vNetName": "[format('{0}vnet', variables('vmScaleSetName'))]",
+    "publicIPAddressName": "[format('{0}pip', variables('vmScaleSetName'))]",
+    "subnetName": "[format('{0}subnet', variables('vmScaleSetName'))]",
+    "loadBalancerName": "[format('{0}lb', variables('vmScaleSetName'))]",
+    "publicIPAddressID": "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPAddressName'))]",
+    "lbProbeID": "[resourceId('Microsoft.Network/loadBalancers/probes', variables('loadBalancerName'), 'tcpProbe')]",
+    "natPoolName": "[format('{0}natpool', variables('vmScaleSetName'))]",
+    "bePoolName": "[format('{0}bepool', variables('vmScaleSetName'))]",
+    "lbPoolID": "[resourceId('Microsoft.Network/loadBalancers/backendAddressPools', variables('loadBalancerName'), variables('bePoolName'))]",
+    "natStartPort": 50000,
+    "natEndPort": 50119,
+    "natBackendPort": 3389,
+    "nicName": "[format('{0}nic', variables('vmScaleSetName'))]",
+    "ipConfigName": "[format('{0}ipconfig', variables('vmScaleSetName'))]",
+    "frontEndIPConfigID": "[resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', variables('loadBalancerName'), 'loadBalancerFrontEnd')]",
+    "osType": {
+      "publisher": "MicrosoftWindowsServer",
+      "offer": "WindowsServer",
+      "sku": "[parameters('windowsOSVersion')]",
+      "version": "latest"
+    },
+    "securityProfileJson": {
+      "uefiSettings": {
+        "secureBootEnabled": true,
+        "vTpmEnabled": true
+      },
+      "securityType": "[parameters('securityType')]"
+    },
+    "imageReference": "[variables('osType')]",
+    "webDeployPackageFullPath": "[uri(parameters('_artifactsLocation'), format('{0}{1}', parameters('webDeployPackage'), parameters('_artifactsLocationSasToken')))]",
+    "powershelldscZipFullPath": "[uri(parameters('_artifactsLocation'), format('{0}{1}', parameters('powershelldscZip'), parameters('_artifactsLocationSasToken')))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/loadBalancers",
+      "apiVersion": "2023-04-01",
+      "name": "[variables('loadBalancerName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "name": "LoadBalancerFrontEnd",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[variables('publicIPAddressID')]"
+              }
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "[variables('bePoolName')]"
+          }
+        ],
+        "inboundNatPools": [
+          {
+            "name": "[variables('natPoolName')]",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[variables('frontEndIPConfigID')]"
+              },
+              "protocol": "Tcp",
+              "frontendPortRangeStart": "[variables('natStartPort')]",
+              "frontendPortRangeEnd": "[variables('natEndPort')]",
+              "backendPort": "[variables('natBackendPort')]"
+            }
+          }
+        ],
+        "loadBalancingRules": [
+          {
+            "name": "LBRule",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[variables('frontEndIPConfigID')]"
+              },
+              "backendAddressPool": {
+                "id": "[variables('lbPoolID')]"
+              },
+              "protocol": "Tcp",
+              "frontendPort": 80,
+              "backendPort": 80,
+              "enableFloatingIP": false,
+              "idleTimeoutInMinutes": 5,
+              "probe": {
+                "id": "[variables('lbProbeID')]"
+              }
+            }
+          }
+        ],
+        "probes": [
+          {
+            "name": "tcpProbe",
+            "properties": {
+              "protocol": "Tcp",
+              "port": 80,
+              "intervalInSeconds": 5,
+              "numberOfProbes": 2
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPAddressName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachineScaleSets",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('vmScaleSetName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('vmSku')]",
+        "tier": "Standard",
+        "capacity": "[parameters('instanceCount')]"
+      },
+      "properties": {
+        "overprovision": true,
+        "upgradePolicy": {
+          "mode": "Automatic"
+        },
+        "singlePlacementGroup": "[parameters('singlePlacementGroup')]",
+        "platformFaultDomainCount": "[parameters('platformFaultDomainCount')]",
+        "virtualMachineProfile": {
+          "storageProfile": {
+            "osDisk": {
+              "caching": "ReadWrite",
+              "createOption": "FromImage"
+            },
+            "imageReference": "[variables('imageReference')]"
+          },
+          "osProfile": {
+            "computerNamePrefix": "[variables('vmScaleSetName')]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "adminPassword": "[parameters('adminPassword')]"
+          },
+          "securityProfile": "[if(equals(parameters('securityType'), 'TrustedLaunch'), variables('securityProfileJson'), null())]",
+          "networkProfile": {
+            "networkInterfaceConfigurations": [
+              {
+                "name": "[variables('nicName')]",
+                "properties": {
+                  "primary": true,
+                  "ipConfigurations": [
+                    {
+                      "name": "[variables('ipConfigName')]",
+                      "properties": {
+                        "subnet": {
+                          "id": "[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vNetName')), '2023-04-01').subnets[0].id]"
+                        },
+                        "loadBalancerBackendAddressPools": [
+                          {
+                            "id": "[variables('lbPoolID')]"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "extensionProfile": {
+            "extensions": [
+              {
+                "name": "Microsoft.Powershell.DSC",
+                "properties": {
+                  "publisher": "Microsoft.Powershell",
+                  "type": "DSC",
+                  "typeHandlerVersion": "2.9",
+                  "autoUpgradeMinorVersion": true,
+                  "forceUpdateTag": "[parameters('powershelldscUpdateTagVersion')]",
+                  "settings": {
+                    "configuration": {
+                      "url": "[variables('powershelldscZipFullPath')]",
+                      "script": "InstallIIS.ps1",
+                      "function": "InstallIIS"
+                    },
+                    "configurationArguments": {
+                      "nodeName": "localhost",
+                      "WebDeployPackagePath": "[variables('webDeployPackageFullPath')]"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vNetName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-04-01",
+      "name": "[variables('publicIPAddressName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "dnsSettings": {
+          "domainNameLabel": "[variables('longvmScaleSet')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-04-01",
+      "name": "[variables('vNetName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('addressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetPrefix')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Insights/autoscalesettings",
+      "apiVersion": "2022-10-01",
+      "name": "autoscalehost",
+      "location": "[parameters('location')]",
+      "properties": {
+        "name": "autoscalehost",
+        "targetResourceUri": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', variables('vmScaleSetName'))]",
+        "enabled": true,
+        "profiles": [
+          {
+            "name": "Profile1",
+            "capacity": {
+              "minimum": "1",
+              "maximum": "10",
+              "default": "1"
+            },
+            "rules": [
+              {
+                "metricTrigger": {
+                  "metricName": "Percentage CPU",
+                  "metricResourceUri": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', variables('vmScaleSetName'))]",
+                  "timeGrain": "PT1M",
+                  "statistic": "Average",
+                  "timeWindow": "PT5M",
+                  "timeAggregation": "Average",
+                  "operator": "GreaterThan",
+                  "threshold": 50
+                },
+                "scaleAction": {
+                  "direction": "Increase",
+                  "type": "ChangeCount",
+                  "value": "1",
+                  "cooldown": "PT5M"
+                }
+              },
+              {
+                "metricTrigger": {
+                  "metricName": "Percentage CPU",
+                  "metricResourceUri": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', variables('vmScaleSetName'))]",
+                  "timeGrain": "PT1M",
+                  "statistic": "Average",
+                  "timeWindow": "PT5M",
+                  "timeAggregation": "Average",
+                  "operator": "LessThan",
+                  "threshold": 30
+                },
+                "scaleAction": {
+                  "direction": "Decrease",
+                  "type": "ChangeCount",
+                  "value": "1",
+                  "cooldown": "PT5M"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachineScaleSets', variables('vmScaleSetName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "applicationUrl": {
+      "type": "string",
+      "value": "[uri(format('http://{0}', reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPAddressName')), '2023-04-01').dnsSettings.fqdn), '/MyApp')]"
+    }
+  }
+}
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.29.47.4906",
+      "templateHash": "11422221168065527308"
+    }
+  },
+  "parameters": {
+    "vmssName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 61,
+      "metadata": {
+        "description": "String used as a base for naming resources. Must be 3-61 characters in length and globally unique across Azure. A hash is prepended to this string for some resources, and resource-specific information is appended."
+      }
+    },
+    "vmSku": {
+      "type": "string",
+      "defaultValue": "Standard_D2s_v3",
+      "metadata": {
+        "description": "Size of VMs in the VM Scale Set."
+      }
+    },
+    "windowsOSVersion": {
+      "type": "string",
+      "defaultValue": "2022-datacenter-azure-edition",
+      "allowedValues": [
+        "2019-DataCenter-GenSecond",
+        "2016-DataCenter-GenSecond",
+        "2022-datacenter-azure-edition"
+      ],
+      "metadata": {
+        "description": "The Windows version for the VM. This will pick a fully patched image of this given Windows version. Allowed values: 2008-R2-SP1, 2012-Datacenter, 2012-R2-Datacenter & 2016-Datacenter, 2019-Datacenter."
+      }
+    },
+    "securityType": {
+      "type": "string",
+      "defaultValue": "TrustedLaunch",
+      "allowedValues": [
+        "Standard",
+        "TrustedLaunch"
+      ],
+      "metadata": {
+        "description": "Security Type of the Virtual Machine."
+      }
+    },
+    "instanceCount": {
+      "type": "int",
+      "defaultValue": 3,
+      "minValue": 1,
+      "maxValue": 100,
+      "metadata": {
+        "description": "Number of VM instances (100 or less)."
+      }
+    },
+    "singlePlacementGroup": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "When true this limits the scale set to a single placement group, of max size 100 virtual machines. NOTE: If singlePlacementGroup is true, it may be modified to false. However, if singlePlacementGroup is false, it may not be modified to true."
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "vmssadmin",
+      "metadata": {
+        "description": "Admin username on all VMs."
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Admin password on all VMs."
+      }
+    },
+    "_artifactsLocation": {
+      "type": "string",
+      "defaultValue": "[deployment().properties.templateLink.uri]",
+      "metadata": {
+        "description": "The base URI where artifacts required by this template are located. For example, if stored on a public GitHub repo, you'd use the following URI: https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/201-vmss-windows-webapp-dsc-autoscale/."
+      }
+    },
+    "_artifactsLocationSasToken": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "The sasToken required to access _artifactsLocation.  If your artifacts are stored on a public repo or public storage account you can leave this blank."
+      }
+    },
+    "powershelldscZip": {
+      "type": "string",
+      "defaultValue": "DSC/InstallIIS.zip",
+      "metadata": {
+        "description": "Location of the PowerShell DSC zip file relative to the URI specified in the _artifactsLocation, i.e. DSC/IISInstall.ps1.zip"
+      }
+    },
+    "webDeployPackage": {
+      "type": "string",
+      "defaultValue": "WebDeploy/DefaultASPWebApp.v1.0.zip",
+      "metadata": {
+        "description": "Location of the  of the WebDeploy package zip file relative to the URI specified in _artifactsLocation, i.e. WebDeploy/DefaultASPWebApp.v1.0.zip"
+      }
+    },
+    "powershelldscUpdateTagVersion": {
+      "type": "string",
+      "defaultValue": "1.0",
+      "metadata": {
+        "description": "Version number of the DSC deployment. Changing this value on subsequent deployments will trigger the extension to run."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "platformFaultDomainCount": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Fault Domain count for each placement group."
+      }
+    }
+  },
+  "variables": {
+    "vmScaleSetName": "[toLower(substring(format('vmssName{0}', uniqueString(resourceGroup().id)), 0, 9))]",
+    "longvmScaleSet": "[toLower(parameters('vmssName'))]",
+    "addressPrefix": "10.0.0.0/16",
+    "subnetPrefix": "10.0.0.0/24",
+    "vNetName": "[format('{0}vnet', variables('vmScaleSetName'))]",
+    "publicIPAddressName": "[format('{0}pip', variables('vmScaleSetName'))]",
+    "subnetName": "[format('{0}subnet', variables('vmScaleSetName'))]",
+    "loadBalancerName": "[format('{0}lb', variables('vmScaleSetName'))]",
+    "publicIPAddressID": "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPAddressName'))]",
+    "lbProbeID": "[resourceId('Microsoft.Network/loadBalancers/probes', variables('loadBalancerName'), 'tcpProbe')]",
+    "natPoolName": "[format('{0}natpool', variables('vmScaleSetName'))]",
+    "bePoolName": "[format('{0}bepool', variables('vmScaleSetName'))]",
+    "lbPoolID": "[resourceId('Microsoft.Network/loadBalancers/backendAddressPools', variables('loadBalancerName'), variables('bePoolName'))]",
+    "natStartPort": 50000,
+    "natEndPort": 50119,
+    "natBackendPort": 3389,
+    "nicName": "[format('{0}nic', variables('vmScaleSetName'))]",
+    "ipConfigName": "[format('{0}ipconfig', variables('vmScaleSetName'))]",
+    "frontEndIPConfigID": "[resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', variables('loadBalancerName'), 'loadBalancerFrontEnd')]",
+    "osType": {
+      "publisher": "MicrosoftWindowsServer",
+      "offer": "WindowsServer",
+      "sku": "[parameters('windowsOSVersion')]",
+      "version": "latest"
+    },
+    "securityProfileJson": {
+      "uefiSettings": {
+        "secureBootEnabled": true,
+        "vTpmEnabled": true
+      },
+      "securityType": "[parameters('securityType')]"
+    },
+    "imageReference": "[variables('osType')]",
+    "webDeployPackageFullPath": "[uri(parameters('_artifactsLocation'), format('{0}{1}', parameters('webDeployPackage'), parameters('_artifactsLocationSasToken')))]",
+    "powershelldscZipFullPath": "[uri(parameters('_artifactsLocation'), format('{0}{1}', parameters('powershelldscZip'), parameters('_artifactsLocationSasToken')))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/loadBalancers",
+      "apiVersion": "2023-04-01",
+      "name": "[variables('loadBalancerName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "name": "LoadBalancerFrontEnd",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[variables('publicIPAddressID')]"
+              }
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "[variables('bePoolName')]"
+          }
+        ],
+        "inboundNatPools": [
+          {
+            "name": "[variables('natPoolName')]",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[variables('frontEndIPConfigID')]"
+              },
+              "protocol": "Tcp",
+              "frontendPortRangeStart": "[variables('natStartPort')]",
+              "frontendPortRangeEnd": "[variables('natEndPort')]",
+              "backendPort": "[variables('natBackendPort')]"
+            }
+          }
+        ],
+        "loadBalancingRules": [
+          {
+            "name": "LBRule",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[variables('frontEndIPConfigID')]"
+              },
+              "backendAddressPool": {
+                "id": "[variables('lbPoolID')]"
+              },
+              "protocol": "Tcp",
+              "frontendPort": 80,
+              "backendPort": 80,
+              "enableFloatingIP": false,
+              "idleTimeoutInMinutes": 5,
+              "probe": {
+                "id": "[variables('lbProbeID')]"
+              }
+            }
+          }
+        ],
+        "probes": [
+          {
+            "name": "tcpProbe",
+            "properties": {
+              "protocol": "Tcp",
+              "port": 80,
+              "intervalInSeconds": 5,
+              "numberOfProbes": 2
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPAddressName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachineScaleSets",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('vmScaleSetName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('vmSku')]",
+        "tier": "Standard",
+        "capacity": "[parameters('instanceCount')]"
+      },
+      "properties": {
+        "overprovision": true,
+        "upgradePolicy": {
+          "mode": "Automatic"
+        },
+        "singlePlacementGroup": "[parameters('singlePlacementGroup')]",
+        "platformFaultDomainCount": "[parameters('platformFaultDomainCount')]",
+        "virtualMachineProfile": {
+          "storageProfile": {
+            "osDisk": {
+              "caching": "ReadWrite",
+              "createOption": "FromImage"
+            },
+            "imageReference": "[variables('imageReference')]"
+          },
+          "osProfile": {
+            "computerNamePrefix": "[variables('vmScaleSetName')]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "adminPassword": "[parameters('adminPassword')]"
+          },
+          "securityProfile": "[if(equals(parameters('securityType'), 'TrustedLaunch'), variables('securityProfileJson'), null())]",
+          "networkProfile": {
+            "networkInterfaceConfigurations": [
+              {
+                "name": "[variables('nicName')]",
+                "properties": {
+                  "primary": true,
+                  "ipConfigurations": [
+                    {
+                      "name": "[variables('ipConfigName')]",
+                      "properties": {
+                        "subnet": {
+                          "id": "[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vNetName')), '2023-04-01').subnets[0].id]"
+                        },
+                        "loadBalancerBackendAddressPools": [
+                          {
+                            "id": "[variables('lbPoolID')]"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "extensionProfile": {
+            "extensions": [
+              {
+                "name": "Microsoft.Powershell.DSC",
+                "properties": {
+                  "publisher": "Microsoft.Powershell",
+                  "type": "DSC",
+                  "typeHandlerVersion": "2.9",
+                  "autoUpgradeMinorVersion": true,
+                  "forceUpdateTag": "[parameters('powershelldscUpdateTagVersion')]",
+                  "settings": {
+                    "configuration": {
+                      "url": "[variables('powershelldscZipFullPath')]",
+                      "script": "InstallIIS.ps1",
+                      "function": "InstallIIS"
+                    },
+                    "configurationArguments": {
+                      "nodeName": "localhost",
+                      "WebDeployPackagePath": "[variables('webDeployPackageFullPath')]"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vNetName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-04-01",
+      "name": "[variables('publicIPAddressName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "dnsSettings": {
+          "domainNameLabel": "[variables('longvmScaleSet')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-04-01",
+      "name": "[variables('vNetName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('addressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetPrefix')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Insights/autoscalesettings",
+      "apiVersion": "2022-10-01",
+      "name": "autoscalehost",
+      "location": "[parameters('location')]",
+      "properties": {
+        "name": "autoscalehost",
+        "targetResourceUri": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', variables('vmScaleSetName'))]",
+        "enabled": true,
+        "profiles": [
+          {
+            "name": "Profile1",
+            "capacity": {
+              "minimum": "1",
+              "maximum": "10",
+              "default": "1"
+            },
+            "rules": [
+              {
+                "metricTrigger": {
+                  "metricName": "Percentage CPU",
+                  "metricResourceUri": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', variables('vmScaleSetName'))]",
+                  "timeGrain": "PT1M",
+                  "statistic": "Average",
+                  "timeWindow": "PT5M",
+                  "timeAggregation": "Average",
+                  "operator": "GreaterThan",
+                  "threshold": 50
+                },
+                "scaleAction": {
+                  "direction": "Increase",
+                  "type": "ChangeCount",
+                  "value": "1",
+                  "cooldown": "PT5M"
+                }
+              },
+              {
+                "metricTrigger": {
+                  "metricName": "Percentage CPU",
+                  "metricResourceUri": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', variables('vmScaleSetName'))]",
+                  "timeGrain": "PT1M",
+                  "statistic": "Average",
+                  "timeWindow": "PT5M",
+                  "timeAggregation": "Average",
+                  "operator": "LessThan",
+                  "threshold": 30
+                },
+                "scaleAction": {
+                  "direction": "Decrease",
+                  "type": "ChangeCount",
+                  "value": "1",
+                  "cooldown": "PT5M"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachineScaleSets', variables('vmScaleSetName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "applicationUrl": {
+      "type": "string",
+      "value": "[uri(format('http://{0}', reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPAddressName')), '2023-04-01').dnsSettings.fqdn), '/MyApp')]"
+    }
+  }
+}
+These resources are defined in these templates:
+Microsoft.Network/virtualNetworks
+Microsoft.Network/publicIPAddresses
+Microsoft.Network/loadBalancers
+Microsoft.Compute/virtualMachineScaleSets
+Microsoft.Insights/autoscaleSettings
+Define a scale set
+To create a scale with a template, you define the appropriate resources. The core parts of the Virtual Machine Scale Set resource type are:
+To customize a scale set template, you can change the VM size or initial capacity. Another option is to use a different platform or a custom image.
+Add a sample application
+To test your scale set, install a basic web application. When you deploy a scale set, VM extensions can provide post-deployment configuration and automation tasks, such as installing an app. Scripts can be downloaded from Azure storage or GitHub, or provided to the Azure portal at extension run-time. To apply an extension to your scale set, you add theextensionProfilesection to the preceding resource example. The extension profile typically defines the following properties:
+Extension type
+Extension publisher
+Extension version
+Location of configuration or install scripts
+Commands to execute on the VM instances
+The template uses the PowerShell DSC extension to install an ASP.NET MVC app that runs in IIS.
+An install script is downloaded from GitHub, as defined inurl. The extension then runsInstallIISfrom theIISInstall.ps1script, as defined infunctionandScript. The ASP.NET app itself is provided as a Web Deploy package, which is also downloaded from GitHub, as defined inWebDeployPackagePath:
+Deploy the template
+You can deploy the template by selecting theDeploy to Azurebutton. This button opens the Azure portal, loads the complete template, and prompts for a few parameters such as a scale set name, instance count, and admin credentials.
+
+You can also deploy a Resource Manager template by using Azure PowerShell:
+# Create a resource group
+New-AzResourceGroup -Name myResourceGroup -Location EastUS
+
+# Deploy template into resource group
+New-AzResourceGroupDeployment `
+    -ResourceGroupName myResourceGroup `
+    -TemplateURI https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/demos/vmss-windows-webapp-dsc-autoscale/azuredeploy.json
+
+# Update the scale set and apply the extension
+Update-AzVmss `
+    -ResourceGroupName myResourceGroup `
+    -VmScaleSetName myVMSS `
+    -VirtualMachineScaleSet $vmssConfig
+# Create a resource group
+New-AzResourceGroup -Name myResourceGroup -Location EastUS
+
+# Deploy template into resource group
+New-AzResourceGroupDeployment `
+    -ResourceGroupName myResourceGroup `
+    -TemplateURI https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/demos/vmss-windows-webapp-dsc-autoscale/azuredeploy.json
+
+# Update the scale set and apply the extension
+Update-AzVmss `
+    -ResourceGroupName myResourceGroup `
+    -VmScaleSetName myVMSS `
+    -VirtualMachineScaleSet $vmssConfig
+Answer the prompts to provide a scale set name and admin credentials for the VM instances. It can take 10-15 minutes for the scale set to be created and apply the extension to configure the app.
+Validate the deployment
+To see your scale set in action, access the sample web application in a web browser. Obtain the public IP address of your load balancer withGet-AzPublicIpAddressas follows:
+Get-AzPublicIpAddress -ResourceGroupName myResourceGroup | Select IpAddress
+Get-AzPublicIpAddress -ResourceGroupName myResourceGroup | Select IpAddress
+Enter the public IP address of the load balancer in to a web browser in the formathttp://publicIpAddress/MyApp. The load balancer distributes traffic to one of your VM instances, as shown in the following example:
+
+Clean up resources
+When no longer needed, you can use theRemove-AzResourceGroupto remove the resource group, scale set. The-Forceparameter confirms that you wish to delete the resources without an additional prompt to do so. The-AsJobparameter returns control to the prompt without waiting for the operation to complete.
+-Force
+-AsJob
+Remove-AzResourceGroup -Name "myResourceGroup" -Force -AsJob
+Remove-AzResourceGroup -Name "myResourceGroup" -Force -AsJob
+Next steps
+In this quickstart, you created a Windows scale set with an ARM template and used the PowerShell DSC extension to install a basic ASP.NET app on the VM instances. To learn more, continue to the tutorial for how to create and manage Azure Virtual Machine Scale Sets.
+Create and manage Azure Virtual Machine Scale Sets
+Feedback
+Was this page helpful?
+Additional resources

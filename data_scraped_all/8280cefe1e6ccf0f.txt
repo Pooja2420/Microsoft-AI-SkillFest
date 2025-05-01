@@ -1,0 +1,552 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Redistribute throughput across partitions (preview)
+Article
+2024-08-14
+5 contributors
+In this article
+APPLIES TO:NoSQLMongoDB
+By default, Azure Cosmos DB distributes the provisioned throughput of a database or container equally across all physical partitions. However, scenarios may arise where due to a skew in the workload or choice of partition key, certain logical (and thus physical) partitions need more throughput than others. For these scenarios, Azure Cosmos DB gives you the ability to redistribute your provisioned throughput across physical partitions. Redistributing throughput across partitions helps you achieve better performance without having to configure your overall throughput based on the hottest partition.
+The throughput redistributing feature applies to databases and containers using provisioned throughput (manual and autoscale) and doesn't apply to serverless containers. You can change the throughput per physical partition using the Azure Cosmos DB PowerShell or Azure CLI commands.
+When to use this feature
+In general, usage of this feature is recommended for scenarios when both the following are true:
+You're consistently seeing greater than 1-5% overall rate of 429 responses
+You've a consistent, predictable hot partition
+If you aren't seeing 429 responses and your end to end latency is acceptable, then no action to reconfigure RU/s per partition is required. If you have a workload that has consistent traffic with occasional unpredictable spikes acrossall your partitions, it's recommended to useautoscaleandburst capacity (preview). Autoscale and burst capacity will ensure you can meet your throughput requirements. If you have a small amount of RU/s per partition, you can also use thepartition merge (preview)to reduce the number of partitions and ensure more RU/s per partition for the same total provisioned throughput.
+Example scenario
+Suppose we have a workload that keeps track of transactions that take place in retail stores. Because most of our queries are byStoreId, we partition byStoreId. However, over time, we see that some stores have more activity than others and require more throughput to serve their workloads. We're seeing rate limiting (429) for requests against those StoreIds, and ouroverall rate of 429 responses is greater than 1-5%. Meanwhile, other stores are less active and require less throughput. Let's see how we can redistribute our throughput for better performance.
+StoreId
+StoreId
+Step 1: Identify which physical partitions need more throughput
+There are two ways to identify if there's a hot partition.
+Option 1: Use Azure Monitor metrics
+To verify if there's a hot partition, navigate toInsights>Throughput>Normalized RU Consumption (%) By PartitionKeyRangeID. Filter to a specific database and container.
+Each PartitionKeyRangeId maps to one physical partition. Look for one PartitionKeyRangeId that consistently has a higher normalized RU consumption than others. For example, one value is consistently at 100%, but others are at 30% or less. A pattern such as this can indicate a hot partition.
+
+Option 2: Use Diagnostic Logs
+We can use the information fromCDBPartitionKeyRUConsumptionin Diagnostic Logs to get more information about the logical partition keys (and corresponding physical partitions) that are consuming the most RU/s at a second level granularity. Note the sample queries use 24 hours for illustrative purposes only - it's recommended to use at least seven days of history to understand the pattern.
+CDBPartitionKeyRUConsumption 
+| where TimeGenerated >= ago(24hr)
+| where DatabaseName == "MyDB" and CollectionName == "MyCollection" // Replace with database and collection name
+| where isnotempty(PartitionKey) and isnotempty(PartitionKeyRangeId)
+| summarize sum(RequestCharge) by bin(TimeGenerated, 1s), PartitionKeyRangeId
+| render timechart
+CDBPartitionKeyRUConsumption 
+| where TimeGenerated >= ago(24hr)
+| where DatabaseName == "MyDB" and CollectionName == "MyCollection" // Replace with database and collection name
+| where isnotempty(PartitionKey) and isnotempty(PartitionKeyRangeId)
+| summarize sum(RequestCharge) by bin(TimeGenerated, 1s), PartitionKeyRangeId
+| render timechart
+CDBPartitionKeyRUConsumption 
+| where TimeGenerated >= ago(24hour)
+| where DatabaseName == "MyDB" and CollectionName == "MyCollection" // Replace with database and collection name
+| where isnotempty(PartitionKey) and isnotempty(PartitionKeyRangeId)
+| where PartitionKeyRangeId == 0 // Replace with PartitionKeyRangeId 
+| summarize sum(RequestCharge) by bin(TimeGenerated, 1hour), PartitionKey
+| order by sum_RequestCharge desc | take 10
+CDBPartitionKeyRUConsumption 
+| where TimeGenerated >= ago(24hour)
+| where DatabaseName == "MyDB" and CollectionName == "MyCollection" // Replace with database and collection name
+| where isnotempty(PartitionKey) and isnotempty(PartitionKeyRangeId)
+| where PartitionKeyRangeId == 0 // Replace with PartitionKeyRangeId 
+| summarize sum(RequestCharge) by bin(TimeGenerated, 1hour), PartitionKey
+| order by sum_RequestCharge desc | take 10
+Step 2: Determine the target RU/s for each physical partition
+Determine current RU/s for each physical partition
+First, let's determine the current RU/s for each physical partition. You can use the Azure Monitor metricPhysicalPartitionThroughputand split by the dimensionPhysicalPartitionIdto see how many RU/s you have per physical partition.
+Alternatively, if you haven't changed your throughput per partition before, you can use the formula:Current RU/s per partition = Total RU/s / Number of physical partitions
+Current RU/s per partition = Total RU/s / Number of physical partitions
+Follow the guidance in the articleBest practices for scaling provisioned throughput (RU/s)to determine the number of physical partitions.
+You can also use the PowerShellGet-AzCosmosDBSqlContainerPerPartitionThroughputandGet-AzCosmosDBMongoDBCollectionPerPartitionThroughputcommands to read the current RU/s on each physical partition.
+Get-AzCosmosDBSqlContainerPerPartitionThroughput
+Get-AzCosmosDBMongoDBCollectionPerPartitionThroughput
+PowerShell
+Azure CLI
+UseInstall-Moduleto install theAz.CosmosDBmodule with prerelease features enabled.
+Install-Module
+$parameters = @{
+    Name = "Az.CosmosDB"
+    AllowPrerelease = $true
+    Force = $true
+}
+Install-Module @parameters
+$parameters = @{
+    Name = "Az.CosmosDB"
+    AllowPrerelease = $true
+    Force = $true
+}
+Install-Module @parameters
+Useaz extension addto install thecosmosdb-previewAzure CLI extension.
+az extension add
+az extension add \
+    --name cosmosdb-preview
+az extension add \
+    --name cosmosdb-preview
+API for NoSQL
+API for NoSQL
+API for MongoDB
+API for MongoDB
+Use theGet-AzCosmosDBSqlContainerPerPartitionThroughputorGet-AzCosmosDBSqlDatabasePerPartitionThroughputcommand to read the current RU/s on each physical partition.
+Get-AzCosmosDBSqlContainerPerPartitionThroughput
+Get-AzCosmosDBSqlDatabasePerPartitionThroughput
+// Container with dedicated RU/s
+$somePartitionsDedicatedRUContainer = Get-AzCosmosDBSqlContainerPerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -Name "<cosmos-container-name>" `
+                    -PhysicalPartitionIds ("<PartitionId>", "<PartitionId">)
+
+$allPartitionsDedicatedRUContainer = Get-AzCosmosDBSqlContainerPerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -Name "<cosmos-container-name>" `
+                    -AllPartitions
+
+// Database with shared RU/s
+$somePartitionsSharedThroughputDatabase = Get-AzCosmosDBSqlDatabasePerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -PhysicalPartitionIds ("<PartitionId>", "<PartitionId">)
+
+$allPartitionsSharedThroughputDatabase = Get-AzCosmosDBSqlDatabasePerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -AllPartitions
+// Container with dedicated RU/s
+$somePartitionsDedicatedRUContainer = Get-AzCosmosDBSqlContainerPerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -Name "<cosmos-container-name>" `
+                    -PhysicalPartitionIds ("<PartitionId>", "<PartitionId">)
+
+$allPartitionsDedicatedRUContainer = Get-AzCosmosDBSqlContainerPerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -Name "<cosmos-container-name>" `
+                    -AllPartitions
+
+// Database with shared RU/s
+$somePartitionsSharedThroughputDatabase = Get-AzCosmosDBSqlDatabasePerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -PhysicalPartitionIds ("<PartitionId>", "<PartitionId">)
+
+$allPartitionsSharedThroughputDatabase = Get-AzCosmosDBSqlDatabasePerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -AllPartitions
+Read the current RU/s on each physical partition by usingaz cosmosdb sql container retrieve-partition-throughput.
+az cosmosdb sql container retrieve-partition-throughput
+// Container with dedicated RU/s - some partitions
+az cosmosdb sql container retrieve-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-container-name>' \
+    --physical-partition-ids '<space separated list of physical partition ids>'
+
+// Container with dedicated RU/s - all partitions
+az cosmosdb sql container retrieve-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-container-name>'
+    --all-partitions
+// Container with dedicated RU/s - some partitions
+az cosmosdb sql container retrieve-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-container-name>' \
+    --physical-partition-ids '<space separated list of physical partition ids>'
+
+// Container with dedicated RU/s - all partitions
+az cosmosdb sql container retrieve-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-container-name>'
+    --all-partitions
+Use theGet-AzCosmosDBMongoDBCollectionPerPartitionThroughputcommand to read the current RU/s on each physical partition.
+Get-AzCosmosDBMongoDBCollectionPerPartitionThroughput
+// Container with dedicated RU/s
+$somePartitionsDedicatedRUContainer = Get-AzCosmosDBMongoDBCollectionPerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -Name "<cosmos-collection-name>" `
+                    -PhysicalPartitionIds ("<PartitionId>", "<PartitionId">, ...)
+
+$allPartitionsDedicatedRUContainer = Get-AzCosmosDBMongoDBCollectionPerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -Name "<cosmos-collection-name>" `
+                    -AllPartitions
+
+// Database with shared RU/s
+$somePartitionsSharedThroughputDatabase = Get-AzCosmosDBMongoDBDatabasePerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -PhysicalPartitionIds ("<PartitionId>", "<PartitionId">)
+
+$allPartitionsSharedThroughputDatabase = Get-AzCosmosDBMongoDBDatabasePerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -AllPartitions
+// Container with dedicated RU/s
+$somePartitionsDedicatedRUContainer = Get-AzCosmosDBMongoDBCollectionPerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -Name "<cosmos-collection-name>" `
+                    -PhysicalPartitionIds ("<PartitionId>", "<PartitionId">, ...)
+
+$allPartitionsDedicatedRUContainer = Get-AzCosmosDBMongoDBCollectionPerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -Name "<cosmos-collection-name>" `
+                    -AllPartitions
+
+// Database with shared RU/s
+$somePartitionsSharedThroughputDatabase = Get-AzCosmosDBMongoDBDatabasePerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -PhysicalPartitionIds ("<PartitionId>", "<PartitionId">)
+
+$allPartitionsSharedThroughputDatabase = Get-AzCosmosDBMongoDBDatabasePerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -AllPartitions
+Read the current RU/s on each physical partition by usingaz cosmosdb mongodb collection retrieve-partition-throughput.
+az cosmosdb mongodb collection retrieve-partition-throughput
+// Collection with dedicated RU/s - some partitions
+az cosmosdb mongodb collection retrieve-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-collection-name>' \
+    --physical-partition-ids '<space separated list of physical partition ids>'
+
+// Collection with dedicated RU/s - all partitions
+az cosmosdb mongodb collection retrieve-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-collection-name>'
+    --all-partitions
+// Collection with dedicated RU/s - some partitions
+az cosmosdb mongodb collection retrieve-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-collection-name>' \
+    --physical-partition-ids '<space separated list of physical partition ids>'
+
+// Collection with dedicated RU/s - all partitions
+az cosmosdb mongodb collection retrieve-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-collection-name>'
+    --all-partitions
+Determine RU/s for target partition
+Next, let's decide how many RU/s we want to give to our hottest physical partition(s). Let's call this set our target partition(s). The most RU/s any physical partition can contain is 10,000 RU/s.
+The right approach depends on your workload requirements. General approaches include:
+Increasing the RU/s by a percentage, measure the rate of 429 responses, and repeat until desired throughput is achieved.If you aren't sure the right percentage, you can start with 10% to be conservative.If you already know this physical partition requires most of the throughput of the workload, you can start by doubling the RU/s or increasing it to the maximum of 10,000 RU/s, whichever is lower.
+If you aren't sure the right percentage, you can start with 10% to be conservative.
+If you already know this physical partition requires most of the throughput of the workload, you can start by doubling the RU/s or increasing it to the maximum of 10,000 RU/s, whichever is lower.
+Increasing the RU/s toTotal consumed RU/s of the physical partition + (Number of 429 responses per second * Average RU charge per request to the partition)This approach tries to estimate what the "real" RU/s consumption would have been if the requests hadn't been rate limited.
+Total consumed RU/s of the physical partition + (Number of 429 responses per second * Average RU charge per request to the partition)
+This approach tries to estimate what the "real" RU/s consumption would have been if the requests hadn't been rate limited.
+Determine RU/s for source partition
+Finally, let's decide how many RU/s we want to keep on our other physical partitions. This selection will determine the partitions that the target physical partition takes throughput from.
+In the PowerShell APIs, we must specify at least one source partition to redistribute RU/s from. We can also specify a custom minimum throughput each physical partition should have after the redistribution. If not specified, by default, Azure Cosmos DB will ensure that each physical partition has at least 100 RU/s after the redistribution. It's recommended to explicitly specify the minimum throughput.
+The right approach depends on your workload requirements. General approaches include:
+Taking RU/s equally from all source partitions (works best when there are <=  10 partitions)Calculate the amount we need to offset each source physical partition by.Offset = Total desired RU/s of target partition(s) - total current RU/s of target partition(s)) / (Total physical partitions - number of target partitions)Assign the minimum throughput for each source partition =Current RU/s of source partition - offset
+Calculate the amount we need to offset each source physical partition by.Offset = Total desired RU/s of target partition(s) - total current RU/s of target partition(s)) / (Total physical partitions - number of target partitions)
+Offset = Total desired RU/s of target partition(s) - total current RU/s of target partition(s)) / (Total physical partitions - number of target partitions)
+Assign the minimum throughput for each source partition =Current RU/s of source partition - offset
+Current RU/s of source partition - offset
+Taking RU/s from the least active partition(s)Use Azure Monitor metrics and Diagnostic Logs to determine which physical partition(s) have the least traffic/request volumeCalculate the amount we need to offset each source physical partition by.Offset = Total desired RU/s of target partition(s) - total current RU/s of target partition) / Number of source physical partitionsAssign the minimum throughput for each source partition =Current RU/s of source partition - offset
+Use Azure Monitor metrics and Diagnostic Logs to determine which physical partition(s) have the least traffic/request volume
+Calculate the amount we need to offset each source physical partition by.Offset = Total desired RU/s of target partition(s) - total current RU/s of target partition) / Number of source physical partitions
+Offset = Total desired RU/s of target partition(s) - total current RU/s of target partition) / Number of source physical partitions
+Assign the minimum throughput for each source partition =Current RU/s of source partition - offset
+Current RU/s of source partition - offset
+Step 3: Programatically change the throughput across partitions
+You can use the PowerShell commandUpdate-AzCosmosDBSqlContainerPerPartitionThroughputto redistribute throughput.
+Update-AzCosmosDBSqlContainerPerPartitionThroughput
+To understand the below example, let's take an example where we have a container that has 6000 RU/s total (either 6000 manual RU/s or autoscale 6000 RU/s) and 3 physical partitions. Based on our analysis, we want a layout where:
+Physical partition 0: 1000 RU/s
+Physical partition 1: 4000 RU/s
+Physical partition 2: 1000 RU/s
+We specify partitions 0 and 2 as our source partitions, and specify that after the redistribution, they should have a minimum RU/s of 1000 RU/s. Partition 1 is out target partition, which we specify should have 4000 RU/s.
+API for NoSQL
+API for NoSQL
+API for MongoDB
+API for MongoDB
+Use theUpdate-AzCosmosDBSqlContainerPerPartitionThroughputfor containers with dedicated RU/s or theUpdate-AzCosmosDBSqlDatabasePerPartitionThroughputcommand for databases with shared RU/s to redistribute throughput across physical partitions. In shared throughput databases, the Ids of the physical partitions are represented by a GUID string.
+Update-AzCosmosDBSqlContainerPerPartitionThroughput
+Update-AzCosmosDBSqlDatabasePerPartitionThroughput
+$SourcePhysicalPartitionObjects =  @()
+$SourcePhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "0" -Throughput 1000
+$SourcePhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "2" -Throughput 1000
+
+$TargetPhysicalPartitionObjects =  @()
+$TargetPhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "1" -Throughput 4000
+
+// Container with dedicated RU/s
+Update-AzCosmosDBSqlContainerPerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -Name "<cosmos-container-name>" `
+    -SourcePhysicalPartitionThroughputObject $SourcePhysicalPartitionObjects `
+    -TargetPhysicalPartitionThroughputObject $TargetPhysicalPartitionObjects
+
+// Database with shared RU/s
+Update-AzCosmosDBSqlDatabasePerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -SourcePhysicalPartitionThroughputObject $SourcePhysicalPartitionObjects `
+    -TargetPhysicalPartitionThroughputObject $TargetPhysicalPartitionObjects
+$SourcePhysicalPartitionObjects =  @()
+$SourcePhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "0" -Throughput 1000
+$SourcePhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "2" -Throughput 1000
+
+$TargetPhysicalPartitionObjects =  @()
+$TargetPhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "1" -Throughput 4000
+
+// Container with dedicated RU/s
+Update-AzCosmosDBSqlContainerPerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -Name "<cosmos-container-name>" `
+    -SourcePhysicalPartitionThroughputObject $SourcePhysicalPartitionObjects `
+    -TargetPhysicalPartitionThroughputObject $TargetPhysicalPartitionObjects
+
+// Database with shared RU/s
+Update-AzCosmosDBSqlDatabasePerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -SourcePhysicalPartitionThroughputObject $SourcePhysicalPartitionObjects `
+    -TargetPhysicalPartitionThroughputObject $TargetPhysicalPartitionObjects
+Update the RU/s on each physical partition by usingaz cosmosdb sql container redistribute-partition-throughput.
+az cosmosdb sql container redistribute-partition-throughput
+az cosmosdb sql container redistribute-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-container-name>' \
+    --source-partition-info '<PartitionId1=Throughput PartitionId2=Throughput...>' \
+    --target-partition-info '<PartitionId3=Throughput PartitionId4=Throughput...>' \
+az cosmosdb sql container redistribute-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-container-name>' \
+    --source-partition-info '<PartitionId1=Throughput PartitionId2=Throughput...>' \
+    --target-partition-info '<PartitionId3=Throughput PartitionId4=Throughput...>' \
+Use theUpdate-AzCosmosDBMongoDBCollectionPerPartitionThroughputfor collections with dedicated RU/s or theUpdate-AzCosmosDBMongoDBDatabasePerPartitionThroughputcommand for databases with shared RU/s to redistribute throughput across physical partitions. In shared throughput databases, the Ids of the physical partitions are represented by a GUID string.
+Update-AzCosmosDBMongoDBCollectionPerPartitionThroughput
+Update-AzCosmosDBMongoDBDatabasePerPartitionThroughput
+$SourcePhysicalPartitionObjects =  @()
+$SourcePhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "0" -Throughput 1000
+$SourcePhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "2" -Throughput 1000
+
+$TargetPhysicalPartitionObjects =  @()
+$TargetPhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "1" -Throughput 4000
+
+// Collection with dedicated RU/s
+Update-AzCosmosDBMongoDBCollectionPerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -Name "<cosmos-collection-name>" `
+    -SourcePhysicalPartitionThroughputObject $SourcePhysicalPartitionObjects `
+    -TargetPhysicalPartitionThroughputObject $TargetPhysicalPartitionObjects
+
+// Database with shared RU/s
+Update-AzCosmosDBMongoDBDatabasePerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -SourcePhysicalPartitionThroughputObject $SourcePhysicalPartitionObjects `
+    -TargetPhysicalPartitionThroughputObject $TargetPhysicalPartitionObjects
+$SourcePhysicalPartitionObjects =  @()
+$SourcePhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "0" -Throughput 1000
+$SourcePhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "2" -Throughput 1000
+
+$TargetPhysicalPartitionObjects =  @()
+$TargetPhysicalPartitionObjects += New-AzCosmosDBPhysicalPartitionThroughputObject -Id "1" -Throughput 4000
+
+// Collection with dedicated RU/s
+Update-AzCosmosDBMongoDBCollectionPerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -Name "<cosmos-collection-name>" `
+    -SourcePhysicalPartitionThroughputObject $SourcePhysicalPartitionObjects `
+    -TargetPhysicalPartitionThroughputObject $TargetPhysicalPartitionObjects
+
+// Database with shared RU/s
+Update-AzCosmosDBMongoDBDatabasePerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -SourcePhysicalPartitionThroughputObject $SourcePhysicalPartitionObjects `
+    -TargetPhysicalPartitionThroughputObject $TargetPhysicalPartitionObjects
+Update the RU/s on each physical partition by usingaz cosmosdb mongodb collection redistribute-partition-throughput.
+az cosmosdb mongodb collection redistribute-partition-throughput
+az cosmosdb mongodb collection redistribute-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-collection-name>' \
+    --source-partition-info '<PartitionId1=Throughput PartitionId2=Throughput...>' \
+    --target-partition-info '<PartitionId3=Throughput PartitionId4=Throughput...>' \
+az cosmosdb mongodb collection redistribute-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-collection-name>' \
+    --source-partition-info '<PartitionId1=Throughput PartitionId2=Throughput...>' \
+    --target-partition-info '<PartitionId3=Throughput PartitionId4=Throughput...>' \
+After you've completed the redistribution, you can verify the change by viewing thePhysicalPartitionThroughputmetric in Azure Monitor. Split by the dimensionPhysicalPartitionIdto see how many RU/s you have per physical partition.
+If necessary, you can also reset the RU/s per physical partition so that the RU/s of your container are evenly distributed across all physical partitions.
+API for NoSQL
+API for NoSQL
+API for MongoDB
+API for MongoDB
+Use theUpdate-AzCosmosDBSqlContainerPerPartitionThroughputcommand for containers with dedicated RU/s or theUpdate-AzCosmosDBSqlDatabasePerPartitionThroughputcommand for databases with shared RU/s with parameter-EqualDistributionPolicyto distribute RU/s evenly across all physical partitions.
+Update-AzCosmosDBSqlContainerPerPartitionThroughput
+Update-AzCosmosDBSqlDatabasePerPartitionThroughput
+-EqualDistributionPolicy
+// Container with dedicated RU/s
+$resetPartitionsDedicatedRUContainer = Update-AzCosmosDBSqlContainerPerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -Name "<cosmos-container-name>" `
+                    -EqualDistributionPolicy
+
+// Database with dedicated RU/s
+$resetPartitionsSharedThroughputDatabase = Update-AzCosmosDBSqlDatabasePerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -EqualDistributionPolicy
+// Container with dedicated RU/s
+$resetPartitionsDedicatedRUContainer = Update-AzCosmosDBSqlContainerPerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -Name "<cosmos-container-name>" `
+                    -EqualDistributionPolicy
+
+// Database with dedicated RU/s
+$resetPartitionsSharedThroughputDatabase = Update-AzCosmosDBSqlDatabasePerPartitionThroughput `
+                    -ResourceGroupName "<resource-group-name>" `
+                    -AccountName "<cosmos-account-name>" `
+                    -DatabaseName "<cosmos-database-name>" `
+                    -EqualDistributionPolicy
+Update the RU/s on each physical partition by usingaz cosmosdb sql container redistribute-partition-throughputwith the parameter--evenly-distribute.
+az cosmosdb sql container redistribute-partition-throughput
+--evenly-distribute
+az cosmosdb sql container redistribute-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-container-name>' \
+    --evenly-distribute
+az cosmosdb sql container redistribute-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-container-name>' \
+    --evenly-distribute
+Use theUpdate-AzCosmosDBMongoDBCollectionPerPartitionThroughputcommand for collections with dedicated RU/s or theUpdate-AzCosmosDBMongoDBDatabasePerPartitionThroughputcommand for databases with shared RU/s with parameter-EqualDistributionPolicyto distribute RU/s evenly across all physical partitions.
+Update-AzCosmosDBMongoDBCollectionPerPartitionThroughput
+Update-AzCosmosDBMongoDBDatabasePerPartitionThroughput
+-EqualDistributionPolicy
+// Collection with dedicated RU/s
+Update-AzCosmosDBMongoDBCollectionPerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -Name "<cosmos-collection-name>" `
+    -EqualDistributionPolicy
+
+// Database with shared RU/s
+Update-AzCosmosDBMongoDBDatabasePerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -EqualDistributionPolicy
+// Collection with dedicated RU/s
+Update-AzCosmosDBMongoDBCollectionPerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -Name "<cosmos-collection-name>" `
+    -EqualDistributionPolicy
+
+// Database with shared RU/s
+Update-AzCosmosDBMongoDBDatabasePerPartitionThroughput `
+    -ResourceGroupName "<resource-group-name>" `
+    -AccountName "<cosmos-account-name>" `
+    -DatabaseName "<cosmos-database-name>" `
+    -EqualDistributionPolicy
+Update the RU/s on each physical partition by usingaz cosmosdb mongodb collection redistribute-partition-throughputwith the parameter--evenly-distribute.
+az cosmosdb mongodb collection redistribute-partition-throughput
+--evenly-distribute
+az cosmosdb mongodb collection redistribute-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-collection-name>' \
+    --evenly-distribute
+az cosmosdb mongodb collection redistribute-partition-throughput \
+    --resource-group '<resource-group-name>' \
+    --account-name '<cosmos-account-name>' \
+    --database-name '<cosmos-database-name>' \
+    --name '<cosmos-collection-name>' \
+    --evenly-distribute
+Step 4: Verify and monitor your RU/s consumption
+After you've completed the redistribution, you can verify the change by viewing thePhysicalPartitionThroughputmetric in Azure Monitor. Split by the dimensionPhysicalPartitionIdto see how many RU/s you have per physical partition.
+It's recommended to monitor your overall rate of 429 responses and RU/s consumption. For more information, reviewStep 1to validate you've achieved the performance you expect.
+After the changes, assuming your overall workload hasn't changed, you'll likely see that both the target and source physical partitions have higherNormalized RU consumptionthan previously. Higher normalized RU consumption is expected behavior. Essentially, you have allocated RU/s closer to what each partition actually needs to consume, so higher normalized RU consumption means that each partition is fully utilizing its allocated RU/s. You should also expect to see a lower overall rate of 429 exceptions, as the hot partitions now have more RU/s to serve requests.
+Limitations
+Preview eligibility criteria
+To use the preview, your Azure Cosmos DB account must meet all the following criteria:
+Your Azure Cosmos DB account is using API for NoSQL or API for MongoDB.If you're using API for MongoDB, the version must be >= 3.6.
+If you're using API for MongoDB, the version must be >= 3.6.
+Your Azure Cosmos DB account is using provisioned throughput (manual or autoscale). Distribution of throughput across partitions doesn't apply to serverless accounts.
+You don't need to sign up to use the preview. To use the feature, use the PowerShell or Azure CLI commands to redistribute throughput across your resources' physical partitions.
+Next steps
+Learn about how to use provisioned throughput with the following articles:
+Learn more aboutprovisioned throughput.
+Learn more aboutrequest units.
+Need to monitor for hot partitions? Seemonitoring request units.
+Want to learn the best practices? Seebest practices for scaling provisioned throughput.
+Feedback
+Was this page helpful?
+Additional resources

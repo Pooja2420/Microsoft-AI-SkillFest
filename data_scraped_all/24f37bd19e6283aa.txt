@@ -1,0 +1,831 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Manually deploy a Java application with Open Liberty or WebSphere Liberty on an Azure Kubernetes Service (AKS) cluster
+Article
+2024-11-04
+11 contributors
+In this article
+This article provides step-by-step manual guidance for running Open/WebSphere Liberty on Azure.
+Specifically, this article explains how to accomplish the following tasks:
+Run your Java, Java EE, Jakarta EE, or MicroProfile application on the Open Liberty or WebSphere Liberty runtime.
+Build the application Docker image withaz acr buildusing Liberty container images.
+az acr build
+Deploy the containerized application to an Azure Kubernetes Service (AKS) cluster using the Liberty Operator.
+The Liberty Operator simplifies the deployment and management of applications running on Kubernetes clusters. With the Open Liberty Operator or WebSphere Liberty Operator, you can also perform more advanced operations, such as gathering traces and dumps.
+For a more automated solution that accelerates your journey to AKS, seeDeploy a Java application with Open Liberty/WebSphere Liberty on an Azure Kubernetes Service (AKS) cluster.
+For more information on Open Liberty, seethe Open Liberty project page. For more information on IBM WebSphere Liberty, seethe WebSphere Liberty product page.
+This article is intended to help you quickly get to deployment. Before going to production, you should exploreTuning Liberty.
+If you're interested in providing feedback or working closely on your migration scenarios with the engineering team developing WebSphere on Azure solutions, fill out this shortsurvey on WebSphere migrationand include your contact information. The team of program managers, architects, and engineers will promptly get in touch with you to initiate close collaboration.
+Prerequisites
+An Azure subscription. If you don't have anAzure subscription, create afree accountbefore you begin.
+Prepare a local machine with Windows, macOS, or Linux installed.
+Install the Azure CLI2.61.0 or above to run Azure CLI commands.Sign in with Azure CLI by using theaz logincommand. To finish the authentication process, follow the steps displayed in your terminal. SeeSign into Azure with Azure CLIfor other sign-in options.When you're prompted, install the Azure CLI extension on first use. For more information about extensions, seeUse and manage extensions with the Azure CLI.Runaz versionto find the version and dependent libraries that are installed. To upgrade to the latest version, runaz upgrade.
+Sign in with Azure CLI by using theaz logincommand. To finish the authentication process, follow the steps displayed in your terminal. SeeSign into Azure with Azure CLIfor other sign-in options.
+az login
+When you're prompted, install the Azure CLI extension on first use. For more information about extensions, seeUse and manage extensions with the Azure CLI.
+Runaz versionto find the version and dependent libraries that are installed. To upgrade to the latest version, runaz upgrade.
+az version
+az upgrade
+Install a Java Standard Edition (SE) implementation, version 17 - for example,Eclipse Open J9.
+InstallMavenversion 3.5.0 or later.
+Ensure thatGitis installed.
+Make sure you're assigned either theOwnerrole or theContributorandUser Access Administratorroles in the subscription. You can verify the assignment by following the steps inList Azure role assignments using the Azure portal.
+Owner
+Contributor
+User Access Administrator
+Sign in to Azure
+If you didn't do so already, sign in to your Azure subscription by using theaz logincommand and follow the on-screen directions.
+az login
+Bash
+PowerShell
+az login
+az login
+az login
+az login
+Note
+You can run most Azure CLI commands in PowerShell the same as in Bash. The difference exists only when using variables. In the following sections, the difference is addressed in different tabs when needed.
+If you have multiple Azure tenants associated with your Azure credentials, you must specify which tenant you want to sign in to. You can do this with the--tenantoption. For example,az login --tenant contoso.onmicrosoft.com.
+--tenant
+az login --tenant contoso.onmicrosoft.com
+Create a resource group
+An Azure resource group is a logical group in which Azure resources are deployed and managed.
+Create a resource group calledjava-liberty-projectusing theaz group createcommand in theeastus2location. This resource group is used later for creating the Azure Container Registry instance and the AKS cluster.
+java-liberty-project
+az group create
+eastus2
+Bash
+PowerShell
+export RESOURCE_GROUP_NAME=java-liberty-project
+az group create --name $RESOURCE_GROUP_NAME --location eastus2
+export RESOURCE_GROUP_NAME=java-liberty-project
+az group create --name $RESOURCE_GROUP_NAME --location eastus2
+$Env:RESOURCE_GROUP_NAME = "java-liberty-project"
+az group create --name $Env:RESOURCE_GROUP_NAME --location eastus2
+$Env:RESOURCE_GROUP_NAME = "java-liberty-project"
+az group create --name $Env:RESOURCE_GROUP_NAME --location eastus2
+Create a Container Registry instance
+Use theaz acr createcommand to create the Container Registry instance. The following example creates a Container Registry instance namedyouruniqueacrname. Make sureyouruniqueacrnameis unique within Azure.
+az acr create
+youruniqueacrname
+youruniqueacrname
+Note
+This article uses the recommended passwordless authentication mechanism for Container Registry. It's still possible to use username and password withdocker loginafter usingaz acr credential showto obtain the username and password. Using username and password is less secure than passwordless authentication.
+docker login
+az acr credential show
+Bash
+PowerShell
+export REGISTRY_NAME=youruniqueacrname
+az acr create \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $REGISTRY_NAME \
+    --sku Basic
+export REGISTRY_NAME=youruniqueacrname
+az acr create \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $REGISTRY_NAME \
+    --sku Basic
+$Env:REGISTRY_NAME = "youruniqueacrname"
+az acr create --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:REGISTRY_NAME --sku Basic
+$Env:REGISTRY_NAME = "youruniqueacrname"
+az acr create --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:REGISTRY_NAME --sku Basic
+After a short time, you should see a JSON output that contains the following lines:
+"provisioningState": "Succeeded",
+"publicNetworkAccess": "Enabled",
+"resourceGroup": "java-liberty-project",
+"provisioningState": "Succeeded",
+"publicNetworkAccess": "Enabled",
+"resourceGroup": "java-liberty-project",
+Next, retrieve the login server for the Container Registry instance. You need this value when you deploy the application image to the AKS cluster later.
+Bash
+PowerShell
+export LOGIN_SERVER=$(az acr show \
+    --name $REGISTRY_NAME \
+    --query 'loginServer' \
+    --output tsv)
+export LOGIN_SERVER=$(az acr show \
+    --name $REGISTRY_NAME \
+    --query 'loginServer' \
+    --output tsv)
+$Env:LOGIN_SERVER = $(az acr show --name $Env:REGISTRY_NAME --query 'loginServer' --output tsv)
+$Env:LOGIN_SERVER = $(az acr show --name $Env:REGISTRY_NAME --query 'loginServer' --output tsv)
+Create an AKS cluster
+Use theaz aks createcommand to create an AKS cluster. The following example creates a cluster namedmyAKSClusterwith one node. This command takes several minutes to complete.
+az aks create
+myAKSCluster
+Bash
+PowerShell
+export CLUSTER_NAME=myAKSCluster
+az aks create \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $CLUSTER_NAME \
+    --node-count 1 \
+    --generate-ssh-keys \
+    --enable-managed-identity
+export CLUSTER_NAME=myAKSCluster
+az aks create \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $CLUSTER_NAME \
+    --node-count 1 \
+    --generate-ssh-keys \
+    --enable-managed-identity
+$Env:CLUSTER_NAME = "myAKSCluster"
+az aks create --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:CLUSTER_NAME --node-count 1 --generate-ssh-keys --enable-managed-identity
+$Env:CLUSTER_NAME = "myAKSCluster"
+az aks create --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:CLUSTER_NAME --node-count 1 --generate-ssh-keys --enable-managed-identity
+After a few minutes, the command completes and returns JSON-formatted information about the cluster, including the following output:
+"nodeResourceGroup": "MC_java-liberty-project_myAKSCluster_eastus2",
+  "privateFqdn": null,
+  "provisioningState": "Succeeded",
+  "resourceGroup": "java-liberty-project",
+"nodeResourceGroup": "MC_java-liberty-project_myAKSCluster_eastus2",
+  "privateFqdn": null,
+  "provisioningState": "Succeeded",
+  "resourceGroup": "java-liberty-project",
+Attach the Container Registry instance to the AKS cluster
+Run theaz aks updatecommand to attach the Container Registry instance to the AKS cluster so that the AKS cluster is authenticated to pull images from the Container Registry instance, as shown in the following example:
+az aks update
+Bash
+PowerShell
+az aks update \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $CLUSTER_NAME \
+    --attach-acr $REGISTRY_NAME
+az aks update \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $CLUSTER_NAME \
+    --attach-acr $REGISTRY_NAME
+az aks update --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:CLUSTER_NAME --attach-acr $Env:REGISTRY_NAME
+az aks update --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:CLUSTER_NAME --attach-acr $Env:REGISTRY_NAME
+Connect to the AKS cluster
+To manage a Kubernetes cluster, you usekubectl, the Kubernetes command-line client. To installkubectllocally, use theaz aks install-clicommand, as shown in the following example:
+kubectl
+kubectl
+az aks install-cli
+Bash
+PowerShell
+az aks install-cli
+az aks install-cli
+az aks install-cli
+az aks install-cli
+To configurekubectlto connect to your Kubernetes cluster, use theaz aks get-credentialscommand. This command downloads credentials and configures the Kubernetes CLI to use them.
+kubectl
+az aks get-credentials
+Bash
+PowerShell
+az aks get-credentials \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $CLUSTER_NAME \
+    --overwrite-existing \
+    --admin
+az aks get-credentials \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $CLUSTER_NAME \
+    --overwrite-existing \
+    --admin
+az aks get-credentials --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:CLUSTER_NAME --overwrite-existing --admin
+az aks get-credentials --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:CLUSTER_NAME --overwrite-existing --admin
+Note
+The above command uses the default location for theKubernetes configuration file, which is~/.kube/config. You can specify a different location for your Kubernetes configuration file using--file.
+--file
+To verify the connection to your cluster, use thekubectl getcommand to return a list of the cluster nodes.
+kubectl get
+Bash
+PowerShell
+kubectl get nodes
+kubectl get nodes
+kubectl get nodes
+kubectl get nodes
+The following example output shows the single node created in the previous steps. Make sure that the status of the node isReady:
+NAME                                STATUS   ROLES   AGE     VERSION
+aks-nodepool1-xxxxxxxx-yyyyyyyyyy   Ready    <none>  76s     v1.29.9
+NAME                                STATUS   ROLES   AGE     VERSION
+aks-nodepool1-xxxxxxxx-yyyyyyyyyy   Ready    <none>  76s     v1.29.9
+Create an Azure SQL Database
+In this section, you create an Azure SQL Database single database for use with your app.
+Bash
+PowerShell
+First, set database-related environment variables. Replace<your-unique-sql-server-name>with a unique name for your Azure SQL Database server.
+<your-unique-sql-server-name>
+export SQL_SERVER_NAME=<your-unique-sql-server-name>
+export DB_NAME=demodb
+export SQL_SERVER_NAME=<your-unique-sql-server-name>
+export DB_NAME=demodb
+Run the following command in your terminal to create a single database in Azure SQL Database and set the current signed-in user as a Microsoft Entra admin. For more information, seeQuickstart: Create a single database - Azure SQL Database.
+export ENTRA_ADMIN_NAME=$(az ad signed-in-user show --query userPrincipalName --output tsv)
+
+az sql server create \
+    --name $SQL_SERVER_NAME \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --enable-ad-only-auth \
+    --external-admin-principal-type User \
+    --external-admin-name $ENTRA_ADMIN_NAME \
+    --external-admin-sid $(az ad signed-in-user show --query id --output tsv)
+az sql db create \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --server $SQL_SERVER_NAME \
+    --name $DB_NAME \
+    --edition GeneralPurpose \
+    --compute-model Serverless \
+    --family Gen5 \
+    --capacity 2
+export ENTRA_ADMIN_NAME=$(az ad signed-in-user show --query userPrincipalName --output tsv)
+
+az sql server create \
+    --name $SQL_SERVER_NAME \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --enable-ad-only-auth \
+    --external-admin-principal-type User \
+    --external-admin-name $ENTRA_ADMIN_NAME \
+    --external-admin-sid $(az ad signed-in-user show --query id --output tsv)
+az sql db create \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --server $SQL_SERVER_NAME \
+    --name $DB_NAME \
+    --edition GeneralPurpose \
+    --compute-model Serverless \
+    --family Gen5 \
+    --capacity 2
+Then, add the local IP address to the Azure SQL Database server firewall rules to allow your local machine to connect to the database for local testing later.
+export AZ_LOCAL_IP_ADDRESS=$(curl -s https://whatismyip.akamai.com)
+az sql server firewall-rule create \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --server $SQL_SERVER_NAME \
+    --name AllowLocalIP \
+    --start-ip-address $AZ_LOCAL_IP_ADDRESS \
+    --end-ip-address $AZ_LOCAL_IP_ADDRESS
+export AZ_LOCAL_IP_ADDRESS=$(curl -s https://whatismyip.akamai.com)
+az sql server firewall-rule create \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --server $SQL_SERVER_NAME \
+    --name AllowLocalIP \
+    --start-ip-address $AZ_LOCAL_IP_ADDRESS \
+    --end-ip-address $AZ_LOCAL_IP_ADDRESS
+First, set database-related environment variables. Replace<your-unique-sql-server-name>with a unique name for your Azure SQL Database server.
+<your-unique-sql-server-name>
+$Env:SQL_SERVER_NAME = "<your-unique-sql-server-name>"
+$Env:DB_NAME = "demodb"
+$Env:SQL_SERVER_NAME = "<your-unique-sql-server-name>"
+$Env:DB_NAME = "demodb"
+Run the following command in your terminal to create a single database in Azure SQL Database and set the current signed-in user as Microsoft Entra admin. For more information, seeQuickstart: Create a single database - Azure SQL Database.
+$Env:ENTRA_ADMIN_NAME = $(az ad signed-in-user show --query userPrincipalName --output tsv)
+
+az sql server create --name $Env:SQL_SERVER_NAME --resource-group $Env:RESOURCE_GROUP_NAME --enable-ad-only-auth --external-admin-principal-type User --external-admin-name $Env:ENTRA_ADMIN_NAME --external-admin-sid $(az ad signed-in-user show --query id --output tsv)
+az sql db create --resource-group $Env:RESOURCE_GROUP_NAME --server $Env:SQL_SERVER_NAME --name $Env:DB_NAME --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 2
+$Env:ENTRA_ADMIN_NAME = $(az ad signed-in-user show --query userPrincipalName --output tsv)
+
+az sql server create --name $Env:SQL_SERVER_NAME --resource-group $Env:RESOURCE_GROUP_NAME --enable-ad-only-auth --external-admin-principal-type User --external-admin-name $Env:ENTRA_ADMIN_NAME --external-admin-sid $(az ad signed-in-user show --query id --output tsv)
+az sql db create --resource-group $Env:RESOURCE_GROUP_NAME --server $Env:SQL_SERVER_NAME --name $Env:DB_NAME --edition GeneralPurpose --compute-model Serverless --family Gen5 --capacity 2
+Then, add the local IP address to the Azure SQL Database server firewall rules to allow your local machine to connect to the database for local testing later.
+$Env:AZ_LOCAL_IP_ADDRESS = (Invoke-WebRequest https://whatismyip.akamai.com).Content
+az sql server firewall-rule create --resource-group $Env:RESOURCE_GROUP_NAME --server $Env:SQL_SERVER_NAME --name AllowLocalIP --start-ip-address $Env:AZ_LOCAL_IP_ADDRESS --end-ip-address $Env:AZ_LOCAL_IP_ADDRESS
+$Env:AZ_LOCAL_IP_ADDRESS = (Invoke-WebRequest https://whatismyip.akamai.com).Content
+az sql server firewall-rule create --resource-group $Env:RESOURCE_GROUP_NAME --server $Env:SQL_SERVER_NAME --name AllowLocalIP --start-ip-address $Env:AZ_LOCAL_IP_ADDRESS --end-ip-address $Env:AZ_LOCAL_IP_ADDRESS
+Note
+You create an Azure SQL server with SQL authentication disabled for security considerations. Only Microsoft Entra ID is used to authenticate to the server. If you need to enable SQL authentication, seeaz sql server createfor more information.
+az sql server create
+Create a service connection in AKS with Service Connector
+Run the following commands to create a connection between the AKS cluster and the SQL database using Microsoft Entra Workload ID with Service Connector. For more information, seeCreate a service connection in AKS with Service Connector (preview).
+Bash
+PowerShell
+# Register the Service Connector and Kubernetes Configuration resource providers
+az provider register --namespace Microsoft.ServiceLinker --wait
+az provider register --namespace Microsoft.KubernetesConfiguration --wait
+
+# Install the Service Connector passwordless extension
+az extension add --name serviceconnector-passwordless --upgrade --allow-preview true
+
+# Retrieve the AKS cluster and Azure SQL Server resource IDs
+export AKS_CLUSTER_RESOURCE_ID=$(az aks show \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $CLUSTER_NAME \
+    --query id \
+    --output tsv)
+export AZURE_SQL_SERVER_RESOURCE_ID=$(az sql server show \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $SQL_SERVER_NAME \
+    --query id \
+    --output tsv)
+
+# Create a user-assigned managed identity used for workload identity
+export USER_ASSIGNED_IDENTITY_NAME=workload-identity-uami
+az identity create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name ${USER_ASSIGNED_IDENTITY_NAME}
+
+# Retrieve the user-assigned managed identity resource ID
+export UAMI_RESOURCE_ID=$(az identity show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name ${USER_ASSIGNED_IDENTITY_NAME} \
+    --query id \
+    --output tsv)
+
+# Create a service connection between your AKS cluster and your SQL database using Microsoft Entra Workload ID
+az aks connection create sql \
+    --connection akssqlconn \
+    --client-type java \
+    --source-id $AKS_CLUSTER_RESOURCE_ID \
+    --target-id $AZURE_SQL_SERVER_RESOURCE_ID/databases/$DB_NAME \
+    --workload-identity $UAMI_RESOURCE_ID
+# Register the Service Connector and Kubernetes Configuration resource providers
+az provider register --namespace Microsoft.ServiceLinker --wait
+az provider register --namespace Microsoft.KubernetesConfiguration --wait
+
+# Install the Service Connector passwordless extension
+az extension add --name serviceconnector-passwordless --upgrade --allow-preview true
+
+# Retrieve the AKS cluster and Azure SQL Server resource IDs
+export AKS_CLUSTER_RESOURCE_ID=$(az aks show \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $CLUSTER_NAME \
+    --query id \
+    --output tsv)
+export AZURE_SQL_SERVER_RESOURCE_ID=$(az sql server show \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --name $SQL_SERVER_NAME \
+    --query id \
+    --output tsv)
+
+# Create a user-assigned managed identity used for workload identity
+export USER_ASSIGNED_IDENTITY_NAME=workload-identity-uami
+az identity create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name ${USER_ASSIGNED_IDENTITY_NAME}
+
+# Retrieve the user-assigned managed identity resource ID
+export UAMI_RESOURCE_ID=$(az identity show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name ${USER_ASSIGNED_IDENTITY_NAME} \
+    --query id \
+    --output tsv)
+
+# Create a service connection between your AKS cluster and your SQL database using Microsoft Entra Workload ID
+az aks connection create sql \
+    --connection akssqlconn \
+    --client-type java \
+    --source-id $AKS_CLUSTER_RESOURCE_ID \
+    --target-id $AZURE_SQL_SERVER_RESOURCE_ID/databases/$DB_NAME \
+    --workload-identity $UAMI_RESOURCE_ID
+# Register the Service Connector and Kubernetes Configuration resource providers
+az provider register --namespace Microsoft.ServiceLinker --wait
+az provider register --namespace Microsoft.KubernetesConfiguration --wait
+
+# Install the Service Connector passwordless extension
+az extension add --name serviceconnector-passwordless --upgrade --allow-preview true
+
+# Retrieve the AKS cluster and Azure SQL Server resource IDs
+$Env:AKS_CLUSTER_RESOURCE_ID = $(az aks show --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:CLUSTER_NAME --query id --output tsv)
+$Env:AZURE_SQL_SERVER_RESOURCE_ID = $(az sql server show --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:SQL_SERVER_NAME --query id --output tsv)
+
+# Create a user-assigned managed identity used for workload identity
+$Env:USER_ASSIGNED_IDENTITY_NAME = "workload-identity-uami"
+az identity create --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:USER_ASSIGNED_IDENTITY_NAME
+
+# Retrieve the user-assigned managed identity resource ID
+$Env:UAMI_RESOURCE_ID = $(az identity show --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:USER_ASSIGNED_IDENTITY_NAME --query id --output tsv)
+
+# Create a service connection between your AKS cluster and your SQL database using Microsoft Entra Workload ID
+az aks connection create sql --connection akssqlconn --client-type java --source-id $Env:AKS_CLUSTER_RESOURCE_ID --target-id $Env:AZURE_SQL_SERVER_RESOURCE_ID/databases/$Env:DB_NAME --workload-identity $Env:UAMI_RESOURCE_ID
+# Register the Service Connector and Kubernetes Configuration resource providers
+az provider register --namespace Microsoft.ServiceLinker --wait
+az provider register --namespace Microsoft.KubernetesConfiguration --wait
+
+# Install the Service Connector passwordless extension
+az extension add --name serviceconnector-passwordless --upgrade --allow-preview true
+
+# Retrieve the AKS cluster and Azure SQL Server resource IDs
+$Env:AKS_CLUSTER_RESOURCE_ID = $(az aks show --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:CLUSTER_NAME --query id --output tsv)
+$Env:AZURE_SQL_SERVER_RESOURCE_ID = $(az sql server show --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:SQL_SERVER_NAME --query id --output tsv)
+
+# Create a user-assigned managed identity used for workload identity
+$Env:USER_ASSIGNED_IDENTITY_NAME = "workload-identity-uami"
+az identity create --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:USER_ASSIGNED_IDENTITY_NAME
+
+# Retrieve the user-assigned managed identity resource ID
+$Env:UAMI_RESOURCE_ID = $(az identity show --resource-group $Env:RESOURCE_GROUP_NAME --name $Env:USER_ASSIGNED_IDENTITY_NAME --query id --output tsv)
+
+# Create a service connection between your AKS cluster and your SQL database using Microsoft Entra Workload ID
+az aks connection create sql --connection akssqlconn --client-type java --source-id $Env:AKS_CLUSTER_RESOURCE_ID --target-id $Env:AZURE_SQL_SERVER_RESOURCE_ID/databases/$Env:DB_NAME --workload-identity $Env:UAMI_RESOURCE_ID
+Note
+It's recommended to use Microsoft Entra Workload ID for secure access to your Azure SQL Database without using SQL authentication. If you need to use SQL authentication, ignore the above steps in this section and use the username and password to connect to the Azure SQL Database.
+Get service account and secret created by Service Connector
+To authenticate to the Azure SQL Database, you need to get the service account and secret created by Service Connector. Follow the sectionUpdate your container. Take the optionDirectly create a deployment using the YAML sample code snippet providedand execute the following steps:
+From the highlighted sections in the sample Kubernetes deployment YAML, copy theserviceAccountNameandsecretRef.namevalues, as shown in the following example:serviceAccountName: <service-account-name>
+containers:
+- name: raw-linux
+   envFrom:
+      - secretRef:
+         name: <secret-name>
+From the highlighted sections in the sample Kubernetes deployment YAML, copy theserviceAccountNameandsecretRef.namevalues, as shown in the following example:
+serviceAccountName
+secretRef.name
+serviceAccountName: <service-account-name>
+containers:
+- name: raw-linux
+   envFrom:
+      - secretRef:
+         name: <secret-name>
+serviceAccountName: <service-account-name>
+containers:
+- name: raw-linux
+   envFrom:
+      - secretRef:
+         name: <secret-name>
+Replace<service-account-name>and<secret-name>with the values you copied in the previous step to define the following environment variables:BashPowerShellexport SERVICE_ACCOUNT_NAME=<service-account-name>
+export SECRET_NAME=<secret-name>$Env:SERVICE_ACCOUNT_NAME = "<service-account-name>"
+$Env:SECRET_NAME = "<secret-name>"These values are used in the next section to deploy the Liberty application to the AKS cluster.
+Replace<service-account-name>and<secret-name>with the values you copied in the previous step to define the following environment variables:
+<service-account-name>
+<secret-name>
+Bash
+PowerShell
+export SERVICE_ACCOUNT_NAME=<service-account-name>
+export SECRET_NAME=<secret-name>
+export SERVICE_ACCOUNT_NAME=<service-account-name>
+export SECRET_NAME=<secret-name>
+$Env:SERVICE_ACCOUNT_NAME = "<service-account-name>"
+$Env:SECRET_NAME = "<secret-name>"
+$Env:SERVICE_ACCOUNT_NAME = "<service-account-name>"
+$Env:SECRET_NAME = "<secret-name>"
+These values are used in the next section to deploy the Liberty application to the AKS cluster.
+Note
+The secret created by Service Connector contains theAZURE_SQL_CONNECTIONSTRING, which is a password free connection string to the Azure SQL Database. See sample value fromUser-assigned managed identity authenticationfor more information.
+AZURE_SQL_CONNECTIONSTRING
+Install Open Liberty Operator
+In this section, you install the Open Liberty Operator on the AKS cluster to host the Liberty application.
+Install theOpen Liberty Operatorby running the following commands:
+Bash
+PowerShell
+# Install cert-manager Operator
+CERT_MANAGER_VERSION=v1.11.2
+kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml
+
+# Install Open Liberty Operator
+export OPERATOR_VERSION=1.4.0
+mkdir -p overlays/watch-all-namespaces
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/overlays/watch-all-namespaces/olo-all-namespaces.yaml -q -P ./overlays/watch-all-namespaces
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/overlays/watch-all-namespaces/cluster-roles.yaml -q -P ./overlays/watch-all-namespaces
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/overlays/watch-all-namespaces/kustomization.yaml -q -P ./overlays/watch-all-namespaces
+mkdir base
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/base/kustomization.yaml -q -P ./base
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/base/open-liberty-crd.yaml -q -P ./base
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/base/open-liberty-operator.yaml -q -P ./base
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/base/open-liberty-roles.yaml -q -P ./base
+kubectl create namespace open-liberty
+kubectl apply --server-side -k overlays/watch-all-namespaces
+# Install cert-manager Operator
+CERT_MANAGER_VERSION=v1.11.2
+kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml
+
+# Install Open Liberty Operator
+export OPERATOR_VERSION=1.4.0
+mkdir -p overlays/watch-all-namespaces
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/overlays/watch-all-namespaces/olo-all-namespaces.yaml -q -P ./overlays/watch-all-namespaces
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/overlays/watch-all-namespaces/cluster-roles.yaml -q -P ./overlays/watch-all-namespaces
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/overlays/watch-all-namespaces/kustomization.yaml -q -P ./overlays/watch-all-namespaces
+mkdir base
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/base/kustomization.yaml -q -P ./base
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/base/open-liberty-crd.yaml -q -P ./base
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/base/open-liberty-operator.yaml -q -P ./base
+wget https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/${OPERATOR_VERSION}/kustomize/base/open-liberty-roles.yaml -q -P ./base
+kubectl create namespace open-liberty
+kubectl apply --server-side -k overlays/watch-all-namespaces
+# Install cert-manager Operator
+$Env:CERT_MANAGER_VERSION = "v1.11.2"
+kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/$Env:CERT_MANAGER_VERSION/cert-manager.yaml
+
+# Install Open Liberty Operator
+$Env:OPERATOR_VERSION = "1.4.0"
+mkdir -p overlays/watch-all-namespaces
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/overlays/watch-all-namespaces/olo-all-namespaces.yaml -OutFile ./overlays/watch-all-namespaces/olo-all-namespaces.yaml
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/overlays/watch-all-namespaces/cluster-roles.yaml -OutFile ./overlays/watch-all-namespaces/cluster-roles.yaml
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/overlays/watch-all-namespaces/kustomization.yaml -OutFile ./overlays/watch-all-namespaces/kustomization.yaml
+mkdir base
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/base/kustomization.yaml -OutFile ./base/kustomization.yaml
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/base/open-liberty-crd.yaml -OutFile ./base/open-liberty-crd.yaml
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/base/open-liberty-operator.yaml -OutFile ./base/open-liberty-operator.yaml
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/base/open-liberty-roles.yaml -OutFile ./base/open-liberty-roles.yaml
+kubectl create namespace open-liberty
+kubectl apply --server-side -k overlays/watch-all-namespaces
+# Install cert-manager Operator
+$Env:CERT_MANAGER_VERSION = "v1.11.2"
+kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/$Env:CERT_MANAGER_VERSION/cert-manager.yaml
+
+# Install Open Liberty Operator
+$Env:OPERATOR_VERSION = "1.4.0"
+mkdir -p overlays/watch-all-namespaces
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/overlays/watch-all-namespaces/olo-all-namespaces.yaml -OutFile ./overlays/watch-all-namespaces/olo-all-namespaces.yaml
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/overlays/watch-all-namespaces/cluster-roles.yaml -OutFile ./overlays/watch-all-namespaces/cluster-roles.yaml
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/overlays/watch-all-namespaces/kustomization.yaml -OutFile ./overlays/watch-all-namespaces/kustomization.yaml
+mkdir base
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/base/kustomization.yaml -OutFile ./base/kustomization.yaml
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/base/open-liberty-crd.yaml -OutFile ./base/open-liberty-crd.yaml
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/base/open-liberty-operator.yaml -OutFile ./base/open-liberty-operator.yaml
+Invoke-WebRequest https://raw.githubusercontent.com/OpenLiberty/open-liberty-operator/main/deploy/releases/$Env:OPERATOR_VERSION/kustomize/base/open-liberty-roles.yaml -OutFile ./base/open-liberty-roles.yaml
+kubectl create namespace open-liberty
+kubectl apply --server-side -k overlays/watch-all-namespaces
+Configure and build the application image
+To deploy and run your Liberty application on the AKS cluster, containerize your application as a Docker image usingOpen Liberty container imagesorWebSphere Liberty container images.
+Follow the steps in this section to deploy the sample application on the Liberty runtime. These steps use Maven.
+Check out the application
+Clone the sample code for this guide. The sample is onGitHub. There are a few samples in the repository. This article uses thejava-appsample. The important files are shown next.
+java-app
+Bash
+PowerShell
+git clone https://github.com/Azure-Samples/open-liberty-on-aks.git
+cd open-liberty-on-aks
+export BASE_DIR=$PWD
+git checkout 20241029
+git clone https://github.com/Azure-Samples/open-liberty-on-aks.git
+cd open-liberty-on-aks
+export BASE_DIR=$PWD
+git checkout 20241029
+git clone https://github.com/Azure-Samples/open-liberty-on-aks.git
+cd open-liberty-on-aks
+$Env:BASE_DIR = $PWD
+git checkout 20241029
+git clone https://github.com/Azure-Samples/open-liberty-on-aks.git
+cd open-liberty-on-aks
+$Env:BASE_DIR = $PWD
+git checkout 20241029
+If you see a message about being indetached HEADstate, this message is safe to ignore. It just means you checked out a tag.
+detached HEAD
+java-app
+ââ src/main/
+â  ââ aks/
+â  â  ââ openlibertyapplication-passwordless-db.yaml
+â  ââ docker/
+â  â  ââ Dockerfile
+â  â  ââ Dockerfile-wlp
+â  ââ liberty/config/
+â  â  ââ server.xml
+â  ââ java/
+â  ââ resources/
+â  ââ webapp/
+ââ pom.xml
+ââ pom-azure-identity.xml
+java-app
+ââ src/main/
+â  ââ aks/
+â  â  ââ openlibertyapplication-passwordless-db.yaml
+â  ââ docker/
+â  â  ââ Dockerfile
+â  â  ââ Dockerfile-wlp
+â  ââ liberty/config/
+â  â  ââ server.xml
+â  ââ java/
+â  ââ resources/
+â  ââ webapp/
+ââ pom.xml
+ââ pom-azure-identity.xml
+The directoriesjava,resources, andwebappcontain the source code of the sample application. The code declares and uses a data source namedjdbc/JavaEECafeDB.
+jdbc/JavaEECafeDB
+In theaksdirectory, the fileopenlibertyapplication-passwordless-db.yamlis used to deploy the application image. In thedockerdirectory, there are two files to create the application image with either Open Liberty or WebSphere Liberty.
+In directoryliberty/config, theserver.xmlfile is used to configure the database connection for the Open Liberty and WebSphere Liberty cluster. It defines a variableazure.sql.connectionstringthat is used to connect to the Azure SQL Database.
+azure.sql.connectionstring
+Thepom.xmlfile is the Maven project object model (POM) file that contains the configuration information for the project. Thepom-azure-identity.xmlfile declaresazure-identitydependency, which is used to authenticate to Azure services using Microsoft Entra ID.
+azure-identity
+Note
+This sample uses theazure-identitylibrary to authenticate to Azure SQL Database using Microsoft Entra authentication, which is recommended for security considerations. If you need to use SQL authentication in your Liberty application, seeRelational database connections with JDBCfor more information.
+azure-identity
+Build the project
+Now that you gathered the necessary properties, you can build the application. The POM file for the project reads many variables from the environment. As part of the Maven build, these variables are used to populate values in the YAML files located insrc/main/aks. You can do something similar for your application outside Maven if you prefer.
+Bash
+PowerShell
+cd $BASE_DIR/java-app
+
+# The following variables are used for deployment file generation into target/
+export LOGIN_SERVER=${LOGIN_SERVER}
+export SC_SERVICE_ACCOUNT_NAME=${SERVICE_ACCOUNT_NAME}
+export SC_SECRET_NAME=${SECRET_NAME}
+
+mvn clean install
+mvn dependency:copy-dependencies -f pom-azure-identity.xml -DoutputDirectory=target/liberty/wlp/usr/shared/resources
+cd $BASE_DIR/java-app
+
+# The following variables are used for deployment file generation into target/
+export LOGIN_SERVER=${LOGIN_SERVER}
+export SC_SERVICE_ACCOUNT_NAME=${SERVICE_ACCOUNT_NAME}
+export SC_SECRET_NAME=${SECRET_NAME}
+
+mvn clean install
+mvn dependency:copy-dependencies -f pom-azure-identity.xml -DoutputDirectory=target/liberty/wlp/usr/shared/resources
+cd $Env:BASE_DIR/java-app
+
+# The following variables are used for deployment file generation into target/
+$Env:LOGIN_SERVER = $Env:LOGIN_SERVER
+$Env:SC_SERVICE_ACCOUNT_NAME = $Env:SERVICE_ACCOUNT_NAME
+$Env:SC_SECRET_NAME = $Env:SECRET_NAME
+
+mvn clean install
+mvn dependency:copy-dependencies -f pom-azure-identity.xml -DoutputDirectory=target/liberty/wlp/usr/shared/resources
+cd $Env:BASE_DIR/java-app
+
+# The following variables are used for deployment file generation into target/
+$Env:LOGIN_SERVER = $Env:LOGIN_SERVER
+$Env:SC_SERVICE_ACCOUNT_NAME = $Env:SERVICE_ACCOUNT_NAME
+$Env:SC_SECRET_NAME = $Env:SECRET_NAME
+
+mvn clean install
+mvn dependency:copy-dependencies -f pom-azure-identity.xml -DoutputDirectory=target/liberty/wlp/usr/shared/resources
+Test your project locally
+You can now run and test the project locally before deploying to Azure. For convenience, use theliberty-maven-plugin. To learn more about theliberty-maven-plugin, seeBuilding a web application with Maven. For your application, you can do something similar using any other mechanism such as your local IDE. You can also consider using theliberty:devcoption intended for development with containers. You can read more aboutliberty:devcin theLiberty docs.
+liberty-maven-plugin
+liberty-maven-plugin
+liberty:devc
+liberty:devc
+Note
+If you selected a "serverless" database deployment, verify that your SQL database has not entered pause mode. One way to do this is to log in to the database query editor as described inQuickstart: Use the Azure portal query editor (preview) to query Azure SQL Database.
+Start the application usingliberty:run.BashPowerShellcd $BASE_DIR/java-app
+
+# The value of environment variable AZURE_SQL_CONNECTIONSTRING is read by configuration variable `azure.sql.connectionstring` in server.xml
+export AZURE_SQL_CONNECTIONSTRING="jdbc:sqlserver://$SQL_SERVER_NAME.database.windows.net:1433;databaseName=$DB_NAME;authentication=ActiveDirectoryDefault"
+mvn liberty:runcd $Env:BASE_DIR/java-app
+
+# The value of environment variable AZURE_SQL_CONNECTIONSTRING is read by configuration variable `azure.sql.connectionstring` in server.xml
+$Env:AZURE_SQL_CONNECTIONSTRING = "jdbc:sqlserver://$Env:SQL_SERVER_NAME.database.windows.net:1433;databaseName=$Env:DB_NAME;authentication=ActiveDirectoryDefault"
+mvn liberty:run
+Start the application usingliberty:run.
+liberty:run
+Bash
+PowerShell
+cd $BASE_DIR/java-app
+
+# The value of environment variable AZURE_SQL_CONNECTIONSTRING is read by configuration variable `azure.sql.connectionstring` in server.xml
+export AZURE_SQL_CONNECTIONSTRING="jdbc:sqlserver://$SQL_SERVER_NAME.database.windows.net:1433;databaseName=$DB_NAME;authentication=ActiveDirectoryDefault"
+mvn liberty:run
+cd $BASE_DIR/java-app
+
+# The value of environment variable AZURE_SQL_CONNECTIONSTRING is read by configuration variable `azure.sql.connectionstring` in server.xml
+export AZURE_SQL_CONNECTIONSTRING="jdbc:sqlserver://$SQL_SERVER_NAME.database.windows.net:1433;databaseName=$DB_NAME;authentication=ActiveDirectoryDefault"
+mvn liberty:run
+cd $Env:BASE_DIR/java-app
+
+# The value of environment variable AZURE_SQL_CONNECTIONSTRING is read by configuration variable `azure.sql.connectionstring` in server.xml
+$Env:AZURE_SQL_CONNECTIONSTRING = "jdbc:sqlserver://$Env:SQL_SERVER_NAME.database.windows.net:1433;databaseName=$Env:DB_NAME;authentication=ActiveDirectoryDefault"
+mvn liberty:run
+cd $Env:BASE_DIR/java-app
+
+# The value of environment variable AZURE_SQL_CONNECTIONSTRING is read by configuration variable `azure.sql.connectionstring` in server.xml
+$Env:AZURE_SQL_CONNECTIONSTRING = "jdbc:sqlserver://$Env:SQL_SERVER_NAME.database.windows.net:1433;databaseName=$Env:DB_NAME;authentication=ActiveDirectoryDefault"
+mvn liberty:run
+Verify the application works as expected. You should see a message similar to[INFO] [AUDIT] CWWKZ0003I: The application javaee-cafe updated in 1.930 seconds.in the command output if successful. Go tohttp://localhost:9080/in your browser to verify the application is accessible and all functions are working.
+Verify the application works as expected. You should see a message similar to[INFO] [AUDIT] CWWKZ0003I: The application javaee-cafe updated in 1.930 seconds.in the command output if successful. Go tohttp://localhost:9080/in your browser to verify the application is accessible and all functions are working.
+[INFO] [AUDIT] CWWKZ0003I: The application javaee-cafe updated in 1.930 seconds.
+http://localhost:9080/
+PressCtrl+Cto stop. SelectYif you're asked to terminate the batch job.
+PressCtrl+Cto stop. SelectYif you're asked to terminate the batch job.
+When you're finished, delete the firewall rule that allows your local IP address to access the Azure SQL Database by using the following command:
+Bash
+PowerShell
+az sql server firewall-rule delete \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --server $SQL_SERVER_NAME \
+    --name AllowLocalIP
+az sql server firewall-rule delete \
+    --resource-group $RESOURCE_GROUP_NAME \
+    --server $SQL_SERVER_NAME \
+    --name AllowLocalIP
+az sql server firewall-rule delete --resource-group $Env:RESOURCE_GROUP_NAME --server $Env:SQL_SERVER_NAME --name AllowLocalIP
+az sql server firewall-rule delete --resource-group $Env:RESOURCE_GROUP_NAME --server $Env:SQL_SERVER_NAME --name AllowLocalIP
+Build the image for AKS deployment
+You can now run theaz acr buildcommand to build the image, as shown in the following example:
+az acr build
+Bash
+PowerShell
+cd $BASE_DIR/java-app/target
+
+az acr build \
+    --registry ${REGISTRY_NAME} \
+    --image javaee-cafe:v1 \
+    .
+cd $BASE_DIR/java-app/target
+
+az acr build \
+    --registry ${REGISTRY_NAME} \
+    --image javaee-cafe:v1 \
+    .
+cd $Env:BASE_DIR/java-app/target
+
+az acr build --registry $Env:REGISTRY_NAME --image javaee-cafe:v1 .
+cd $Env:BASE_DIR/java-app/target
+
+az acr build --registry $Env:REGISTRY_NAME --image javaee-cafe:v1 .
+Theaz acr buildcommand uploads the artifacts specified in the Dockerfile to the Container Registry instance, builds the image, and stores it in the Container Registry instance.
+az acr build
+Deploy the application to the AKS cluster
+Use the following steps to deploy the Liberty application on the AKS cluster:
+Apply the deployment file by running the following commands:BashPowerShellcd $BASE_DIR/java-app/target
+
+# Apply deployment file
+kubectl apply -f openlibertyapplication-passwordless-db.yamlcd $Env:BASE_DIR/java-app/target
+
+# Apply deployment file
+kubectl apply -f openlibertyapplication-passwordless-db.yaml
+Apply the deployment file by running the following commands:
+Bash
+PowerShell
+cd $BASE_DIR/java-app/target
+
+# Apply deployment file
+kubectl apply -f openlibertyapplication-passwordless-db.yaml
+cd $BASE_DIR/java-app/target
+
+# Apply deployment file
+kubectl apply -f openlibertyapplication-passwordless-db.yaml
+cd $Env:BASE_DIR/java-app/target
+
+# Apply deployment file
+kubectl apply -f openlibertyapplication-passwordless-db.yaml
+cd $Env:BASE_DIR/java-app/target
+
+# Apply deployment file
+kubectl apply -f openlibertyapplication-passwordless-db.yaml
+Determine whether theOpenLibertyApplicationinstance is created by running the following command:BashPowerShellkubectl get openlibertyapplication javaee-cafe-clusterkubectl get openlibertyapplication javaee-cafe-clusterYou should see output similar to the following example:NAME                  IMAGE                                        EXPOSED   RECONCILED   RESOURCESREADY   READY   WARNING   AGE
+javaee-cafe-cluster   jiangma102924acr.azurecr.io/javaee-cafe:v1             True         True             True              57s
+Determine whether theOpenLibertyApplicationinstance is created by running the following command:
+OpenLibertyApplication
+Bash
+PowerShell
+kubectl get openlibertyapplication javaee-cafe-cluster
+kubectl get openlibertyapplication javaee-cafe-cluster
+kubectl get openlibertyapplication javaee-cafe-cluster
+kubectl get openlibertyapplication javaee-cafe-cluster
+You should see output similar to the following example:
+NAME                  IMAGE                                        EXPOSED   RECONCILED   RESOURCESREADY   READY   WARNING   AGE
+javaee-cafe-cluster   jiangma102924acr.azurecr.io/javaee-cafe:v1             True         True             True              57s
+NAME                  IMAGE                                        EXPOSED   RECONCILED   RESOURCESREADY   READY   WARNING   AGE
+javaee-cafe-cluster   jiangma102924acr.azurecr.io/javaee-cafe:v1             True         True             True              57s
+Determine whether the deployment created by the Operator is ready by running the following command:BashPowerShellkubectl get deployment javaee-cafe-cluster --watchkubectl get deployment javaee-cafe-cluster --watchYou should see output similar to the following example:NAME                        READY   UP-TO-DATE   AVAILABLE   AGE
+javaee-cafe-cluster         0/3     3            0           20s
+Determine whether the deployment created by the Operator is ready by running the following command:
+Bash
+PowerShell
+kubectl get deployment javaee-cafe-cluster --watch
+kubectl get deployment javaee-cafe-cluster --watch
+kubectl get deployment javaee-cafe-cluster --watch
+kubectl get deployment javaee-cafe-cluster --watch
+You should see output similar to the following example:
+NAME                        READY   UP-TO-DATE   AVAILABLE   AGE
+javaee-cafe-cluster         0/3     3            0           20s
+NAME                        READY   UP-TO-DATE   AVAILABLE   AGE
+javaee-cafe-cluster         0/3     3            0           20s
+Wait until you see3/3under theREADYcolumn and3under theAVAILABLEcolumn, then useCtrl+Cto stop thekubectlwatch process.
+Wait until you see3/3under theREADYcolumn and3under theAVAILABLEcolumn, then useCtrl+Cto stop thekubectlwatch process.
+3/3
+READY
+3
+AVAILABLE
+kubectl
+Test the application
+When the application runs, a Kubernetes load balancer service exposes the application front end to the internet. This process can take a while to complete.
+To monitor progress, use thekubectl get servicecommand with the--watchargument, as shown in the following example:
+kubectl get service
+--watch
+Bash
+PowerShell
+kubectl get service javaee-cafe-cluster --watch
+kubectl get service javaee-cafe-cluster --watch
+kubectl get service javaee-cafe-cluster --watch
+kubectl get service javaee-cafe-cluster --watch
+You should see output similar to the following example:
+NAME                        TYPE           CLUSTER-IP     EXTERNAL-IP     PORT(S)          AGE
+javaee-cafe-cluster         LoadBalancer   10.0.251.169   52.152.189.57   80:31732/TCP     68s
+NAME                        TYPE           CLUSTER-IP     EXTERNAL-IP     PORT(S)          AGE
+javaee-cafe-cluster         LoadBalancer   10.0.251.169   52.152.189.57   80:31732/TCP     68s
+After theEXTERNAL-IPaddress changes frompendingto an actual public IP address, useCtrl+Cto stop thekubectlwatch process.
+EXTERNAL-IP
+pending
+kubectl
+If some time passed between executing the steps in this section and the preceding one, ensure the database is active, if necessary. See the previous note regarding database pause.
+Open a web browser to the external IP address of your service (52.152.189.57for the above example) to see the application home page. If the page isn't loaded correctly, that's because the app is starting. You can wait for a while and refresh the page later. You should see the pod name of your application replicas displayed at the top-left of the page. Wait for a few minutes and refresh the page to see a different pod name displayed due to load balancing provided by the AKS cluster.
+52.152.189.57
+
+Note
+Currently, the application doesn't use HTTPS. We recommend that you enable TLS with your own certificates. For more information, seeUse TLS with an ingress controller on Azure Kubernetes Service (AKS).
+Clean up resources
+To avoid Azure charges, you should clean up unnecessary resources. When the cluster is no longer needed, use theaz group deletecommand to remove the resource group, container service, container registry, database, and all related resources.
+az group delete
+Bash
+PowerShell
+az group delete --name $RESOURCE_GROUP_NAME --yes --no-wait
+az group delete --name $RESOURCE_GROUP_NAME --yes --no-wait
+az group delete --name $Env:RESOURCE_GROUP_NAME --yes --no-wait
+az group delete --name $Env:RESOURCE_GROUP_NAME --yes --no-wait
+Next steps
+You can learn more from references used in this guide:
+Azure Kubernetes Service
+Tutorial: Connect an AKS app to Azure SQL Database (preview)
+Integrate Azure SQL Database with Service Connector
+Connect using Microsoft Entra authentication
+Open Liberty
+Open Liberty Operator
+Open Liberty Server Configuration
+Liberty Maven Plugin
+Open Liberty Container Images
+WebSphere Liberty Container Images
+To incorporate Azure Cache for Redis into a Java app, seeUse Azure Cache for Redis in Java with Redisson Redis client.
+To explore options to run WebSphere products on Azure, seeWhat are solutions to run the WebSphere family of products on Azure?
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,100 @@
+Securely managed web applications
+This article provides an overview of deploying secure applications using theApp Service Environment. To restrict application access from the internet, theAzure Application Gatewayservice andAzure Web Application Firewallare used. This article also provides guidance about continuous integration and continuous deployment (CI/CD) for App Service Environments using Azure DevOps.
+This scenario is commonly deployed in industries such as banking and insurance, where customers are conscious of platform-level security in addition to application level security. To demonstrate these concepts, we'll use an application that allows users to submit expense reports.
+Potential use cases
+Consider this scenario for the following use cases:
+Building an Azure Web App where extra security is required.
+Providing dedicated tenancy, rather than shared tenant App Service Plans.
+Using Azure DevOps with aninternally load-balanced(ILB) Application Service Environment.
+Architecture
+
+Download aVisio fileof this architecture.
+Dataflow
+HTTP/HTTPS requests first hit the application gateway.
+Optionally (not shown in the diagram), you can have Microsoft Entra authentication enabled for the Web App. After the traffic first hits the application gateway, the user would be prompted to supply credentials to authenticate with the application.
+User requests flow through the internal load balancer (ILB) of the environment, which in turn routes the traffic to the Expenses Web App.
+The user then proceeds to create an expense report.
+As part of creating the expense report, the deployed API App is invoked to retrieve the user's manager name and email.
+The created expense report is stored in Azure SQL Database.
+To facilitate continuous deployment, code is checked into the Azure DevOps instance.
+The build VM has the Azure DevOps Agent installed, allowing the build VM to pull the bits for the Web App to deploy to the App Service Environment (since the Build VM is deployed in a subnet inside the same virtual network).
+Components
+TheApp Service Environmentprovides a fully isolated, dedicated environment for securely running the application at high scale. In addition, because the App Service Environment and the workloads that run on it are behind a virtual network, it also provides an extra layer of security and isolation. The requirement of high scale and isolation drove the selection of ILB App Service Environment.
+This workload uses theisolated App Service pricing tier, so the application runs in a private dedicated environment in an Azure datacenter using faster processors, solid-state drive (SSD) storage, and double the memory-to-core ratio compared to Standard.
+Azure App ServiceWeb AppandAPI Apphost web applications and RESTful APIs. These apps and APIs are hosted on the Isolated service plan, which also offers autoscaling, custom domains, and so on, but in a dedicated tier.
+AzureApplication Gatewayis a web traffic load balancer operating at Layer 7 that manages traffic to the web application. It offers SSL offloading, which removes extra overhead from the web servers hosting the web app to decrypt traffic again.
+Web Application Firewallis a feature of Application Gateway. Enabling the web application firewall in the application gateway further enhances security. The web application firewall uses Open Worldwide Application Security Project (OWASP) rules to protect the web application against attacks such as cross-site scripting, session hijacks, and SQL injection.
+Azure SQL Databasewas selected because most of the data in this application is relational data, with some data as documents and Blobs.
+Azure Networkingprovides various networking capabilities in Azure, and the networks can be peered with other virtual networks in Azure. Connections can also be established with on-premises datacenters via ExpressRoute or site-to-site. In this case, aservice endpointis enabled on the virtual network to ensure the data is flowing only between the Azure virtual network and the SQL Database instance.
+Azure DevOpsis used to help teams collaborate during sprints, using features that support Agile Development, and to create build and release pipelines.
+An Azure buildVMwas created so that the installed agent can pull down the respective build, and deploy the web app to the environment.
+Alternatives
+An App Service Environment can run regular web apps on Windows or, as in this example, web apps deployed inside the environment that are each running as Linux containers. An App Service Environment was selected to host these single-instance containerized applications. There are alternatives availableâreview the considerations below when designing your solution.
+Azure Service Fabric: If your environment is mostly Windows-based, and your workloads are primarily .NET Framework-based, and you aren't considering rearchitecting to .NET Core, then use Service Fabric to support and deploy Windows Server Containers. Additionally, Service Fabric supports C# or Java programming APIs, and for developing native microservices, the clusters can be provisioned on Windows or Linux.
+Azure Kubernetes Service (AKS)is an open-source project and an orchestration platform more suited to hosting complex multicontainer applications that typically use a microservices-based architecture. AKS is a managed Azure service that abstracts away the complexities of provisioning and configuring a Kubernetes cluster. However, significant knowledge of the Kubernetes platform is required to support and maintain it, so hosting a handful of single-instance containerized web applications might not be the best option.
+Other options for the data tier include:
+Azure Cosmos DB: If most of your data is in non-relational format, Azure Cosmos DB is a good alternative. This service provides a platform to run other data models such as MongoDB, Cassandra, Graph data, or simple table storage.
+Address TLS and DNS design decisions
+There are certain considerations when dealing with certificates on ILB App Service Environment. You need to generate a certificate that is chained up to a trusted root without requiring a Certificate Signing Request generated by the server where the cert will eventually be stored. With Internet Information Services (IIS), for example, the first step is to generate a certificate signing request (CSR) from your IIS server and then send it to the SSL certificate-issuing authority.
+You can't issue a CSR from the Internal load balancer (ILB) of an App Service Environment. The way to handle this limitation is to use thewildcard procedure.
+The wildcard procedure allows you to use proof of DNS name ownership instead of a CSR. If you own a DNS namespace, you can put in special DNS TXT record, the wildcard procedure checks that the record is there, and if found, knows that you own the DNS server because you have the right record. Based on that information, it issues a certificate that is signed up to a trusted root, which you can then upload to your ILB. You don't need to do anything with the individual certificate stores on the Web Apps because you have a trusted root SSL certificate at the ILB.
+Make self-signed or internally issued SSL cert work if you want to make secure calls between services running in an ILB App Service Environment. Anothersolution to consideron how to make ILB App Service Environment work with internally issued SSL certificate and how to load the internal CA to the trusted root store.
+While provisioning the App Service Environment, consider the following limitations when choosing a domain name for the environment. Domain names can't be:
+net
+net
+azurewebsites.net
+azurewebsites.net
+p.azurewebsites.net
+p.azurewebsites.net
+nameofthease.p.azurewebsites.net
+nameofthease.p.azurewebsites.net
+Additionally, the custom domain name used for apps and the domain name used by the ILB App Service Environment can't overlap. For an ILB App Service Environment with the domain name contoso.com, you can't use custom domain names for your apps like:
+www.contoso.com
+www.contoso.com
+abcd.def.contoso.com
+abcd.def.contoso.com
+abcd.contoso.com
+abcd.contoso.com
+Choose a domain for the ILB App Service Environment that won't conflict with those custom domain names. You can use something like contoso-internal.com for the domain of your environment for this example, because that won't conflict with custom domain names that end in .contoso.com.
+Another point to consider is DNS. In order to allow applications within the App Service Environment to communicate with each other, for instance a web application to talk to an API, you'll need to have DNS configured for your virtual network holding the environment. You can eitherbring your own DNSor you can useAzure DNS private zones.
+Considerations
+These considerations implement the pillars of the Azure Well-Architected Framework, which is a set of guiding tenets that you can use to improve the quality of a workload. For more information, seeWell-Architected Framework.
+Reliability
+Reliability helps ensure that your application can meet the commitments that you make to your customers. For more information, seeDesign review checklist for Reliability.
+Consider usingGeo Distributed Scale with App Service Environmentsfor greater resiliency and scalability.
+Review thetypical design patterns for resiliencyand consider implementing these where appropriate.
+You can find severalrecommended practices for App Servicein the Azure Architecture Center.
+Consider using activegeo-replicationfor the data tier andgeo-redundantstorage for images and queues.
+For a deeper discussion onresiliency, see the relevant article in the Azure Architecture Center.
+Consider applying thetypical design patterns for availabilitywhen building your cloud application.
+Review the availability considerations in the appropriateApp Service web application reference architecture.
+For other considerations concerning availability, see theavailability checklistin the Azure Architecture Center.
+Security
+Security provides assurances against deliberate attacks and the misuse of your valuable data and systems. For more information, seeDesign review checklist for Security.
+Review the security considerations in the appropriateApp Service web application reference architecture.
+Consider following asecure development lifecycleprocess to help developers build more secure software and address security compliance requirements while reducing development cost.
+Review the blueprint architecture forAzure PCI DSS compliance.
+Azure DDoS Protection, combined with application-design best practices, provides enhanced DDoS mitigation features to provide more defense against DDoS attacks. You should enableAzure DDoS Protectionon any perimeter virtual network.
+Cost Optimization
+Cost Optimization focuses on ways to reduce unnecessary expenses and improve operational efficiencies. For more information, seeDesign review checklist for Cost Optimization.
+Explore the cost of running this scenario. All of the services are pre-configured in the cost calculator. To see how pricing would change for your particular use case, change the appropriate variables to match your expected traffic.
+We've provided three sample cost profiles based on amount of traffic you expect to get:
+Small: This pricing example represents the components necessary for a minimum production-level instance serving a few thousand users per month. The app is using a single instance of a standard web app that will be enough to enable autoscaling. Each of the other components is scaled to a Basic tier that will minimize cost but still ensure that there's service-level agreement (SLA) support and enough capacity to handle a production-level workload.
+Medium: This pricing example represents the components needed for a moderate size deployment. Here we estimate approximately 100,000 users over the course of a month. The expected traffic is handled in a single App Service instance with a moderate Standard tier. Additionally, moderate tiers of cognitive and search services are added to the calculator.
+Large: This pricing example represents an application meant for high scale, at the order of millions of users per month, moving terabytes of data. At this level of usage, high performance, Premium tier web apps deployed in multiple regions fronted by Traffic Manager are required. Data consists of the following components: storage, databases, and CDN, all configured for terabytes of data.
+Performance Efficiency
+Performance Efficiency refers to your workload's ability to scale to meet user demands efficiently. For more information, seeDesign review checklist for Performance Efficiency.
+Understand howscale worksin App Service Environments.
+Review best practices forcloud apps autoscale.
+When building a cloud application, be aware of thetypical design patterns for scalability.
+Review the scalability considerations in the appropriateApp Service web application reference architecture.
+Contributors
+This article is maintained by Microsoft. It was originally written by the following contributors.
+Principal author:
+Faisal Mustafa | Senior Customer Engineer
+Next steps
+Integrate your ILB App Service Environment with the Azure application gateway
+Geo distributed scale with App Service Environments
+Related resources
+App Service web application reference architecture
+high-availability enterprise deployment using App Services Environment

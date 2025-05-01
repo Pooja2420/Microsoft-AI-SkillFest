@@ -1,0 +1,491 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Deploy a Node.js + MongoDB web app to Azure
+Article
+2025-04-17
+15 contributors
+In this article
+Azure App Serviceprovides a highly scalable, self-patching web hosting service using the Linux operating system. This tutorial shows how to create a secure Node.js app in Azure App Service that's connected to aAzure Cosmos DB for MongoDBdatabase. When you're finished, you'll have an Express.js app running on Azure App Service on Linux.
+
+In this tutorial, you learn how to:
+Create a secure-by-default architecture for Azure App Service and Azure Cosmos DB with MongoDB API.
+Secure connection secrets using a managed identity and Key Vault references.
+Deploy a Node.js sample app to App Service from a GitHub repository.
+Access App Service app settings in the application code.
+Make updates and redeploy the application code.
+Stream diagnostic logs from App Service.
+Manage the app in the Azure portal.
+Provision the same architecture and deploy by using Azure Developer CLI.
+Optimize your development workflow with GitHub Codespaces and GitHub Copilot.
+Prerequisites
+An Azure account with an active subscription. If you don't have an Azure account, youcan create one for free.
+A GitHub account. you can alsoget one for free.
+Knowledge of Express.js development.
+(Optional)To try GitHub Copilot, aGitHub Copilot account. A 30-day free trial is available.
+An Azure account with an active subscription. If you don't have an Azure account, youcan create one for free.
+Azure Developer CLIinstalled. You can follow the steps with theAzure Cloud Shellbecause it already has Azure Developer CLI installed.
+Knowledge of Express.js development.
+(Optional)To try GitHub Copilot, aGitHub Copilot account. A 30-day free trial is available.
+Skip to the end
+You can quickly deploy the sample app in this tutorial and see it running in Azure. Just run the following commands in theAzure Cloud Shell, and follow the prompt:
+mkdir msdocs-nodejs-mongodb-azure-sample-app
+cd msdocs-nodejs-mongodb-azure-sample-app
+azd init --template msdocs-nodejs-mongodb-azure-sample-app
+azd up
+mkdir msdocs-nodejs-mongodb-azure-sample-app
+cd msdocs-nodejs-mongodb-azure-sample-app
+azd init --template msdocs-nodejs-mongodb-azure-sample-app
+azd up
+1. Run the sample
+First, you set up a sample data-driven app as a starting point. For your convenience, thesample repository, includes adev containerconfiguration. The dev container has everything you need to develop an application, including the database, cache, and all environment variables needed by the sample application. The dev container can run in aGitHub codespace, which means you can run the sample on any computer with a web browser.
+Step 1:In a new browser window:
+Sign in to your GitHub account.
+Navigate tohttps://github.com/Azure-Samples/msdocs-nodejs-mongodb-azure-sample-app/fork.
+UnselectCopy the main branch only. You want all the branches.
+SelectCreate fork.
+
+Step 2:In the GitHub fork:
+Selectmain>starter-no-infrafor the starter branch. This branch contains just the sample project and no Azure-related files or configuration.
+SelectCode>Create codespace on starter-no-infra.
+The codespace takes a few minutes to set up.
+
+Step 3:In the codespace terminal:
+Runnpm install && npm start.
+npm install && npm start
+When you see the notificationYour application running on port 3000 is available., selectOpen in Browser.
+You should see the sample application in a new browser tab.
+To stop the Express.js application, typeCtrl+C.
+Your application running on port 3000 is available.
+Ctrl
+C
+
+Tip
+You can askGitHub Copilotabout this repository. For example:
+@workspace What does this project do?
+@workspace What does the .devcontainer folder do?
+Having issues? Check theTroubleshooting section.
+2. Create App Service and Azure Cosmos DB
+In this step, you create the Azure resources. The steps used in this tutorial create a set of secure-by-default resources that include App Service and Azure Cosmos DB for MongoDB. For the creation process, you'll specify:
+TheNamefor the web app. It's used as part of the DNS name for your app in the form ofhttps://<app-name>-<hash>.<region>.azurewebsites.net.
+https://<app-name>-<hash>.<region>.azurewebsites.net
+TheRegionto run the app physically in the world. It's also used as part of the DNS name for your app.
+TheRuntime stackfor the app. It's where you select the version of Node to use for your app.
+TheHosting planfor the app. It's the pricing tier that includes the set of features and scaling capacity for your app.
+TheResource Groupfor the app. A resource group lets you group (in a logical container) all the Azure resources needed for the application.
+Sign in to theAzure portaland follow these steps to create your Azure App Service resources.
+Step 1:In the Azure portal:
+Enter "web app database" in the search bar at the top of the Azure portal.
+Select the item labeledWeb App + Databaseunder theMarketplaceheading.
+You can also navigate to thecreation wizarddirectly.
+
+Step 2:In theCreate Web App + Databasepage, fill out the form as follows.
+Resource Group: SelectCreate newand use a name ofmsdocs-expressjs-mongodb-tutorial.
+Region: Any Azure region near you.
+Name:msdocs-expressjs-mongodb-XYZ, whereXYZis any three random characters.
+Runtime stack:Node 20 LTS.
+Engine:Cosmos DB API for MongoDB. Azure Cosmos DB is a cloud native database offering a 100% MongoDB compatible API. Note the database name that's generated for you (<app-name>-database). You'll need it later.
+Hosting plan:Basic. When you're ready, you canscale upto a production pricing tier.
+SelectReview + create.
+After validation completes, selectCreate.
+
+Step 3:The deployment takes a few minutes to complete. Once deployment completes, select theGo to resourcebutton. You're taken directly to the App Service app, but the following resources are created:
+Resource groupâ The container for all the created resources.
+App Service planâ Defines the compute resources for App Service. A Linux plan in theBasictier is created.
+App Serviceâ Represents your app and runs in the App Service plan.
+Virtual networkâ Integrated with the App Service app and isolates back-end network traffic.
+Private endpointâ Access endpoint for the database resource in the virtual network.
+Network interfaceâ Represents a private IP address for the private endpoint.
+Azure Cosmos DB for MongoDBâ Accessible only from behind the private endpoint. A database and a user are created for you on the server.
+Private DNS zoneâ Enables DNS resolution of the Azure Cosmos DB server in the virtual network.
+
+Having issues? Check theTroubleshooting section.
+3. Secure connection secrets
+The creation wizard generated the connectivity string for you already as anapp setting. However, the security best practice is to keep secrets out of App Service completely. You'll move your secrets to a key vault and change your app setting to aKey Vault referencewith the help of Service Connectors.
+Step 1:In the App Service page:
+In the left menu, selectSettings > Environment variables.
+Next toAZURE_COSMOS_CONNECTIONSTRING, selectShow value.
+This connection string lets you connect to the Cosmos DB database secured behind a private endpoint. However, the secret is saved directly in the App Service app, which isn't the best. You'll change this.
+
+Step 2:Create a key vault for secure management of secrets.
+In the top search bar, type "key vault", then selectMarketplace>Key Vault.
+InResource Group, selectmsdocs-expressjs-mongodb-tutorial.
+InKey vault name, type a name that consists of only letters and numbers.
+InRegion, set it to the sample location as the resource group.
+
+Step 3:
+Select theNetworkingtab.
+UnselectEnable public access.
+SelectCreate a private endpoint.
+InResource Group, selectmsdocs-expressjs-mongodb-tutorial.
+InKey vault name, type a name that consists of only letters and numbers.
+InRegion, set it to the sample location as the resource group.
+In the dialog, inLocation, select the same location as your App Service app.
+InResource Group, selectmsdocs-expressjs-mongodb-tutorial.
+InName, typemsdocs-expressjs-mongodb-XYZVaultEndpoint.
+InVirtual network, selectmsdocs-expressjs-mongodb-XYZVnet.
+InSubnet,msdocs-expressjs-mongodb-XYZSubnet.
+SelectOK.
+SelectReview + create, then selectCreate. Wait for the key vault deployment to finish. You should see "Your deployment is complete."
+
+Step 4:
+In the top search bar, typemsdocs-expressjs-mongodb, then the App Service resource calledmsdocs-expressjs-mongodb-XYZ.
+In the App Service page, in the left menu, selectSettings > Service Connector. There's already a connector, which the app creation wizard created for you.
+Select checkbox next to the connector, then selectEdit.
+In theBasicstab, setClient typetoNode.js.
+Select theAuthenticationtab.
+SelectStore Secret in Key Vault.
+UnderKey Vault Connection, selectCreate new.
+ACreate connectiondialog is opened on top of the edit dialog.
+
+Step 5:In theCreate connectiondialog for the Key Vault connection:
+InKey Vault, select the key vault you created earlier.
+SelectReview + Create. You should see thatSystem assigned managed identityis set toSelected.
+When validation completes, selectCreate.
+
+Step 6:You're back in the edit dialog fordefaultConnector.
+In theAuthenticationtab, wait for the key vault connector to be created. When it's finished, theKey Vault Connectiondropdown automatically selects it.
+SelectNext: Networking.
+SelectConfigure firewall rules to enable access to target service. If you see the message, "No Private Endpoint on the target service," ignore it. The app creation wizard already secured the Cosmos DB database with a private endpoint.
+SelectSave. Wait until theUpdate succeedednotification appears.
+
+Step 7:To verify your changes:
+From the left menu, selectEnvironment variablesagain.
+Next to the app settingAZURE_COSMOS_CONNECTIONSTRING, selectShow value. The value should be@Microsoft.KeyVault(...), which means that it's akey vault referencebecause the secret is now managed in the key vault.
+@Microsoft.KeyVault(...)
+
+Having issues? Check theTroubleshooting section.
+4. Deploy sample code
+In this step, you configure GitHub deployment using GitHub Actions. It's just one of many ways to deploy to App Service, but also a great way to have continuous integration in your deployment process. By default, everygit pushto your GitHub repository kicks off the build and deploy action.
+git push
+Step 1:In the left menu, selectDeployment>Deployment Center.
+
+Step 2:In the Deployment Center page:
+InSource, selectGitHub. By default,GitHub Actionsis selected as the build provider.
+Sign in to your GitHub account and follow the prompt to authorize Azure.
+InOrganization, select your account.
+InRepository, selectmsdocs-nodejs-mongodb-azure-sample-app.
+InBranch, selectstarter-no-infra. This is the same branch that you worked in with your sample app, without any Azure-related files or configuration.
+ForAuthentication type, selectUser-assigned identity.
+In the top menu, selectSave. App Service commits a workflow file into the chosen GitHub repository, in the.github/workflowsdirectory.
+By default, the deployment centercreates a user-assigned identityfor the workflow to authenticate using Microsoft Entra (OIDC authentication). For alternative authentication options, seeDeploy to App Service using GitHub Actions.
+.github/workflows
+
+Step 3:Back in the GitHub codespace of your sample fork, rungit pull origin starter-no-infra.
+This pulls the newly committed workflow file into your codespace.
+git pull origin starter-no-infra
+
+Step 4 (Option 1: with GitHub Copilot):
+Start a new chat session by selecting theChatview, then selecting+.
+Ask, "@workspace How does the app connect to the database?" Copilot might point you to theapp.jsfile and themongoose.connectcall.
+mongoose.connect
+Say, "*I have a connection string variable in Azure called AZURE_COSMOS_CONNECTIONSTRING.". Copilot might give you a code suggestion similar to the one in theOption 2: without GitHub Copilotsteps below and even tell you to make the change inapp.js.
+Openapp.jsin the explorer and add the code suggestion in thegetAppmethod.
+GitHub Copilot doesn't give you the same response every time, you might need to ask more questions to fine-tune its response. For tips, seeWhat can I do with GitHub Copilot in my codespace?.
+getApp
+
+Step 4 (Option 2: without GitHub Copilot):
+From the explorer, openapp.js.
+Find the line wheremongoose.connectis called (Line 16) and changeprocess.env.MONGODB_URItoprocess.env.AZURE_COSMOS_CONNECTIONSTRING || process.env.MONGODB_URI.
+mongoose.connect
+process.env.MONGODB_URI
+process.env.AZURE_COSMOS_CONNECTIONSTRING || process.env.MONGODB_URI
+
+Step 5:
+Select theSource Controlextension.
+In the textbox, type a commit message likeUpdate environment variable. Or, selectand let GitHub Copilot generate a commit message for you.
+Update environment variable
+SelectCommit, then confirm withYes.
+SelectSync changes 1, then confirm withOK.
+
+Step 6:Back in the Deployment Center page in the Azure portal:
+Under theLogstab, selectRefresh. A new deployment run is already started from your committed changes.
+In the log item for the deployment run, select theBuild/Deploy Logsentry with the latest timestamp.
+
+Step 7:You're taken to your GitHub repository and see that the GitHub action is running. The workflow file defines two separate stages, build and deploy. Wait for the GitHub run to show a status ofComplete.
+
+Having issues? Check theTroubleshooting section.
+5. Browse to the app
+Step 1:In the App Service page:
+From the left menu, selectOverview.
+Select the URL of your app. You can also navigate directly tohttps://<app-name>.azurewebsites.net.
+https://<app-name>.azurewebsites.net
+
+Step 2:Add a few tasks to the list.
+Congratulations, you're running a secure data-driven Node.js app in Azure App Service.
+
+6. Stream diagnostic logs
+Azure App Service captures all messages logged to the console to assist you in diagnosing issues with your application. The sample app outputs console log messages in each of its endpoints to demonstrate this capability. For example, thegetendpoint outputs a message about the number of tasks retrieved from the database and an error message appears if something goes wrong.
+get
+router.get('/', function(req, res, next) {
+  Task.find()
+    .then((tasks) => {      
+      const currentTasks = tasks.filter(task => !task.completed);
+      const completedTasks = tasks.filter(task => task.completed === true);
+
+      console.log(`Total tasks: ${tasks.length}   Current tasks: ${currentTasks.length}    Completed tasks:  ${completedTasks.length}`)
+      res.render('index', { currentTasks: currentTasks, completedTasks: completedTasks });
+    })
+    .catch((err) => {
+      console.log(err);
+      res.send('Sorry! Something went wrong.');
+    });
+});
+router.get('/', function(req, res, next) {
+  Task.find()
+    .then((tasks) => {      
+      const currentTasks = tasks.filter(task => !task.completed);
+      const completedTasks = tasks.filter(task => task.completed === true);
+
+      console.log(`Total tasks: ${tasks.length}   Current tasks: ${currentTasks.length}    Completed tasks:  ${completedTasks.length}`)
+      res.render('index', { currentTasks: currentTasks, completedTasks: completedTasks });
+    })
+    .catch((err) => {
+      console.log(err);
+      res.send('Sorry! Something went wrong.');
+    });
+});
+Step 1:In the App Service page:
+From the left menu, selectApp Service logs.
+UnderApplication logging, selectFile System.
+In the top menu, selectSave.
+
+Step 2:From the left menu, selectLog stream. You see the logs for your app, including platform logs and logs from inside the container.
+
+7. Inspect deployed files using Kudu
+Azure App Service provides a web-based diagnostics console namedKuduthat lets you examine the server hosting environment for your web app. Using Kudu, you can view the files deployed to Azure, review the deployment history of the application, and even open an SSH session into the hosting environment.
+Step 1:In the App Service page:
+From the left menu, selectAdvanced Tools.
+SelectGo. You can also navigate directly tohttps://<app-name>.scm.azurewebsites.net.
+https://<app-name>.scm.azurewebsites.net
+
+Step 2:In the Kudu page, selectDeployments.
+
+If you deploy code to App Service using Git or zip deploy, you see a history of deployments of your web app.
+
+Step 3:Go back to the Kudu homepage and selectSite wwwroot.
+
+You can see the deployed folder structure and select to browse and view the files.
+
+8. Clean up resources
+When you're finished, you can delete all of the resources from your Azure subscription by deleting the resource group.
+Step 1:In the search bar at the top of the Azure portal:
+Enter the resource group name.
+Select the resource group.
+
+Step 2:In the resource group page, selectDelete resource group.
+
+Step 3:
+Enter the resource group name to confirm your deletion.
+SelectDelete.
+
+2. Create Azure resources and deploy a sample app
+In this step, you create the Azure resources and deploy a sample app to App Service on Linux. The steps used in this tutorial create a set of secure-by-default resources that include App Service and Azure Cosmos DB.
+The dev container already has theAzure Developer CLI(AZD).
+From the repository root, runazd init.azd init --template nodejs-app-service-cosmos-redis-infra
+From the repository root, runazd init.
+azd init
+azd init --template nodejs-app-service-cosmos-redis-infra
+azd init --template nodejs-app-service-cosmos-redis-infra
+When prompted, give the following answers:QuestionAnswerThe current directory is not empty. Would you like to initialize a project here in '<your-directory>'?YWhat would you like to do with these files?Keep my existing files unchangedEnter a new environment nameType a unique name. The AZD template uses this name as part of the DNS name of your web app in Azure (<app-name>-<hash>.azurewebsites.net). Alphanumeric characters and hyphens are allowed.
+When prompted, give the following answers:
+<app-name>-<hash>.azurewebsites.net
+Sign into Azure by running theazd auth logincommand and following the prompt:azd auth login
+Sign into Azure by running theazd auth logincommand and following the prompt:
+azd auth login
+azd auth login
+azd auth login
+Create the necessary Azure resources and deploy the app code with theazd upcommand. Follow the prompt to select the desired subscription and location for the Azure resources.azd upTheazd upcommand takes about 15 minutes to complete (the Redis cache takes the most time). It also compiles and deploys your application code, but you'll modify your code later to work with App Service. While it's running, the command provides messages about the provisioning and deployment process, including a link to the deployment in Azure. When it finishes, the command also displays a link to the deploy application.This AZD template contains files (azure.yamland theinfradirectory) that generate a secure-by-default architecture with the following Azure resources:Resource group: The container for all the created resources.App Service plan: Defines the compute resources for App Service. A Linux plan in theB1tier is created.App Service: Represents your app and runs in the App Service plan.Virtual network: Integrated with the App Service app and isolates back-end network traffic.Azure Cosmos DB account with MongoDB API: Accessible only from behind its private endpoint. A database is created for you on the server.Azure Cache for Redis: Accessible only from within the virtual network.Key vault: Accessible only from behind its private endpoint. Used to manage secrets for the App Service app.Private endpoints: Access endpoints for the key vault, the database server, and the Redis cache in the virtual network.Private DNS zones: Enable DNS resolution of the Cosmos DB database, the Redis cache, and the key vault in the virtual network.Log Analytics workspace: Acts as the target container for your app to ship its logs, where you can also query the logs.Once the command finishes creating resources and deploying the application code the first time, the deployed sample app doesn't work yet because you must make small changes to make it connect to the database in Azure.
+Create the necessary Azure resources and deploy the app code with theazd upcommand. Follow the prompt to select the desired subscription and location for the Azure resources.
+azd up
+azd up
+azd up
+Theazd upcommand takes about 15 minutes to complete (the Redis cache takes the most time). It also compiles and deploys your application code, but you'll modify your code later to work with App Service. While it's running, the command provides messages about the provisioning and deployment process, including a link to the deployment in Azure. When it finishes, the command also displays a link to the deploy application.
+azd up
+This AZD template contains files (azure.yamland theinfradirectory) that generate a secure-by-default architecture with the following Azure resources:
+Resource group: The container for all the created resources.
+App Service plan: Defines the compute resources for App Service. A Linux plan in theB1tier is created.
+App Service: Represents your app and runs in the App Service plan.
+Virtual network: Integrated with the App Service app and isolates back-end network traffic.
+Azure Cosmos DB account with MongoDB API: Accessible only from behind its private endpoint. A database is created for you on the server.
+Azure Cache for Redis: Accessible only from within the virtual network.
+Key vault: Accessible only from behind its private endpoint. Used to manage secrets for the App Service app.
+Private endpoints: Access endpoints for the key vault, the database server, and the Redis cache in the virtual network.
+Private DNS zones: Enable DNS resolution of the Cosmos DB database, the Redis cache, and the key vault in the virtual network.
+Log Analytics workspace: Acts as the target container for your app to ship its logs, where you can also query the logs.
+Once the command finishes creating resources and deploying the application code the first time, the deployed sample app doesn't work yet because you must make small changes to make it connect to the database in Azure.
+3. Verify connection strings
+The AZD template you use generated the connectivity variables for you already asapp settingsand outputs the them to the terminal for your convenience. App settings are one way to keep connection secrets out of your code repository.
+In the AZD output, find the app settingAZURE_COSMOS_CONNECTIONSTRING. Only the setting names are displayed. They look like this in the AZD output:App Service app has the following app settings:
+         - AZURE_COSMOS_CONNECTIONSTRING
+         - AZURE_REDIS_CONNECTIONSTRING
+         - AZURE_KEYVAULT_RESOURCEENDPOINT
+         - AZURE_KEYVAULT_SCOPEAZURE_COSMOS_CONNECTIONSTRINGcontains the connection string to the Cosmos DB database in Azure. You need to use it in your code later.
+In the AZD output, find the app settingAZURE_COSMOS_CONNECTIONSTRING. Only the setting names are displayed. They look like this in the AZD output:
+AZURE_COSMOS_CONNECTIONSTRING
+App Service app has the following app settings:
+         - AZURE_COSMOS_CONNECTIONSTRING
+         - AZURE_REDIS_CONNECTIONSTRING
+         - AZURE_KEYVAULT_RESOURCEENDPOINT
+         - AZURE_KEYVAULT_SCOPE
+AZURE_COSMOS_CONNECTIONSTRINGcontains the connection string to the Cosmos DB database in Azure. You need to use it in your code later.
+AZURE_COSMOS_CONNECTIONSTRING
+For your convenience, the AZD template shows you the direct link to the app's app settings page. Find the link and open it in a new browser tab.
+For your convenience, the AZD template shows you the direct link to the app's app settings page. Find the link and open it in a new browser tab.
+Having issues? Check theTroubleshooting section.
+4. Modify sample code and redeploy
+With GitHub Copilot
+Without GitHub Copilot
+In the GitHub codespace, start a new chat session by clicking theChatview, then clicking+.
+In the GitHub codespace, start a new chat session by clicking theChatview, then clicking+.
+Ask, "@workspace How does the app connect to the database?" Copilot might point you to theapp.jsfile and themongoose.connectcall.
+Ask, "@workspace How does the app connect to the database?" Copilot might point you to theapp.jsfile and themongoose.connectcall.
+mongoose.connect
+Say, "I have a connection string variable in Azure called AZURE_COSMOS_CONNECTIONSTRING.". Copilot might give you a code suggestion similar to the one in theOption 2: without GitHub Copilotsteps below and even tell you to make the change inapp.js.
+Say, "I have a connection string variable in Azure called AZURE_COSMOS_CONNECTIONSTRING.". Copilot might give you a code suggestion similar to the one in theOption 2: without GitHub Copilotsteps below and even tell you to make the change inapp.js.
+Openapp.jsin the explorer and add the code suggestion in thegetAppmethod.GitHub Copilot doesn't give you the same response every time, you might need to ask more questions to fine-tune its response. For tips, seeWhat can I do with GitHub Copilot in my codespace?.
+Openapp.jsin the explorer and add the code suggestion in thegetAppmethod.
+getApp
+GitHub Copilot doesn't give you the same response every time, you might need to ask more questions to fine-tune its response. For tips, seeWhat can I do with GitHub Copilot in my codespace?.
+Back in the codespace terminal, runazd deploy.azd deploy
+Back in the codespace terminal, runazd deploy.
+azd deploy
+azd deploy
+azd deploy
+From the explorer, openapp.jsand see that the app creates a Mongoose connection usingMONGODB_URI(Line 16).
+From the explorer, openapp.jsand see that the app creates a Mongoose connection usingMONGODB_URI(Line 16).
+MONGODB_URI
+Changeprocess.env.MONGODB_URItoprocess.env.AZURE_COSMOS_CONNECTIONSTRING || process.env.MONGODB_URI.This change makes it possible to pick the right environment variable for the MongoDB connection string, regardless of whether you're running locally or in Azure. You can use the same variable name for both environments, but that's beyond the scope of the tutorial.
+Changeprocess.env.MONGODB_URItoprocess.env.AZURE_COSMOS_CONNECTIONSTRING || process.env.MONGODB_URI.
+process.env.MONGODB_URI
+process.env.AZURE_COSMOS_CONNECTIONSTRING || process.env.MONGODB_URI
+This change makes it possible to pick the right environment variable for the MongoDB connection string, regardless of whether you're running locally or in Azure. You can use the same variable name for both environments, but that's beyond the scope of the tutorial.
+Back in the codespace terminal, runazd deploy.azd deploy
+Back in the codespace terminal, runazd deploy.
+azd deploy
+azd deploy
+azd deploy
+Tip
+You can also just useazd upalways, which does all ofazd package,azd provision, andazd deploy.
+azd up
+azd package
+azd provision
+azd deploy
+Having issues? Check theTroubleshooting section.
+5. Browse to the app
+In the AZD output, find the URL of your app and navigate to it in the browser. The URL looks like this in the AZD output:Deploying services (azd deploy)
+
+   (â) Done: Deploying service web
+   - Endpoint: https://<app-name>-<hash>.azurewebsites.net/
+In the AZD output, find the URL of your app and navigate to it in the browser. The URL looks like this in the AZD output:
+Deploying services (azd deploy)
+
+   (â) Done: Deploying service web
+   - Endpoint: https://<app-name>-<hash>.azurewebsites.net/
+Add a few tasks to the list.Congratulations, you're running a web app in Azure App Service, with secure connectivity to Azure Cosmos DB.
+Add a few tasks to the list.
+
+Congratulations, you're running a web app in Azure App Service, with secure connectivity to Azure Cosmos DB.
+Having issues? Check theTroubleshooting section.
+6. Stream diagnostic logs
+Azure App Service captures all messages logged to the console to assist you in diagnosing issues with your application. The sample app outputs console log messages in each of its endpoints to demonstrate this capability. For example, thegetendpoint outputs a message about the number of tasks retrieved from the database and an error message appears if something goes wrong.
+get
+router.get('/', function(req, res, next) {
+  Task.find()
+    .then((tasks) => {      
+      const currentTasks = tasks.filter(task => !task.completed);
+      const completedTasks = tasks.filter(task => task.completed === true);
+
+      console.log(`Total tasks: ${tasks.length}   Current tasks: ${currentTasks.length}    Completed tasks:  ${completedTasks.length}`)
+      res.render('index', { currentTasks: currentTasks, completedTasks: completedTasks });
+    })
+    .catch((err) => {
+      console.log(err);
+      res.send('Sorry! Something went wrong.');
+    });
+});
+router.get('/', function(req, res, next) {
+  Task.find()
+    .then((tasks) => {      
+      const currentTasks = tasks.filter(task => !task.completed);
+      const completedTasks = tasks.filter(task => task.completed === true);
+
+      console.log(`Total tasks: ${tasks.length}   Current tasks: ${currentTasks.length}    Completed tasks:  ${completedTasks.length}`)
+      res.render('index', { currentTasks: currentTasks, completedTasks: completedTasks });
+    })
+    .catch((err) => {
+      console.log(err);
+      res.send('Sorry! Something went wrong.');
+    });
+});
+In the AZD output, find the link to stream App Service logs and navigate to it in the browser. The link looks like this in the AZD output:
+Stream App Service logs at: https://portal.azure.com/#@/resource/subscriptions/<subscription-guid>/resourceGroups/<group-name>/providers/Microsoft.Web/sites/<app-name>/logStream
+Learn more about logging in Java apps in the series onEnable Azure Monitor OpenTelemetry for .NET, Node.js, Python and Java applications.
+Having issues? Check theTroubleshooting section.
+7. Clean up resources
+To delete all Azure resources in the current deployment environment, runazd downand follow the prompts.
+azd down
+azd down
+azd down
+Troubleshooting
+The portal deployment view for Azure Cosmos DB shows a Conflict status
+The browser page of the deployed app says "Something went wrong."
+Depending on your subscription and the region you select, you might see the deployment status for Azure Cosmos DB to beConflict, with the following message in Operation details:
+Conflict
+Sorry, we are currently experiencing high demand in <region> region, and cannot fulfill your request at this time.
+Sorry, we are currently experiencing high demand in <region> region, and cannot fulfill your request at this time.
+The error is most likely caused by a limit on your subscription for the region you select. Try choosing a different region for your deployment.
+You probably still need to make the connection string changes in your application code. See4. Deploy sample code.
+Frequently asked questions
+How much does this setup cost?
+How do I connect to the Azure Cosmos DB server that's secured behind the virtual network with other tools?
+How does local app development work with GitHub Actions?
+Why is the GitHub Actions deployment so slow?
+I don't have permissions to create a user-assigned identity
+What can I do with GitHub Copilot in my codespace?
+Pricing for the created resources is as follows:
+The App Service plan is created inBasictier and can be scaled up or down. SeeApp Service pricing.
+The Azure Cosmos DB server is created in a single region and can be distributed to other regions. SeeAzure Cosmos DB pricing.
+The virtual network doesn't incur a charge unless you configure extra functionality, such as peering. SeeAzure Virtual Network pricing.
+The private DNS zone incurs a small charge. SeeAzure DNS pricing.
+For basic access from a command-line tool, you can runmongoshfrom the app's SSH terminal. The app's container doesn't come withmongosh, so you mustinstall it manually. Remember that the installed client doesn't persist across app restarts.
+mongosh
+mongosh
+To connect from a MongoDB GUI client, your machine must be within the virtual network. For example, it could be an Azure VM that's connected to one of the subnets, or a machine in an on-premises network that has asite-to-site VPNconnection with the Azure virtual network.
+To connect from the MongoDB shell from the Azure Cosmos DB management page in the portal, your machine must also be within the virtual network. You could instead open the Azure Cosmos DB server's firewall for your local machine's IP address, but it increases the attack surface for your configuration.
+Take the autogenerated workflow file from App Service as an example, eachgit pushkicks off a new build and deployment run. From a local clone of the GitHub repository, you make the desired updates push it to GitHub. For example:
+git push
+git add .
+git commit -m "<some-message>"
+git push origin main
+git add .
+git commit -m "<some-message>"
+git push origin main
+The autogenerated workflow file from App Service defines build-then-deploy, two-job run. Because each job runs in its own clean environment, the workflow file ensures that thedeployjob has access to the files from thebuildjob:
+deploy
+build
+At the end of thebuildjob,upload files as artifacts.
+build
+At the beginning of thedeployjob, download the artifacts.
+deploy
+Most of the time taken by the two-job process is spent uploading and download artifacts. If you want, you can simplify the workflow file by combining the two jobs into one, which eliminates the need for the upload and download steps.
+SeeSet up GitHub Actions deployment from the Deployment Center.
+You might notice that the GitHub Copilot chat view was already there for you when you created the codespace. For your convenience, we include the GitHub Copilot chat extension in the container definition (see.devcontainer/devcontainer.json). However, you need aGitHub Copilot account(30-day free trial available).
+A few tips for you when you talk to GitHub Copilot:
+In a single chat session, the questions and answers build on each other and you can adjust your questions to fine-tune the answer you get.
+By default, GitHub Copilot doesn't have access to any file in your repository. To ask questions about a file, open the file in the editor first.
+To let GitHub Copilot have access to all of the files in the repository when preparing its answers, begin your question with@workspace. For more information, seeUse the@workspaceagent.
+@workspace
+In the chat session, GitHub Copilot can suggest changes and (with@workspace) even where to make the changes, but it's not allowed to make the changes for you. It's up to you to add the suggested changes and test it.
+@workspace
+Here are some other things you can say to fine-tune the answer you get:
+@workspaceWhere is MONGODB_URI defined?
+Which file do I make the change in?
+Will this change break my app when running locally?
+Next steps
+JavaScript on Azure developer center
+Configure Node.js app in App Service
+Secure with custom domain and certificate
+Feedback
+Was this page helpful?
+Additional resources

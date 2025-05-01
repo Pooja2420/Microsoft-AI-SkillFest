@@ -1,0 +1,435 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Get started with chat document security for Python
+Article
+2024-12-20
+8 contributors
+In this article
+When you build achat application by using the Retrieval Augmented Generation (RAG) patternwith your own data, make sure that each user receives an answer based on their permissions. Follow the process in this article to add document access control to your chat app.
+Authorized user: This person should have access to answers contained within the documents of the chat app.
+Authorized user: This person should have access to answers contained within the documents of the chat app.
+
+Unauthorized user: This person shouldn't have access to answers from secured documents they don't have authorization to see.
+Unauthorized user: This person shouldn't have access to answers from secured documents they don't have authorization to see.
+
+Note
+This article uses one or moreAI app templatesas the basis for the examples and guidance in the article. AI app templates provide you with well-maintained reference implementations that are easy to deploy. They help to ensure a high-quality starting point for your AI apps.
+Architectural overview
+Without a document security feature, the enterprise chat app has a simple architecture by using Azure AI Search and Azure OpenAI. An answer is determined from queries to Azure AI Search where the documents are stored, in combination with a response from an Azure OpenAI GPT model. No user authentication is used in this simple flow.
+
+To add security for the documents, you need to update the enterprise chat app:
+Add client authentication to the chat app with Microsoft Entra.
+Add server-side logic to populate a search index with user and group access.
+
+Azure AI Search doesn't providenativedocument-level permissions and can't vary search results from within an index by user permissions. Instead, your application can use search filters to ensure that a document is accessible to a specific user or by a specific group. Within your search index, each document should have a filterable field that stores user or group identity information.
+
+Because the authorization isn't natively contained in Azure AI Search, you need to add a field to hold user or group information, and thenfilterany documents that don't match. To implement this technique, you need to:
+Create a document access control field in your index dedicated to storing the details of users or groups with document access.
+Populate the document's access control field with the relevant user or group details.
+Update this access control field whenever there are changes in user or group access permissions.
+If your index updates are scheduled with an indexer, changes are picked up on the next indexer run. If you don't use an indexer, you need to manually reindex.
+In this article, the process of securing documents in Azure AI Search is made possible withexamplescripts, which you as the search administrator would run. The scripts associate a single document with a single user identity. You can take thesescriptsand apply your own security and production requirements to scale to your needs.
+Determine security configuration
+The solution provides Boolean environment variables to turn on features that are necessary for document security in this sample.
+AZURE_USE_AUTHENTICATION
+true
+Use oid security filter
+AZURE_ENFORCE_ACCESS_CONTROL
+true
+AZURE_ENABLE_GLOBAL_DOCUMENTS_ACCESS
+true
+AZURE_ENFORCE_ACCESS_CONTROL
+AZURE_ENABLE_UNAUTHENTICATED_ACCESS
+true
+AZURE_ENFORCE_ACCESS_CONTROL
+Use the following sections to understand the security profiles supported in this sample. This article configures theEnterprise profile.
+Enterprise: Required account + document filter
+Each user of the sitemustsign in. The site contains content that's public to all users. The document-level security filter is applied to all requests.
+Environment variables:
+AZURE_USE_AUTHENTICATION=true
+AZURE_USE_AUTHENTICATION=true
+AZURE_ENABLE_GLOBAL_DOCUMENTS_ACCESS=true
+AZURE_ENABLE_GLOBAL_DOCUMENTS_ACCESS=true
+AZURE_ENFORCE_ACCESS_CONTROL=true
+AZURE_ENFORCE_ACCESS_CONTROL=true
+Mixed use: Optional account + document filter
+Each user of the sitemaysign in. The site contains content that's public to all users. The document-level security filter is applied to all requests.
+Environment variables:
+AZURE_USE_AUTHENTICATION=true
+AZURE_USE_AUTHENTICATION=true
+AZURE_ENABLE_GLOBAL_DOCUMENTS_ACCESS=true
+AZURE_ENABLE_GLOBAL_DOCUMENTS_ACCESS=true
+AZURE_ENFORCE_ACCESS_CONTROL=true
+AZURE_ENFORCE_ACCESS_CONTROL=true
+AZURE_ENABLE_UNAUTHENTICATED_ACCESS=true
+AZURE_ENABLE_UNAUTHENTICATED_ACCESS=true
+Prerequisites
+Adevelopment containerenvironment is available with all thedependenciesthat are required to complete this article. You can run the development container in GitHub Codespaces (in a browser) or locally by using Visual Studio Code.
+To use this article, you need the following prerequisites:
+An Azure subscription.Create one for free.
+Azure account permissions: Your Azure account must have:Permission tomanage applications in Microsoft Entra ID.Microsoft.Authorization/roleAssignments/writepermissions, such asUser Access AdministratororOwner.
+Permission tomanage applications in Microsoft Entra ID.
+Microsoft.Authorization/roleAssignments/writepermissions, such asUser Access AdministratororOwner.
+Microsoft.Authorization/roleAssignments/write
+You need more prerequisites depending on your preferred development environment.
+GitHub Codespaces (recommended)
+Visual Studio Code
+GitHub account
+Azure Developer CLI.
+Docker Desktop. Start Docker Desktop if it's not already running.
+Visual Studio Code.
+Dev Containers extension.
+Open a development environment
+Use the following instructions to deploy a preconfigured development environment containing all required dependencies to complete this article.
+GitHub Codespaces (recommended)
+Visual Studio Code
+GitHub Codespacesruns a development container managed by GitHub withVisual Studio Code for the Webas the user interface. For the most straightforward development environment, use GitHub Codespaces so that you have the correct developer tools and dependencies preinstalled to complete this article.
+Important
+All GitHub accounts can use GitHub Codespaces for up to 60 hours free each month with two core instances. For more information, seeGitHub Codespaces monthly included storage and core hours.
+Start the process to create a new GitHub codespace on themainbranch of theAzure-Samples/azure-search-openai-demoGitHub repository.
+Start the process to create a new GitHub codespace on themainbranch of theAzure-Samples/azure-search-openai-demoGitHub repository.
+main
+Right-click the following button, and selectOpen link in new windowsto have the development environment and the documentation available at the same time.
+Right-click the following button, and selectOpen link in new windowsto have the development environment and the documentation available at the same time.
+
+On theCreate codespacepage, review the codespace configuration settings and then selectCreate new codespace.
+On theCreate codespacepage, review the codespace configuration settings and then selectCreate new codespace.
+
+Wait for the codespace to start. This startup process can take a few minutes.
+Wait for the codespace to start. This startup process can take a few minutes.
+In the terminal at the bottom of the screen, sign in to Azure with the Azure Developer CLI.azd auth login
+In the terminal at the bottom of the screen, sign in to Azure with the Azure Developer CLI.
+azd auth login
+azd auth login
+Complete the authentication process.
+Complete the authentication process.
+The remaining tasks in this article take place in the context of this development container.
+The remaining tasks in this article take place in the context of this development container.
+TheDev Containers extensionfor Visual Studio Code requiresDockerto be installed on your local machine. The extension hosts the development container locally by using the Docker host with the correct developer tools and dependencies preinstalled to complete this article.
+Create a new local directory on your computer for the project.mkdir my-intelligent-app && cd my-intelligent-app
+Create a new local directory on your computer for the project.
+mkdir my-intelligent-app && cd my-intelligent-app
+mkdir my-intelligent-app && cd my-intelligent-app
+Open Visual Studio Code in that directory.code .
+Open Visual Studio Code in that directory.
+code .
+code .
+Open a new terminal in Visual Studio Code.
+Open a new terminal in Visual Studio Code.
+Run the followingAZDcommand to bring the GitHub repository to your local computer.azd init -t azure-search-openai-demo
+Run the followingAZDcommand to bring the GitHub repository to your local computer.
+AZD
+azd init -t azure-search-openai-demo
+azd init -t azure-search-openai-demo
+Open theCommandpalette, and search for and selectDev Containers: Open Folder in Containerto open the project in a dev container. Wait until the dev container opens before you continue.
+Open theCommandpalette, and search for and selectDev Containers: Open Folder in Containerto open the project in a dev container. Wait until the dev container opens before you continue.
+Sign in to Azure with the Azure Developer CLI.azd auth loginCopy the code from the terminal and then paste it into a browser. Follow the instructions to authenticate with your Azure account.
+Sign in to Azure with the Azure Developer CLI.
+azd auth login
+azd auth login
+Copy the code from the terminal and then paste it into a browser. Follow the instructions to authenticate with your Azure account.
+The remaining exercises in this project take place in the context of this development container.
+The remaining exercises in this project take place in the context of this development container.
+Get required information with the Azure CLI
+Get your subscription ID and tenant ID with the following Azure CLI command. Copy the value to use as yourAZURE_TENANT_IDvalue.
+AZURE_TENANT_ID
+az account list --query "[].{subscription_id:id, name:name, tenantId:tenantId}" -o table
+az account list --query "[].{subscription_id:id, name:name, tenantId:tenantId}" -o table
+If you get an error about your tenant's conditional access policy, you need a second tenant without a conditional access policy.
+Your first tenant, associated with your user account, is used for theAZURE_TENANT_IDenvironment variable.
+AZURE_TENANT_ID
+Your second tenant, without conditional access, is used for theAZURE_AUTH_TENANT_IDenvironment variable to access Microsoft Graph. For tenants with a conditional access policy, find the ID of a second tenant without a conditional access policy orcreate a new tenant.
+AZURE_AUTH_TENANT_ID
+Set environment variables
+Run the following commands to configure the application for theEnterpriseprofile.azd env set AZURE_USE_AUTHENTICATION true
+azd env set AZURE_ENABLE_GLOBAL_DOCUMENTS_ACCESS true
+azd env set AZURE_ENFORCE_ACCESS_CONTROL true
+Run the following commands to configure the application for theEnterpriseprofile.
+azd env set AZURE_USE_AUTHENTICATION true
+azd env set AZURE_ENABLE_GLOBAL_DOCUMENTS_ACCESS true
+azd env set AZURE_ENFORCE_ACCESS_CONTROL true
+azd env set AZURE_USE_AUTHENTICATION true
+azd env set AZURE_ENABLE_GLOBAL_DOCUMENTS_ACCESS true
+azd env set AZURE_ENFORCE_ACCESS_CONTROL true
+Run the following command to set the tenant, which authorizes the user sign-in to the hosted application environment. Replace<YOUR_TENANT_ID>with the tenant ID.azd env set AZURE_TENANT_ID <YOUR_TENANT_ID>
+Run the following command to set the tenant, which authorizes the user sign-in to the hosted application environment. Replace<YOUR_TENANT_ID>with the tenant ID.
+<YOUR_TENANT_ID>
+azd env set AZURE_TENANT_ID <YOUR_TENANT_ID>
+azd env set AZURE_TENANT_ID <YOUR_TENANT_ID>
+Note
+If you have a conditional access policy on your user tenant, you need tospecify an authentication tenant.
+Deploy the chat app to Azure
+Deployment consists of the following steps:
+Create the Azure resources.
+Upload the documents.
+Create the Microsoft Entra identity apps (client and server).
+Turn on identity for the hosting resource.
+Run the following Azure Developer CLI command to provision the Azure resources and deploy the source code.azd up
+Run the following Azure Developer CLI command to provision the Azure resources and deploy the source code.
+azd up
+azd up
+Use the following table to answer theAZDdeployment prompts.PromptAnswerEnvironment nameUse a short name with identifying information such as your alias and app. And example istjones-secure-chat.SubscriptionSelect a subscription in which to create the resources.Location for Azure resourcesSelect a location near you.Location fordocumentIntelligentResourceGroupLocationSelect a location near you.Location foropenAIResourceGroupLocationSelect a location near you.Wait 5 or 10 minutes after the app deploys to allow the app to start up.
+Use the following table to answer theAZDdeployment prompts.
+AZD
+tjones-secure-chat
+documentIntelligentResourceGroupLocation
+openAIResourceGroupLocation
+Wait 5 or 10 minutes after the app deploys to allow the app to start up.
+After the application successfully deploys, a URL appears in the terminal.
+After the application successfully deploys, a URL appears in the terminal.
+Select the URL labeled(â) Done: Deploying service webappto open the chat application in a browser.
+Select the URL labeled(â) Done: Deploying service webappto open the chat application in a browser.
+(â) Done: Deploying service webapp
+
+Agree to the app authentication pop-up.
+Agree to the app authentication pop-up.
+When the chat app appears, notice in the upper-right corner that your user is signed in.
+When the chat app appears, notice in the upper-right corner that your user is signed in.
+OpenDeveloper settingsand notice that both of the following options are selected and disabled for change:Use oid security filterUse groups security filter
+OpenDeveloper settingsand notice that both of the following options are selected and disabled for change:
+Use oid security filter
+Use groups security filter
+Select the card withWhat does a product manager do?.
+Select the card withWhat does a product manager do?.
+You get an answer like:The provided sources do not contain specific information about the role of a Product Manager at Contoso Electronics.
+You get an answer like:The provided sources do not contain specific information about the role of a Product Manager at Contoso Electronics.
+
+Open access to a document for a user
+Turn on your permissions for the exact document so that youcanget the answer. You need several pieces of information:
+Azure StorageAccount nameContainer nameBlob/document URL forrole_library.pdf
+Account name
+Container name
+Blob/document URL forrole_library.pdf
+role_library.pdf
+User's ID in Microsoft Entra ID
+When this information is known, update the Azure AI Search indexoidsfield for therole_library.pdfdocument.
+oids
+role_library.pdf
+Get the URL for a document in storage
+In the.azurefolder at the root of the project, find the environment directory, and open the.envfile with that directory.
+In the.azurefolder at the root of the project, find the environment directory, and open the.envfile with that directory.
+.azure
+.env
+Search for theAZURE_STORAGE_ACCOUNTentry and copy its value.
+Search for theAZURE_STORAGE_ACCOUNTentry and copy its value.
+AZURE_STORAGE_ACCOUNT
+Use the following Azure CLI commands to get the URL of therole_library.pdfblob in thecontentcontainer.az storage blob url \
+    --account-name <REPLACE_WITH_AZURE_STORAGE_ACCOUNT \
+    --container-name 'content' \
+    --name 'role_library.pdf'ParameterPurpose--account-nameAzure Storage account name.--container-nameThe container name in this sample iscontent.--nameThe blob name in this step isrole_library.pdf.
+Use the following Azure CLI commands to get the URL of therole_library.pdfblob in thecontentcontainer.
+role_library.pdf
+content
+az storage blob url \
+    --account-name <REPLACE_WITH_AZURE_STORAGE_ACCOUNT \
+    --container-name 'content' \
+    --name 'role_library.pdf'
+az storage blob url \
+    --account-name <REPLACE_WITH_AZURE_STORAGE_ACCOUNT \
+    --container-name 'content' \
+    --name 'role_library.pdf'
+content
+role_library.pdf
+Copy the blob URL to use later.
+Copy the blob URL to use later.
+Get your user ID
+In the chat app, selectDeveloper settings.
+In theID Token claimssection, copy yourobjectidentifierparameter. This parameter is known in the next section asUSER_OBJECT_ID.
+objectidentifier
+USER_OBJECT_ID
+Provide user access to a document in Azure Search
+Use the following script to change theoidsfield in Azure AI Search forrole_library.pdfso that you have access to it../scripts/manageacl.sh \
+    -v \
+    --acl-type oids \
+    --acl-action add \
+    --acl <REPLACE_WITH_YOUR_USER_OBJECT_ID> \
+    --url <REPLACE_WITH_YOUR_DOCUMENT_URL>ParameterPurpose-vVerbose output.--acl-typeGroup or user OIDs:oids.--acl-actionAddto a Search index field. Other options includeremove,remove_all, andlist.--aclGroup or userUSER_OBJECT_ID.--urlThe file's location in Azure Storage, such ashttps://MYSTORAGENAME.blob.core.windows.net/content/role_library.pdf. Don't surround the URL with quotation marks in the CLI command.
+Use the following script to change theoidsfield in Azure AI Search forrole_library.pdfso that you have access to it.
+oids
+role_library.pdf
+./scripts/manageacl.sh \
+    -v \
+    --acl-type oids \
+    --acl-action add \
+    --acl <REPLACE_WITH_YOUR_USER_OBJECT_ID> \
+    --url <REPLACE_WITH_YOUR_DOCUMENT_URL>
+./scripts/manageacl.sh \
+    -v \
+    --acl-type oids \
+    --acl-action add \
+    --acl <REPLACE_WITH_YOUR_USER_OBJECT_ID> \
+    --url <REPLACE_WITH_YOUR_DOCUMENT_URL>
+oids
+remove
+remove_all
+list
+USER_OBJECT_ID
+https://MYSTORAGENAME.blob.core.windows.net/content/role_library.pdf
+The console output for this command looks like:Loading azd .env file from current environment...
+Creating Python virtual environment "app/backend/.venv"...
+Installing dependencies from "requirements.txt" into virtual environment (in quiet mode)...
+Running manageacl.py. Arguments to script: -v --acl-type oids --acl-action add --acl 00000000-0000-0000-0000-000000000000 --url https://mystorage.blob.core.windows.net/content/role_library.pdf
+Found 58 search documents with storageUrl https://mystorage.blob.core.windows.net/content/role_library.pdf
+Adding acl 00000000-0000-0000-0000-000000000000 to 58 search documents
+The console output for this command looks like:
+Loading azd .env file from current environment...
+Creating Python virtual environment "app/backend/.venv"...
+Installing dependencies from "requirements.txt" into virtual environment (in quiet mode)...
+Running manageacl.py. Arguments to script: -v --acl-type oids --acl-action add --acl 00000000-0000-0000-0000-000000000000 --url https://mystorage.blob.core.windows.net/content/role_library.pdf
+Found 58 search documents with storageUrl https://mystorage.blob.core.windows.net/content/role_library.pdf
+Adding acl 00000000-0000-0000-0000-000000000000 to 58 search documents
+Loading azd .env file from current environment...
+Creating Python virtual environment "app/backend/.venv"...
+Installing dependencies from "requirements.txt" into virtual environment (in quiet mode)...
+Running manageacl.py. Arguments to script: -v --acl-type oids --acl-action add --acl 00000000-0000-0000-0000-000000000000 --url https://mystorage.blob.core.windows.net/content/role_library.pdf
+Found 58 search documents with storageUrl https://mystorage.blob.core.windows.net/content/role_library.pdf
+Adding acl 00000000-0000-0000-0000-000000000000 to 58 search documents
+Optionally, use the following command to verify that your permission is listed for the file in Azure AI Search../scripts/manageacl.sh \
+    -v \
+    --acl-type oids \
+    --acl-action list \
+    --acl <REPLACE_WITH_YOUR_USER_OBJECT_ID> \
+    --url <REPLACE_WITH_YOUR_DOCUMENT_URL>ParameterPurpose-vVerbose output.--acl-typeGroup or user OIDs:oids.--acl-actionList a Search index fieldoids. Other options includeremove,remove_all, andlist.--aclGroup or user'sUSER_OBJECT_IDparameter.--urlThe file's location in that shows, such ashttps://MYSTORAGENAME.blob.core.windows.net/content/role_library.pdf. Don't surround the URL with quotation marks in the CLI command.
+Optionally, use the following command to verify that your permission is listed for the file in Azure AI Search.
+./scripts/manageacl.sh \
+    -v \
+    --acl-type oids \
+    --acl-action list \
+    --acl <REPLACE_WITH_YOUR_USER_OBJECT_ID> \
+    --url <REPLACE_WITH_YOUR_DOCUMENT_URL>
+./scripts/manageacl.sh \
+    -v \
+    --acl-type oids \
+    --acl-action list \
+    --acl <REPLACE_WITH_YOUR_USER_OBJECT_ID> \
+    --url <REPLACE_WITH_YOUR_DOCUMENT_URL>
+oids
+oids
+remove
+remove_all
+list
+USER_OBJECT_ID
+https://MYSTORAGENAME.blob.core.windows.net/content/role_library.pdf
+The console output for this command looks like:Loading azd .env file from current environment...
+Creating Python virtual environment "app/backend/.venv"...
+Installing dependencies from "requirements.txt" into virtual environment (in quiet mode)...
+Running manageacl.py. Arguments to script: -v --acl-type oids --acl-action view --acl 00000000-0000-0000-0000-000000000000 --url https://mystorage.blob.core.windows.net/content/role_library.pdf
+Found 58 search documents with storageUrl https://mystorage.blob.core.windows.net/content/role_library.pdf
+[00000000-0000-0000-0000-000000000000]The array at the end of the output includes yourUSER_OBJECT_IDparameter and is used to determine if the document is used in the answer with Azure OpenAI.
+The console output for this command looks like:
+Loading azd .env file from current environment...
+Creating Python virtual environment "app/backend/.venv"...
+Installing dependencies from "requirements.txt" into virtual environment (in quiet mode)...
+Running manageacl.py. Arguments to script: -v --acl-type oids --acl-action view --acl 00000000-0000-0000-0000-000000000000 --url https://mystorage.blob.core.windows.net/content/role_library.pdf
+Found 58 search documents with storageUrl https://mystorage.blob.core.windows.net/content/role_library.pdf
+[00000000-0000-0000-0000-000000000000]
+Loading azd .env file from current environment...
+Creating Python virtual environment "app/backend/.venv"...
+Installing dependencies from "requirements.txt" into virtual environment (in quiet mode)...
+Running manageacl.py. Arguments to script: -v --acl-type oids --acl-action view --acl 00000000-0000-0000-0000-000000000000 --url https://mystorage.blob.core.windows.net/content/role_library.pdf
+Found 58 search documents with storageUrl https://mystorage.blob.core.windows.net/content/role_library.pdf
+[00000000-0000-0000-0000-000000000000]
+The array at the end of the output includes yourUSER_OBJECT_IDparameter and is used to determine if the document is used in the answer with Azure OpenAI.
+USER_OBJECT_ID
+Verify that Azure AI Search contains your USER_OBJECT_ID
+Open theAzure portaland search forAI Search.
+Open theAzure portaland search forAI Search.
+AI Search
+Select your search resource from the list.
+Select your search resource from the list.
+SelectSearch management>Indexes.
+SelectSearch management>Indexes.
+Selectgptkbindex.
+Selectgptkbindex.
+SelectView>JSON view.
+SelectView>JSON view.
+Replace the JSON with the following JSON:{
+  "search": "*",
+  "select": "sourcefile, oids",
+  "filter": "oids/any()"
+}This JSON searches all documents where theoidsfield has any value and returns thesourcefileandoidsfields.
+Replace the JSON with the following JSON:
+{
+  "search": "*",
+  "select": "sourcefile, oids",
+  "filter": "oids/any()"
+}
+{
+  "search": "*",
+  "select": "sourcefile, oids",
+  "filter": "oids/any()"
+}
+This JSON searches all documents where theoidsfield has any value and returns thesourcefileandoidsfields.
+oids
+sourcefile
+oids
+If therole_library.pdfdoesn't have your OID, return to theProvide user access to a document in Azure Searchsection and complete the steps.
+If therole_library.pdfdoesn't have your OID, return to theProvide user access to a document in Azure Searchsection and complete the steps.
+role_library.pdf
+Verify user access to the document
+If you completed the steps but didn't see the correct answer, verify that yourUSER_OBJECT_IDparameter is set correctly in Azure AI Search forrole_library.pdf.
+USER_OBJECT_ID
+role_library.pdf
+Return to the chat app. You might need to sign in again.
+Return to the chat app. You might need to sign in again.
+Enter the same query so that therole_librarycontent is used in the Azure OpenAI answer:What does a product manager do?.
+Enter the same query so that therole_librarycontent is used in the Azure OpenAI answer:What does a product manager do?.
+role_library
+What does a product manager do?
+View the result, which now includes the appropriate answer from the role library document.
+View the result, which now includes the appropriate answer from the role library document.
+
+Clean up resources
+The following steps walk you through the process of cleaning up the resources you used.
+Clean up Azure resources
+The Azure resources created in this article are billed to your Azure subscription. If you don't expect to need these resources in the future, delete them to avoid incurring more charges.
+Run the following Azure Developer CLI command to delete the Azure resources and remove the source code.
+azd down --purge
+azd down --purge
+Clean up GitHub Codespaces and Visual Studio Code
+The following steps walk you through the process of cleaning up the resources you used.
+GitHub Codespaces
+Visual Studio Code
+Deleting the GitHub Codespaces environment ensures that you can maximize the amount of free per-core hours entitlement that you get for your account.
+Important
+For more information about your GitHub account's entitlements, seeGitHub Codespaces monthly included storage and core hours.
+Sign in to theGitHub Codespaces dashboard.
+Sign in to theGitHub Codespaces dashboard.
+Locate your currently running codespaces that are sourced from theAzure-Samples/azure-search-openai-demoGitHub repository.
+Locate your currently running codespaces that are sourced from theAzure-Samples/azure-search-openai-demoGitHub repository.
+
+Open the context menu for the codespace and then selectDelete.
+Open the context menu for the codespace and then selectDelete.
+
+You aren't necessarily required to clean up your local environment, but you can stop the running development container and return to running Visual Studio Code in the context of a local workspace.
+Open theCommandpalette and search for theDev Containerscommands.
+Open theCommandpalette and search for theDev Containerscommands.
+SelectDev Containers: Reopen Folder Locally.
+SelectDev Containers: Reopen Folder Locally.
+
+Tip
+Visual Studio Code stops the running development container, but the container still exists in Docker in a stopped state. You always have the option to delete the container instance, container image, and volumes from Docker to free up more space on your local machine.
+Get help
+This sample repository offerstroubleshooting information.
+Troubleshooting
+This section offers troubleshooting for issues specific to this article.
+When your authentication is in a separate tenant from your hosting application, you need to set that authentication tenant with the following process.
+Run the following command to configure the sample to use a second tenant for the authentication tenant.azd env set AZURE_AUTH_TENANT_ID <REPLACE-WITH-YOUR-TENANT-ID>ParameterPurposeAZURE_AUTH_TENANT_IDIfAZURE_AUTH_TENANT_IDis set, it's the tenant that hosts the app.
+Run the following command to configure the sample to use a second tenant for the authentication tenant.
+azd env set AZURE_AUTH_TENANT_ID <REPLACE-WITH-YOUR-TENANT-ID>
+azd env set AZURE_AUTH_TENANT_ID <REPLACE-WITH-YOUR-TENANT-ID>
+AZURE_AUTH_TENANT_ID
+AZURE_AUTH_TENANT_ID
+Redeploy the solution with the following command:azd up
+Redeploy the solution with the following command:
+azd up
+azd up
+Related content
+Build achat app with Azure OpenAIbest-practices solution architecture.
+Learn aboutaccess control in generative AI apps with Azure AI Search.
+Build anenterprise-ready Azure OpenAI solution with Azure API Management.
+SeeAzure AI Search: Outperforming vector search with hybrid retrieval and ranking capabilities.
+Feedback
+Was this page helpful?
+Additional resources

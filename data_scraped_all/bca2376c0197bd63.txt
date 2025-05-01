@@ -1,0 +1,901 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Autoscale online endpoints in Azure Machine Learning
+Article
+2024-08-28
+16 contributors
+In this article
+APPLIES TO:Azure CLI ml extension v2 (current)Python SDK azure-ai-ml v2 (current)
+In this article, you learn to manage resource usage in a deployment by configuring autoscaling based on metrics and schedules. The autoscale process lets you automatically run the right amount of resources to handle the load on your application.Online endpointsin Azure Machine Learning support autoscaling through integration with the autoscale feature in Azure Monitor.
+Azure Monitor autoscale allows you to set rules that trigger one or more autoscale actions when conditions of the rules are met. You can configure metrics-based scaling (such as CPU utilization greater than 70%), schedule-based scaling (such as scaling rules for peak business hours), or a combination of the two. For more information, seeOverview of autoscale in Microsoft Azure.
+
+You can currently manage autoscaling by using the Azure CLI, the REST APIs, Azure Resource Manager, the Python SDK, or the browser-based Azure portal.
+Prerequisites
+A deployed endpoint. For more information, seeDeploy and score a machine learning model by using an online endpoint.
+A deployed endpoint. For more information, seeDeploy and score a machine learning model by using an online endpoint.
+To use autoscale, the rolemicrosoft.insights/autoscalesettings/writemust be assigned to the identity that manages autoscale. You can use any built-in or custom roles that allow this action. For general guidance on managing roles for Azure Machine Learning, seeManage users and roles. For more on autoscale settings from Azure Monitor, seeMicrosoft.Insights autoscalesettings.
+To use autoscale, the rolemicrosoft.insights/autoscalesettings/writemust be assigned to the identity that manages autoscale. You can use any built-in or custom roles that allow this action. For general guidance on managing roles for Azure Machine Learning, seeManage users and roles. For more on autoscale settings from Azure Monitor, seeMicrosoft.Insights autoscalesettings.
+microsoft.insights/autoscalesettings/write
+To use the Python SDK to manage the Azure Monitor service, install theazure-mgmt-monitorpackage with the following command:pip install azure-mgmt-monitor
+To use the Python SDK to manage the Azure Monitor service, install theazure-mgmt-monitorpackage with the following command:
+azure-mgmt-monitor
+pip install azure-mgmt-monitor
+pip install azure-mgmt-monitor
+Define autoscale profile
+To enable autoscale for an online endpoint, you first define an autoscale profile. The profile specifies the default, minimum, and maximum scale set capacity. The following example shows how to set the number of virtual machine (VM) instances for the default, minimum, and maximum scale capacity.
+Azure CLI
+Python SDK
+Studio
+APPLIES TO:Azure CLI ml extensionv2 (current)
+If you haven't already set the defaults for the Azure CLI, save your default settings. To avoid passing in the values for your subscription, workspace, and resource group multiple times, run this code:
+az account set --subscription <subscription ID>
+az configure --defaults workspace=<Azure Machine Learning workspace name> group=<resource group>
+az account set --subscription <subscription ID>
+az configure --defaults workspace=<Azure Machine Learning workspace name> group=<resource group>
+Set the endpoint and deployment names:# set your existing endpoint name
+ENDPOINT_NAME=your-endpoint-name
+DEPLOYMENT_NAME=blue
+Set the endpoint and deployment names:
+# set your existing endpoint name
+ENDPOINT_NAME=your-endpoint-name
+DEPLOYMENT_NAME=blue
+# set your existing endpoint name
+ENDPOINT_NAME=your-endpoint-name
+DEPLOYMENT_NAME=blue
+Get the Azure Resource Manager ID of the deployment and endpoint:# ARM id of the deployment
+DEPLOYMENT_RESOURCE_ID=$(az ml online-deployment show -e $ENDPOINT_NAME -n $DEPLOYMENT_NAME -o tsv --query "id")
+# ARM id of the deployment. todo: change to --query "id"
+ENDPOINT_RESOURCE_ID=$(az ml online-endpoint show -n $ENDPOINT_NAME -o tsv --query "properties.\"azureml.onlineendpointid\"")
+# set a unique name for autoscale settings for this deployment. The below will append a random number to make the name unique.
+AUTOSCALE_SETTINGS_NAME=autoscale-$ENDPOINT_NAME-$DEPLOYMENT_NAME-`echo $RANDOM`
+Get the Azure Resource Manager ID of the deployment and endpoint:
+# ARM id of the deployment
+DEPLOYMENT_RESOURCE_ID=$(az ml online-deployment show -e $ENDPOINT_NAME -n $DEPLOYMENT_NAME -o tsv --query "id")
+# ARM id of the deployment. todo: change to --query "id"
+ENDPOINT_RESOURCE_ID=$(az ml online-endpoint show -n $ENDPOINT_NAME -o tsv --query "properties.\"azureml.onlineendpointid\"")
+# set a unique name for autoscale settings for this deployment. The below will append a random number to make the name unique.
+AUTOSCALE_SETTINGS_NAME=autoscale-$ENDPOINT_NAME-$DEPLOYMENT_NAME-`echo $RANDOM`
+# ARM id of the deployment
+DEPLOYMENT_RESOURCE_ID=$(az ml online-deployment show -e $ENDPOINT_NAME -n $DEPLOYMENT_NAME -o tsv --query "id")
+# ARM id of the deployment. todo: change to --query "id"
+ENDPOINT_RESOURCE_ID=$(az ml online-endpoint show -n $ENDPOINT_NAME -o tsv --query "properties.\"azureml.onlineendpointid\"")
+# set a unique name for autoscale settings for this deployment. The below will append a random number to make the name unique.
+AUTOSCALE_SETTINGS_NAME=autoscale-$ENDPOINT_NAME-$DEPLOYMENT_NAME-`echo $RANDOM`
+Create the autoscale profile:az monitor autoscale create \
+  --name $AUTOSCALE_SETTINGS_NAME \
+  --resource $DEPLOYMENT_RESOURCE_ID \
+  --min-count 2 --max-count 5 --count 2
+Create the autoscale profile:
+az monitor autoscale create \
+  --name $AUTOSCALE_SETTINGS_NAME \
+  --resource $DEPLOYMENT_RESOURCE_ID \
+  --min-count 2 --max-count 5 --count 2
+az monitor autoscale create \
+  --name $AUTOSCALE_SETTINGS_NAME \
+  --resource $DEPLOYMENT_RESOURCE_ID \
+  --min-count 2 --max-count 5 --count 2
+Note
+For more information, see theaz monitor autoscalereference.
+APPLIES TO:Python SDK azure-ai-mlv2 (current)
+Import the necessary modules:from azure.ai.ml import MLClient
+from azure.identity import DefaultAzureCredential
+from azure.mgmt.monitor import MonitorManagementClient
+from azure.mgmt.monitor.models import AutoscaleProfile, ScaleRule, MetricTrigger, ScaleAction, Recurrence, RecurrentSchedule
+import random 
+import datetime
+Import the necessary modules:
+from azure.ai.ml import MLClient
+from azure.identity import DefaultAzureCredential
+from azure.mgmt.monitor import MonitorManagementClient
+from azure.mgmt.monitor.models import AutoscaleProfile, ScaleRule, MetricTrigger, ScaleAction, Recurrence, RecurrentSchedule
+import random 
+import datetime
+from azure.ai.ml import MLClient
+from azure.identity import DefaultAzureCredential
+from azure.mgmt.monitor import MonitorManagementClient
+from azure.mgmt.monitor.models import AutoscaleProfile, ScaleRule, MetricTrigger, ScaleAction, Recurrence, RecurrentSchedule
+import random 
+import datetime
+Define variables for the workspace, endpoint, and deployment:subscription_id = "<YOUR-SUBSCRIPTION-ID>"
+resource_group = "<YOUR-RESOURCE-GROUP>"
+workspace = "<YOUR-WORKSPACE>"
+
+endpoint_name = "<YOUR-ENDPOINT-NAME>"
+deployment_name = "blue"
+Define variables for the workspace, endpoint, and deployment:
+subscription_id = "<YOUR-SUBSCRIPTION-ID>"
+resource_group = "<YOUR-RESOURCE-GROUP>"
+workspace = "<YOUR-WORKSPACE>"
+
+endpoint_name = "<YOUR-ENDPOINT-NAME>"
+deployment_name = "blue"
+subscription_id = "<YOUR-SUBSCRIPTION-ID>"
+resource_group = "<YOUR-RESOURCE-GROUP>"
+workspace = "<YOUR-WORKSPACE>"
+
+endpoint_name = "<YOUR-ENDPOINT-NAME>"
+deployment_name = "blue"
+Get Azure Machine Learning and Azure Monitor clients:credential = DefaultAzureCredential()
+ml_client = MLClient(
+    credential, subscription_id, resource_group, workspace
+)
+
+mon_client = MonitorManagementClient(
+    credential, subscription_id
+)
+Get Azure Machine Learning and Azure Monitor clients:
+credential = DefaultAzureCredential()
+ml_client = MLClient(
+    credential, subscription_id, resource_group, workspace
+)
+
+mon_client = MonitorManagementClient(
+    credential, subscription_id
+)
+credential = DefaultAzureCredential()
+ml_client = MLClient(
+    credential, subscription_id, resource_group, workspace
+)
+
+mon_client = MonitorManagementClient(
+    credential, subscription_id
+)
+Get the endpoint and deployment objects:deployment = ml_client.online_deployments.get(
+    deployment_name, endpoint_name
+)
+
+endpoint = ml_client.online_endpoints.get(
+    endpoint_name
+)
+Get the endpoint and deployment objects:
+deployment = ml_client.online_deployments.get(
+    deployment_name, endpoint_name
+)
+
+endpoint = ml_client.online_endpoints.get(
+    endpoint_name
+)
+deployment = ml_client.online_deployments.get(
+    deployment_name, endpoint_name
+)
+
+endpoint = ml_client.online_endpoints.get(
+    endpoint_name
+)
+Create an autoscale profile:# Set a unique name for autoscale settings for this deployment. The following code appends a random number to create a unique name.
+autoscale_settings_name = f"autoscale-{endpoint_name}-{deployment_name}-{random.randint(0,1000)}"
+
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = []
+            )
+        ]
+    }
+)
+Create an autoscale profile:
+# Set a unique name for autoscale settings for this deployment. The following code appends a random number to create a unique name.
+autoscale_settings_name = f"autoscale-{endpoint_name}-{deployment_name}-{random.randint(0,1000)}"
+
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = []
+            )
+        ]
+    }
+)
+# Set a unique name for autoscale settings for this deployment. The following code appends a random number to create a unique name.
+autoscale_settings_name = f"autoscale-{endpoint_name}-{deployment_name}-{random.randint(0,1000)}"
+
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = []
+            )
+        ]
+    }
+)
+InAzure Machine Learning studio, go to your workspace, and selectEndpointsfrom the left menu.
+InAzure Machine Learning studio, go to your workspace, and selectEndpointsfrom the left menu.
+In the list of available endpoints, select the endpoint to configure:
+In the list of available endpoints, select the endpoint to configure:
+
+On theDetailstab for the selected endpoint, selectConfigure auto scaling:
+On theDetailstab for the selected endpoint, selectConfigure auto scaling:
+
+For theChoose how to scale your resourcesoption, selectCustom autoscaleto begin the configuration.
+For theChoose how to scale your resourcesoption, selectCustom autoscaleto begin the configuration.
+For theDefaultscale condition option, configure the following values:Scale mode: SelectScale based on a metric.Instance limits>Minimum: Set the value to 2.Instance limits>Maximum: Set the value to 5.Instance limits>Default: Set the value to 2.
+For theDefaultscale condition option, configure the following values:
+Scale mode: SelectScale based on a metric.
+Instance limits>Minimum: Set the value to 2.
+Instance limits>Maximum: Set the value to 5.
+Instance limits>Default: Set the value to 2.
+
+Leave the configuration pane open. In the next section, you configure theRulessettings.
+Create scale-out rule based on deployment metrics
+A common scale-out rule is to increase the number of VM instances when the average CPU load is high. The following example shows how to allocate two more nodes (up to the maximum) if the CPU average load is greater than 70% for 5 minutes:
+Azure CLI
+Python SDK
+Studio
+APPLIES TO:Azure CLI ml extensionv2 (current)
+az monitor autoscale rule create \
+  --autoscale-name $AUTOSCALE_SETTINGS_NAME \
+  --condition "CpuUtilizationPercentage > 70 avg 5m" \
+  --scale out 2
+az monitor autoscale rule create \
+  --autoscale-name $AUTOSCALE_SETTINGS_NAME \
+  --condition "CpuUtilizationPercentage > 70 avg 5m" \
+  --scale out 2
+The rule is part of themy-scale-settingsprofile, whereautoscale-namematches thenameportion of the profile. The value of the ruleconditionargument indicates the rule triggers when "The average CPU consumption among the VM instances exceeds 70% for 5 minutes." When the condition is satisfied, two more VM instances are allocated.
+my-scale-settings
+autoscale-name
+name
+condition
+Note
+For more information, see theaz monitor autoscaleAzure CLI syntax reference.
+APPLIES TO:Python SDK azure-ai-mlv2 (current)
+Create the rule definition:rule_scale_out = ScaleRule(
+    metric_trigger = MetricTrigger(
+        metric_name="CpuUtilizationPercentage",
+        metric_resource_uri = deployment.id, 
+        time_grain = datetime.timedelta(minutes = 1),
+        statistic = "Average",
+        operator = "GreaterThan", 
+        time_aggregation = "Last",
+        time_window = datetime.timedelta(minutes = 5), 
+        threshold = 70
+    ), 
+    scale_action = ScaleAction(
+        direction = "Increase", 
+        type = "ChangeCount", 
+        value = 2, 
+        cooldown = datetime.timedelta(hours = 1)
+    )
+)This rule refers to the last 5-minute average of theCPUUtilizationpercentagevalue from the argumentsmetric_name,time_window, andtime_aggregation. When the value of the metric is greater than thethresholdof 70, the deployment allocates two more VM instances.
+Create the rule definition:
+rule_scale_out = ScaleRule(
+    metric_trigger = MetricTrigger(
+        metric_name="CpuUtilizationPercentage",
+        metric_resource_uri = deployment.id, 
+        time_grain = datetime.timedelta(minutes = 1),
+        statistic = "Average",
+        operator = "GreaterThan", 
+        time_aggregation = "Last",
+        time_window = datetime.timedelta(minutes = 5), 
+        threshold = 70
+    ), 
+    scale_action = ScaleAction(
+        direction = "Increase", 
+        type = "ChangeCount", 
+        value = 2, 
+        cooldown = datetime.timedelta(hours = 1)
+    )
+)
+rule_scale_out = ScaleRule(
+    metric_trigger = MetricTrigger(
+        metric_name="CpuUtilizationPercentage",
+        metric_resource_uri = deployment.id, 
+        time_grain = datetime.timedelta(minutes = 1),
+        statistic = "Average",
+        operator = "GreaterThan", 
+        time_aggregation = "Last",
+        time_window = datetime.timedelta(minutes = 5), 
+        threshold = 70
+    ), 
+    scale_action = ScaleAction(
+        direction = "Increase", 
+        type = "ChangeCount", 
+        value = 2, 
+        cooldown = datetime.timedelta(hours = 1)
+    )
+)
+This rule refers to the last 5-minute average of theCPUUtilizationpercentagevalue from the argumentsmetric_name,time_window, andtime_aggregation. When the value of the metric is greater than thethresholdof 70, the deployment allocates two more VM instances.
+CPUUtilizationpercentage
+metric_name
+time_window
+time_aggregation
+threshold
+Update themy-scale-settingsprofile to include this rule:mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = [
+                    rule_scale_out
+                ]
+            )
+        ]
+    }
+)
+Update themy-scale-settingsprofile to include this rule:
+my-scale-settings
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = [
+                    rule_scale_out
+                ]
+            )
+        ]
+    }
+)
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = [
+                    rule_scale_out
+                ]
+            )
+        ]
+    }
+)
+The following steps continue with the autoscale configuration.
+For theRulesoption, select theAdd a rulelink. TheScale rulepage opens.
+For theRulesoption, select theAdd a rulelink. TheScale rulepage opens.
+On theScale rulepage, configure the following values:Metric name: SelectCPU Utilization Percentage.Operator: Set toGreater than.Metric threshold: Set the value to 70.Duration (minutes): Set the value to 5.Time grain statistic: SelectAverage.Operation: SelectIncrease count by.Instance count: Set the value to 2.
+On theScale rulepage, configure the following values:
+Metric name: SelectCPU Utilization Percentage.
+Operator: Set toGreater than.
+Metric threshold: Set the value to 70.
+Duration (minutes): Set the value to 5.
+Time grain statistic: SelectAverage.
+Operation: SelectIncrease count by.
+Instance count: Set the value to 2.
+SelectAddto create the rule:
+SelectAddto create the rule:
+
+Leave the configuration pane open. In the next section, you adjust theRulessettings.
+Create scale-in rule based on deployment metrics
+When the average CPU load is light, a scale-in rule can reduce the number of VM instances. The following example shows how to release a single node down to a minimum of two, if the CPU load is less than 30% for 5 minutes.
+Azure CLI
+Python SDK
+Studio
+APPLIES TO:Azure CLI ml extensionv2 (current)
+az monitor autoscale rule create \
+  --autoscale-name $AUTOSCALE_SETTINGS_NAME \
+  --condition "CpuUtilizationPercentage < 25 avg 5m" \
+  --scale in 1
+az monitor autoscale rule create \
+  --autoscale-name $AUTOSCALE_SETTINGS_NAME \
+  --condition "CpuUtilizationPercentage < 25 avg 5m" \
+  --scale in 1
+APPLIES TO:Python SDK azure-ai-mlv2 (current)
+Create the rule definition:rule_scale_in = ScaleRule(
+    metric_trigger = MetricTrigger(
+        metric_name="CpuUtilizationPercentage",
+        metric_resource_uri = deployment.id, 
+        time_grain = datetime.timedelta(minutes = 1),
+        statistic = "Average",
+        operator = "LessThan", 
+        time_aggregation = "Last",
+        time_window = datetime.timedelta(minutes = 5), 
+        threshold = 30
+    ), 
+    scale_action = ScaleAction(
+        direction = "Increase", 
+        type = "ChangeCount", 
+        value = 1, 
+        cooldown = datetime.timedelta(hours = 1)
+    )
+)
+Create the rule definition:
+rule_scale_in = ScaleRule(
+    metric_trigger = MetricTrigger(
+        metric_name="CpuUtilizationPercentage",
+        metric_resource_uri = deployment.id, 
+        time_grain = datetime.timedelta(minutes = 1),
+        statistic = "Average",
+        operator = "LessThan", 
+        time_aggregation = "Last",
+        time_window = datetime.timedelta(minutes = 5), 
+        threshold = 30
+    ), 
+    scale_action = ScaleAction(
+        direction = "Increase", 
+        type = "ChangeCount", 
+        value = 1, 
+        cooldown = datetime.timedelta(hours = 1)
+    )
+)
+rule_scale_in = ScaleRule(
+    metric_trigger = MetricTrigger(
+        metric_name="CpuUtilizationPercentage",
+        metric_resource_uri = deployment.id, 
+        time_grain = datetime.timedelta(minutes = 1),
+        statistic = "Average",
+        operator = "LessThan", 
+        time_aggregation = "Last",
+        time_window = datetime.timedelta(minutes = 5), 
+        threshold = 30
+    ), 
+    scale_action = ScaleAction(
+        direction = "Increase", 
+        type = "ChangeCount", 
+        value = 1, 
+        cooldown = datetime.timedelta(hours = 1)
+    )
+)
+Update themy-scale-settingsprofile to include this rule:mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = [
+                    rule_scale_out, 
+                    rule_scale_in
+                ]
+            )
+        ]
+    }
+)
+Update themy-scale-settingsprofile to include this rule:
+my-scale-settings
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = [
+                    rule_scale_out, 
+                    rule_scale_in
+                ]
+            )
+        ]
+    }
+)
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = [
+                    rule_scale_out, 
+                    rule_scale_in
+                ]
+            )
+        ]
+    }
+)
+The following steps adjust theRulesconfiguration to support a scale in rule.
+For theRulesoption, select theAdd a rulelink. TheScale rulepage opens.
+For theRulesoption, select theAdd a rulelink. TheScale rulepage opens.
+On theScale rulepage, configure the following values:Metric name: SelectCPU Utilization Percentage.Operator: Set toLess than.Metric threshold: Set the value to 30.Duration (minutes): Set the value to 5.Time grain statistic: SelectAverage.Operation: SelectDecrease count by.Instance count: Set the value to 1.
+On theScale rulepage, configure the following values:
+Metric name: SelectCPU Utilization Percentage.
+Operator: Set toLess than.
+Metric threshold: Set the value to 30.
+Duration (minutes): Set the value to 5.
+Time grain statistic: SelectAverage.
+Operation: SelectDecrease count by.
+Instance count: Set the value to 1.
+SelectAddto create the rule:If you configure both scale-out and scale-in rules, your rules look similar to the following screenshot. The rules specify that if average CPU load exceeds 70% for 5 minutes, two more nodes should be allocated, up to the limit of five. If CPU load is less than 30% for 5 minutes, a single node should be released, down to the minimum of two.
+SelectAddto create the rule:
+
+If you configure both scale-out and scale-in rules, your rules look similar to the following screenshot. The rules specify that if average CPU load exceeds 70% for 5 minutes, two more nodes should be allocated, up to the limit of five. If CPU load is less than 30% for 5 minutes, a single node should be released, down to the minimum of two.
+
+Leave the configuration pane open. In the next section, you specify other scale settings.
+Create scale rule based on endpoint metrics
+In the previous sections, you created rules to scale in or out based on deployment metrics. You can also create a rule that applies to the deployment endpoint. In this section, you learn how to allocate another node when the request latency is greater than an average of 70 milliseconds for 5 minutes.
+Azure CLI
+Python SDK
+Studio
+APPLIES TO:Azure CLI ml extensionv2 (current)
+az monitor autoscale rule create \
+ --autoscale-name $AUTOSCALE_SETTINGS_NAME \
+ --condition "RequestLatency > 70 avg 5m" \
+ --scale out 1 \
+ --resource $ENDPOINT_RESOURCE_ID
+az monitor autoscale rule create \
+ --autoscale-name $AUTOSCALE_SETTINGS_NAME \
+ --condition "RequestLatency > 70 avg 5m" \
+ --scale out 1 \
+ --resource $ENDPOINT_RESOURCE_ID
+APPLIES TO:Python SDK azure-ai-mlv2 (current)
+Create the rule definition:rule_scale_out_endpoint = ScaleRule(
+    metric_trigger = MetricTrigger(
+        metric_name="RequestLatency",
+        metric_resource_uri = endpoint.id, 
+        time_grain = datetime.timedelta(minutes = 1),
+        statistic = "Average",
+        operator = "GreaterThan", 
+        time_aggregation = "Last",
+        time_window = datetime.timedelta(minutes = 5), 
+        threshold = 70
+    ), 
+    scale_action = ScaleAction(
+        direction = "Increase", 
+        type = "ChangeCount", 
+        value = 1, 
+        cooldown = datetime.timedelta(hours = 1)
+    )
+)This rule'smetric_resource_urifield now refers to the endpoint rather than the deployment.
+Create the rule definition:
+rule_scale_out_endpoint = ScaleRule(
+    metric_trigger = MetricTrigger(
+        metric_name="RequestLatency",
+        metric_resource_uri = endpoint.id, 
+        time_grain = datetime.timedelta(minutes = 1),
+        statistic = "Average",
+        operator = "GreaterThan", 
+        time_aggregation = "Last",
+        time_window = datetime.timedelta(minutes = 5), 
+        threshold = 70
+    ), 
+    scale_action = ScaleAction(
+        direction = "Increase", 
+        type = "ChangeCount", 
+        value = 1, 
+        cooldown = datetime.timedelta(hours = 1)
+    )
+)
+rule_scale_out_endpoint = ScaleRule(
+    metric_trigger = MetricTrigger(
+        metric_name="RequestLatency",
+        metric_resource_uri = endpoint.id, 
+        time_grain = datetime.timedelta(minutes = 1),
+        statistic = "Average",
+        operator = "GreaterThan", 
+        time_aggregation = "Last",
+        time_window = datetime.timedelta(minutes = 5), 
+        threshold = 70
+    ), 
+    scale_action = ScaleAction(
+        direction = "Increase", 
+        type = "ChangeCount", 
+        value = 1, 
+        cooldown = datetime.timedelta(hours = 1)
+    )
+)
+This rule'smetric_resource_urifield now refers to the endpoint rather than the deployment.
+metric_resource_uri
+Update themy-scale-settingsprofile to include this rule:mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = [
+                    rule_scale_out, 
+                    rule_scale_in,
+                    rule_scale_out_endpoint
+                ]
+            )
+        ]
+    }
+)
+Update themy-scale-settingsprofile to include this rule:
+my-scale-settings
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = [
+                    rule_scale_out, 
+                    rule_scale_in,
+                    rule_scale_out_endpoint
+                ]
+            )
+        ]
+    }
+)
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="my-scale-settings",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 5,
+                    "default" : 2
+                },
+                rules = [
+                    rule_scale_out, 
+                    rule_scale_in,
+                    rule_scale_out_endpoint
+                ]
+            )
+        ]
+    }
+)
+The following steps continue the rule configuration on theCustom autoscalepage.
+At the bottom of the page, select theAdd a scale conditionlink.
+At the bottom of the page, select theAdd a scale conditionlink.
+On theScale conditionpage, selectScale based on metric, and then select theAdd a rulelink. TheScale rulepage opens.
+On theScale conditionpage, selectScale based on metric, and then select theAdd a rulelink. TheScale rulepage opens.
+On theScale rulepage, configure the following values:Metric source: SelectOther resource.Resource type: SelectMachine Learning online endpoints.Resource: Select your endpoint.Metric name: SelectRequest latency.Operator: Set toGreater than.Metric threshold: Set the value to 70.Duration (minutes): Set the value to 5.Time grain statistic: SelectAverage.Operation: SelectIncrease count by.Instance count: Set the value to 1.
+On theScale rulepage, configure the following values:
+Metric source: SelectOther resource.
+Resource type: SelectMachine Learning online endpoints.
+Resource: Select your endpoint.
+Metric name: SelectRequest latency.
+Operator: Set toGreater than.
+Metric threshold: Set the value to 70.
+Duration (minutes): Set the value to 5.
+Time grain statistic: SelectAverage.
+Operation: SelectIncrease count by.
+Instance count: Set the value to 1.
+SelectAddto create the rule:
+SelectAddto create the rule:
+
+Find IDs for supported metrics
+You can use other metrics when you use the Azure CLI or the SDK to set up autoscale rules.
+For the names of endpoint metrics to use in code, see the values in theName in REST APIcolumn in the table inSupported metrics for Microsoft.MachineLearningServices/workspaces/onlineEndpoints.
+For the names of deployment metrics to use in code, see the values in theName in REST APIcolumn in the tables inSupported metrics for Microsoft.MachineLearningServices/workspaces/onlineEndpoints/deployments.
+Create scale rule based on schedule
+You can also create rules that apply only on certain days or at certain times. In this section, you create a rule that sets the node count to 2 on the weekends.
+Azure CLI
+Python SDK
+Studio
+APPLIES TO:Azure CLI ml extensionv2 (current)
+az monitor autoscale profile create \
+  --name weekend-profile \
+  --autoscale-name $AUTOSCALE_SETTINGS_NAME \
+  --min-count 2 --count 2 --max-count 2 \
+  --recurrence week sat sun --timezone "Pacific Standard Time"
+az monitor autoscale profile create \
+  --name weekend-profile \
+  --autoscale-name $AUTOSCALE_SETTINGS_NAME \
+  --min-count 2 --count 2 --max-count 2 \
+  --recurrence week sat sun --timezone "Pacific Standard Time"
+APPLIES TO:Python SDK azure-ai-mlv2 (current)
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="Default",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 2,
+                    "default" : 2
+                },
+                recurrence = Recurrence(
+                    frequency = "Week", 
+                    schedule = RecurrentSchedule(
+                        time_zone = "Pacific Standard Time", 
+                        days = ["Saturday", "Sunday"], 
+                        hours = [], 
+                        minutes = []
+                    )
+                )
+            )
+        ]
+    }
+)
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "profiles" : [
+            AutoscaleProfile(
+                name="Default",
+                capacity={
+                    "minimum" : 2, 
+                    "maximum" : 2,
+                    "default" : 2
+                },
+                recurrence = Recurrence(
+                    frequency = "Week", 
+                    schedule = RecurrentSchedule(
+                        time_zone = "Pacific Standard Time", 
+                        days = ["Saturday", "Sunday"], 
+                        hours = [], 
+                        minutes = []
+                    )
+                )
+            )
+        ]
+    }
+)
+The following steps configure the rule with options on theCustom autoscalepage in the studio.
+At the bottom of the page, select theAdd a scale conditionlink.
+At the bottom of the page, select theAdd a scale conditionlink.
+On theScale conditionpage, selectScale to a specific instance count, and then select theAdd a rulelink. TheScale rulepage opens.
+On theScale conditionpage, selectScale to a specific instance count, and then select theAdd a rulelink. TheScale rulepage opens.
+On theScale rulepage, configure the following values:Instance count: Set the value to 2.Schedule: SelectRepeat specific days.Set the schedule pattern: SelectRepeat everyandSaturdayandSunday.
+On theScale rulepage, configure the following values:
+Instance count: Set the value to 2.
+Schedule: SelectRepeat specific days.
+Set the schedule pattern: SelectRepeat everyandSaturdayandSunday.
+SelectAddto create the rule:
+SelectAddto create the rule:
+
+Enable or disable autoscale
+You can enable or disable a specific autoscale profile.
+Azure CLI
+Python SDK
+Studio
+APPLIES TO:Azure CLI ml extensionv2 (current)
+az monitor autoscale update \
+  --autoscale-name $AUTOSCALE_SETTINGS_NAME \
+  --enabled false
+az monitor autoscale update \
+  --autoscale-name $AUTOSCALE_SETTINGS_NAME \
+  --enabled false
+APPLIES TO:Python SDK azure-ai-mlv2 (current)
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "enabled" : False
+    }
+)
+mon_client.autoscale_settings.create_or_update(
+    resource_group, 
+    autoscale_settings_name, 
+    parameters = {
+        "location" : endpoint.location,
+        "target_resource_uri" : deployment.id,
+        "enabled" : False
+    }
+)
+To disable an autoscale profile in use, selectManual scale, and then selectSave.
+To disable an autoscale profile in use, selectManual scale, and then selectSave.
+To enable an autoscale profile, selectCustom autoscale. The studio lists all recognized autoscale profiles for the workspace. Select a profile and then selectSaveto enable.
+To enable an autoscale profile, selectCustom autoscale. The studio lists all recognized autoscale profiles for the workspace. Select a profile and then selectSaveto enable.
+Delete resources
+If you're not going to use your deployments, delete the resources with the following steps.
+Azure CLI
+Python SDK
+Studio
+APPLIES TO:Azure CLI ml extensionv2 (current)
+# delete the autoscaling profile
+az monitor autoscale delete -n "$AUTOSCALE_SETTINGS_NAME"
+
+# delete the endpoint
+az ml online-endpoint delete --name $ENDPOINT_NAME --yes --no-wait
+# delete the autoscaling profile
+az monitor autoscale delete -n "$AUTOSCALE_SETTINGS_NAME"
+
+# delete the endpoint
+az ml online-endpoint delete --name $ENDPOINT_NAME --yes --no-wait
+APPLIES TO:Python SDK azure-ai-mlv2 (current)
+mon_client.autoscale_settings.delete(
+    resource_group, 
+    autoscale_settings_name
+)
+
+ml_client.online_endpoints.begin_delete(endpoint_name)
+mon_client.autoscale_settings.delete(
+    resource_group, 
+    autoscale_settings_name
+)
+
+ml_client.online_endpoints.begin_delete(endpoint_name)
+InAzure Machine Learning studio, go to your workspace and selectEndpointsfrom the left menu.
+InAzure Machine Learning studio, go to your workspace and selectEndpointsfrom the left menu.
+In the list of endpoints, select the endpoint to delete (check the circle next to the model name).
+In the list of endpoints, select the endpoint to delete (check the circle next to the model name).
+SelectDelete.
+SelectDelete.
+Alternatively, you can delete a managed online endpoint directly in theendpoint details page.
+Related content
+Understand autoscale settings
+Review common autoscale patterns
+Explore best practices for autoscale
+Feedback
+Was this page helpful?
+Additional resources

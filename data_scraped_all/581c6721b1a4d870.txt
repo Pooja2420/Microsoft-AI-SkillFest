@@ -1,0 +1,457 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Migrate an application to use passwordless connections with Azure Database for PostgreSQL
+Article
+2023-10-19
+8 contributors
+In this article
+This article explains how to migrate from traditional authentication methods to more secure, passwordless connections with Azure Database for PostgreSQL.
+Application requests to Azure Database for PostgreSQL must be authenticated. Azure Database for PostgreSQL provides several different ways for apps to connect securely. One of the ways is to use passwords. However, you should prioritize passwordless connections in your applications when possible.
+Compare authentication options
+When the application authenticates with Azure Database for PostgreSQL, it provides a username and password pair to connect the database. Depending on where the identities are stored, there are two types of authentication: Microsoft Entra authentication and PostgreSQL authentication.
+
+Microsoft Entra authentication
+Microsoft Entra authentication is a mechanism for connecting to Azure Database for PostgreSQL using identities defined in Microsoft Entra ID. With Microsoft Entra authentication, you can manage database user identities and other Microsoft services in a central location, which simplifies permission management.
+Using Microsoft Entra ID for authentication provides the following benefits:
+Authentication of users across Azure Services in a uniform way.
+Management of password policies and password rotation in a single place.
+Multiple forms of authentication supported by Microsoft Entra ID, which can eliminate the need to store passwords.
+Customers can manage database permissions using external (Microsoft Entra ID) groups.
+Microsoft Entra authentication uses PostgreSQL database users to authenticate identities at the database level.
+Support of token-based authentication for applications connecting to Azure Database for PostgreSQL.
+PostgreSQL authentication
+You can create accounts in PostgreSQL. If you choose to use passwords as credentials for the accounts, these credentials will be stored in theusertable. Because these passwords are stored in PostgreSQL, you need to manage the rotation of the passwords by yourself.
+user
+Although it's possible to connect to Azure Database for PostgreSQL with passwords, you should use them with caution. You must be diligent to never expose the passwords in an unsecure location. Anyone who gains access to the passwords is able to authenticate. For example, there's a risk that a malicious user can access the application if a connection string is accidentally checked into source control, sent through an unsecure email, pasted into the wrong chat, or viewed by someone who shouldn't have permission. Instead, consider updating your application to use passwordless connections.
+Introducing passwordless connections
+With a passwordless connection, you can connect to Azure services without storing any credentials in the application code, its configuration files, or in environment variables.
+Many Azure services support passwordless connections, for example via Azure Managed Identity. These techniques provide robust security features that you can implement usingDefaultAzureCredentialfrom the Azure Identity client libraries. In this tutorial, you'll learn how to update an existing application to useDefaultAzureCredentialinstead of alternatives such as connection strings.
+DefaultAzureCredential
+DefaultAzureCredentialsupports multiple authentication methods and automatically determines which should be used at runtime. This approach enables your app to use different authentication methods in different environments (local dev vs. production) without implementing environment-specific code.
+DefaultAzureCredential
+The order and locations in whichDefaultAzureCredentialsearches for credentials can be found in theAzure Identity library overview. For example, when working locally,DefaultAzureCredentialwill generally authenticate using the account the developer used to sign in to Visual Studio. When the app is deployed to Azure,DefaultAzureCredentialwill automatically switch to use amanaged identity. No code changes are required for this transition.
+DefaultAzureCredential
+DefaultAzureCredential
+DefaultAzureCredential
+To ensure that connections are passwordless, you must take into consideration both local development and the production environment. If a connection string is required in either place, then the application isn't passwordless.
+In your local development environment, you can authenticate with Azure CLI, Azure PowerShell, Visual Studio, or Azure plugins for Visual Studio Code or IntelliJ. In this case, you can use that credential in your application instead of configuring properties.
+When you deploy applications to an Azure hosting environment, such as a virtual machine, you can assign managed identity in that environment. Then, you won't need to provide credentials to connect to Azure services.
+Note
+A managed identity provides a security identity to represent an app or service. The identity is managed by the Azure platform and does not require you to provision or rotate any secrets. You can read more about managed identities in theoverviewdocumentation.
+Migrate an existing application to use passwordless connections
+The following steps explain how to migrate an existing application to use passwordless connections instead of a password-based solution.
+0) Prepare the working environment
+First, use the following command to set up some environment variables.
+export AZ_RESOURCE_GROUP=<YOUR_RESOURCE_GROUP>
+export AZ_DATABASE_SERVER_NAME=<YOUR_DATABASE_SERVER_NAME>
+export AZ_DATABASE_NAME=demo
+export AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME=<YOUR_AZURE_AD_NON_ADMIN_USER_DISPLAY_NAME>
+export AZ_LOCAL_IP_ADDRESS=<YOUR_LOCAL_IP_ADDRESS>
+export CURRENT_USERNAME=$(az ad signed-in-user show --query userPrincipalName --output tsv)
+export AZ_RESOURCE_GROUP=<YOUR_RESOURCE_GROUP>
+export AZ_DATABASE_SERVER_NAME=<YOUR_DATABASE_SERVER_NAME>
+export AZ_DATABASE_NAME=demo
+export AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME=<YOUR_AZURE_AD_NON_ADMIN_USER_DISPLAY_NAME>
+export AZ_LOCAL_IP_ADDRESS=<YOUR_LOCAL_IP_ADDRESS>
+export CURRENT_USERNAME=$(az ad signed-in-user show --query userPrincipalName --output tsv)
+Replace the placeholders with the following values, which are used throughout this article:
+<YOUR_RESOURCE_GROUP>: The name of the resource group your resources are in.
+<YOUR_RESOURCE_GROUP>
+<YOUR_DATABASE_SERVER_NAME>: The name of your PostgreSQL server. It should be unique across Azure.
+<YOUR_DATABASE_SERVER_NAME>
+<YOUR_AZURE_AD_NON_ADMIN_USER_DISPLAY_NAME>: The display name of your Microsoft Entra non-admin user. Make sure the name is a valid user in your Microsoft Entra tenant.
+<YOUR_AZURE_AD_NON_ADMIN_USER_DISPLAY_NAME>
+<YOUR_LOCAL_IP_ADDRESS>: The IP address of your local computer, from which you'll run your Spring Boot application. One convenient way to find it is to openwhatismyip.akamai.com.
+<YOUR_LOCAL_IP_ADDRESS>
+1) Configure Azure Database for PostgreSQL
+
+To use Microsoft Entra ID access with Azure Database for PostgreSQL, you should set the Microsoft Entra admin user first. Only a Microsoft Entra Admin user can create/enable users for Microsoft Entra ID-based authentication.
+To set up a Microsoft Entra administrator after creating the server, follow the steps inManage Microsoft Entra roles in Azure Database for PostgreSQL - Flexible Server.
+Note
+PostgreSQL Flexible Server can create multiple Microsoft Entra administrators.
+2) Configure Azure Database for PostgreSQL for local development
+Azure Database for PostgreSQL instances are secured by default. They have a firewall that doesn't allow any incoming connection. To be able to use your database, you need to add a firewall rule that will allow the local IP address to access the database server.
+Because you configured your local IP address at the beginning of this article, you can open the server's firewall by running the following command:
+az postgres flexible-server firewall-rule create \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name $AZ_DATABASE_SERVER_NAME \
+    --rule-name $AZ_DATABASE_SERVER_NAME-database-allow-local-ip \
+    --start-ip-address $AZ_LOCAL_IP_ADDRESS \
+    --end-ip-address $AZ_LOCAL_IP_ADDRESS \
+    --output tsv
+az postgres flexible-server firewall-rule create \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name $AZ_DATABASE_SERVER_NAME \
+    --rule-name $AZ_DATABASE_SERVER_NAME-database-allow-local-ip \
+    --start-ip-address $AZ_LOCAL_IP_ADDRESS \
+    --end-ip-address $AZ_LOCAL_IP_ADDRESS \
+    --output tsv
+If you're connecting to your PostgreSQL server from Windows Subsystem for Linux (WSL) on a Windows computer, you need to add the WSL host ID to your firewall.
+Obtain the IP address of your host machine by running the following command in WSL:
+cat /etc/resolv.conf
+cat /etc/resolv.conf
+Copy the IP address following the termnameserver, then use the following command to set an environment variable for the WSL IP Address:
+nameserver
+export AZ_WSL_IP_ADDRESS=<the-copied-IP-address>
+export AZ_WSL_IP_ADDRESS=<the-copied-IP-address>
+Then, use the following command to open the server's firewall to your WSL-based app:
+az postgres flexible-server firewall-rule create \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name $AZ_DATABASE_SERVER_NAME \
+    --rule-name $AZ_DATABASE_SERVER_NAME-database-allow-local-ip \
+    --start-ip-address $AZ_WSL_IP_ADDRESS \
+    --end-ip-address $AZ_WSL_IP_ADDRESS \
+    --output tsv
+az postgres flexible-server firewall-rule create \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name $AZ_DATABASE_SERVER_NAME \
+    --rule-name $AZ_DATABASE_SERVER_NAME-database-allow-local-ip \
+    --start-ip-address $AZ_WSL_IP_ADDRESS \
+    --end-ip-address $AZ_WSL_IP_ADDRESS \
+    --output tsv
+Next, create a non-admin Microsoft Entra user and grant all permissions on the$AZ_DATABASE_NAMEdatabase to it. You can change the database name$AZ_DATABASE_NAMEto fit your needs.
+$AZ_DATABASE_NAME
+$AZ_DATABASE_NAME
+Create a SQL script calledcreate_ad_user_local.sqlfor creating a non-admin user. Add the following contents and save it locally:
+cat << EOF > create_ad_user_local.sql
+select * from pgaadauth_create_principal('$AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME', false, false);
+EOF
+cat << EOF > create_ad_user_local.sql
+select * from pgaadauth_create_principal('$AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME', false, false);
+EOF
+Then, use the following command to run the SQL script to create the Microsoft Entra non-admin user:
+psql "host=$AZ_DATABASE_SERVER_NAME.postgres.database.azure.com user=$CURRENT_USERNAME dbname=postgres port=5432 password=$(az account get-access-token --resource-type oss-rdbms --output tsv --query accessToken) sslmode=require" < create_ad_user_local.sql
+psql "host=$AZ_DATABASE_SERVER_NAME.postgres.database.azure.com user=$CURRENT_USERNAME dbname=postgres port=5432 password=$(az account get-access-token --resource-type oss-rdbms --output tsv --query accessToken) sslmode=require" < create_ad_user_local.sql
+Now use the following command to remove the temporary SQL script file:
+rm create_ad_user_local.sql
+rm create_ad_user_local.sql
+Note
+You can read more detailed information about creating PostgreSQL users inCreate users in Azure Database for PostgreSQL.
+3) Sign in and migrate the app code to use passwordless connections
+For local development, make sure you're authenticated with the same Microsoft Entra account you assigned the role to on your PostgreSQL. You can authenticate via the Azure CLI, Visual Studio, Azure PowerShell, or other tools such as IntelliJ.
+Azure CLI
+PowerShell
+Visual Studio
+Visual Studio Code
+IntelliJ
+Sign in to Azure through the Azure CLI by using the following command:
+az login
+az login
+Sign in to Azure using PowerShell by using the following command:
+Connect-AzAccount
+Connect-AzAccount
+Select theSign inbutton in the top right corner of Visual Studio.
+
+Sign in using the Microsoft Entra account you assigned a role to previously.
+
+Make sure you have theAzure Accountextension installed.
+
+Use theCTRL + Shift + Pshortcut to open the command palette. Search for theAzure: Sign Incommand and follow the prompts to authenticate. Make sure to use the Microsoft Entra account you assigned a role to previously from your Blob Storage account.
+
+For more information, seeInstall the Azure Toolkit for IntelliJandSign-in instructions for the Azure Toolkit for IntelliJ.
+Next, use the following steps to update your code to use passwordless connections. Although conceptually similar, each language uses different implementation details.
+Java
+Spring
+Inside your project, add the following reference to theazure-identity-extensionspackage. This library contains all of the entities necessary to implement passwordless connections.<dependency>
+    <groupId>com.azure</groupId>
+    <artifactId>azure-identity-extensions</artifactId>
+    <version>1.0.0</version>
+</dependency>
+Inside your project, add the following reference to theazure-identity-extensionspackage. This library contains all of the entities necessary to implement passwordless connections.
+azure-identity-extensions
+<dependency>
+    <groupId>com.azure</groupId>
+    <artifactId>azure-identity-extensions</artifactId>
+    <version>1.0.0</version>
+</dependency>
+<dependency>
+    <groupId>com.azure</groupId>
+    <artifactId>azure-identity-extensions</artifactId>
+    <version>1.0.0</version>
+</dependency>
+Enable the Azure PostgreSQL authentication plugin in JDBC URL. Identify the locations in your code that currently create ajava.sql.Connectionto connect to Azure Database for PostgreSQL. Updateurlanduserin yourapplication.propertiesfile to match the following values:url=jdbc:postgresql://$AZ_DATABASE_SERVER_NAME.postgres.database.azure.com:5432/$AZ_DATABASE_NAME?sslmode=require&authenticationPluginClassName=com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin
+user=$AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME
+Enable the Azure PostgreSQL authentication plugin in JDBC URL. Identify the locations in your code that currently create ajava.sql.Connectionto connect to Azure Database for PostgreSQL. Updateurlanduserin yourapplication.propertiesfile to match the following values:
+java.sql.Connection
+url
+user
+url=jdbc:postgresql://$AZ_DATABASE_SERVER_NAME.postgres.database.azure.com:5432/$AZ_DATABASE_NAME?sslmode=require&authenticationPluginClassName=com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin
+user=$AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME
+url=jdbc:postgresql://$AZ_DATABASE_SERVER_NAME.postgres.database.azure.com:5432/$AZ_DATABASE_NAME?sslmode=require&authenticationPluginClassName=com.azure.identity.extensions.jdbc.postgresql.AzurePostgresqlAuthenticationPlugin
+user=$AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME
+Replace the$AZ_POSTGRESQL_AD_NON_ADMIN_USERNAMEand the two$AZ_DATABASE_SERVER_NAMEvariables with the value that you configured at the beginning of this article.
+Replace the$AZ_POSTGRESQL_AD_NON_ADMIN_USERNAMEand the two$AZ_DATABASE_SERVER_NAMEvariables with the value that you configured at the beginning of this article.
+$AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME
+$AZ_DATABASE_SERVER_NAME
+Inside your project, add the following reference to thespring-cloud-azure-starter-jdbc-postgresqlpackage. This library contains all of the entities necessary to implement passwordless connections.<dependency>
+    <groupId>com.azure.spring</groupId>
+    <artifactId>spring-cloud-azure-starter-jdbc-postgresql</artifactId>
+</dependency>NoteFor more information about how to manage Spring Cloud Azure library versions by using a bill of materials (BOM), see theGetting startedsection of theSpring Cloud Azure developer guide.
+Inside your project, add the following reference to thespring-cloud-azure-starter-jdbc-postgresqlpackage. This library contains all of the entities necessary to implement passwordless connections.
+spring-cloud-azure-starter-jdbc-postgresql
+<dependency>
+    <groupId>com.azure.spring</groupId>
+    <artifactId>spring-cloud-azure-starter-jdbc-postgresql</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.azure.spring</groupId>
+    <artifactId>spring-cloud-azure-starter-jdbc-postgresql</artifactId>
+</dependency>
+Note
+For more information about how to manage Spring Cloud Azure library versions by using a bill of materials (BOM), see theGetting startedsection of theSpring Cloud Azure developer guide.
+Update theapplication.yamlorapplication.propertiesfile as shown in the following example. Change thespring.datasource.usernameto the Microsoft Entra user, remove thespring.datasource.passwordproperty, and addspring.datasource.azure.passwordless-enabled=true.spring:
+  datasource:
+    url: jdbc:postgresql://${AZ_DATABASE_SERVER_NAME}.postgres.database.azure.com:5432/$AZ_DATABASE_NAME?sslmode=require
+    username: ${AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME}
+    azure:
+      passwordless-enabled: true
+Update theapplication.yamlorapplication.propertiesfile as shown in the following example. Change thespring.datasource.usernameto the Microsoft Entra user, remove thespring.datasource.passwordproperty, and addspring.datasource.azure.passwordless-enabled=true.
+spring.datasource.username
+spring.datasource.password
+spring.datasource.azure.passwordless-enabled=true
+spring:
+  datasource:
+    url: jdbc:postgresql://${AZ_DATABASE_SERVER_NAME}.postgres.database.azure.com:5432/$AZ_DATABASE_NAME?sslmode=require
+    username: ${AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME}
+    azure:
+      passwordless-enabled: true
+spring:
+  datasource:
+    url: jdbc:postgresql://${AZ_DATABASE_SERVER_NAME}.postgres.database.azure.com:5432/$AZ_DATABASE_NAME?sslmode=require
+    username: ${AZ_POSTGRESQL_AD_NON_ADMIN_USERNAME}
+    azure:
+      passwordless-enabled: true
+After making these code changes, run your application locally. The new configuration should pick up your local credentials if you're signed in to a compatible IDE or command line tool, such as the Azure CLI, Visual Studio, or IntelliJ. The roles you assigned to your local dev user in Azure will allow your app to connect to the Azure service locally.
+4) Configure the Azure hosting environment
+After your application is configured to use passwordless connections and it runs locally, the same code can authenticate to Azure services after it's deployed to Azure. For example, an application deployed to an Azure App Service instance that has a managed identity assigned can connect to Azure Storage.
+In this section, you'll execute two steps to enable your application to run in an Azure hosting environment in a passwordless way:
+Assign the managed identity for your Azure hosting environment.
+Assign roles to the managed identity.
+Note
+Azure also providesService Connector, which can help you connect your hosting service with PostgreSQL. With Service Connector to configure your hosting environment, you can omit the step of assigning roles to your managed identity because Service Connector will do it for you. The following section describes how to configure your Azure hosting environment in two ways: one via Service Connector and the other by configuring each hosting environment directly.
+Important
+Service Connector's commands requireAzure CLI2.41.0 or higher.
+The following steps show you how to assign a system-assigned managed identity for various web hosting services. The managed identity can securely connect to other Azure Services using the app configurations you set up previously.
+App Service
+Service Connector
+Container Apps
+Azure Spring Apps
+Virtual Machines
+AKS
+On the main overview page of your Azure App Service instance, selectIdentityfrom the navigation pane.
+On the main overview page of your Azure App Service instance, selectIdentityfrom the navigation pane.
+On theSystem assignedtab, make sure to set theStatusfield toon. A system assigned identity is managed by Azure internally and handles administrative tasks for you. The details and IDs of the identity are never exposed in your code.
+On theSystem assignedtab, make sure to set theStatusfield toon. A system assigned identity is managed by Azure internally and handles administrative tasks for you. The details and IDs of the identity are never exposed in your code.
+When you use Service Connector, it can help to assign the system-assigned managed identity for your Azure hosting environment. However, Azure portal doesnât support configuring Azure Database this way, so you need to use Azure CLI to assign the identity.
+On the main overview page of your Azure Container Apps instance, selectIdentityfrom the navigation pane.
+On the main overview page of your Azure Container Apps instance, selectIdentityfrom the navigation pane.
+On theSystem assignedtab, make sure to set theStatusfield toon. A system assigned identity is managed by Azure internally and handles administrative tasks for you. The details and IDs of the identity are never exposed in your code.
+On theSystem assignedtab, make sure to set theStatusfield toon. A system assigned identity is managed by Azure internally and handles administrative tasks for you. The details and IDs of the identity are never exposed in your code.
+
+On the main overview page of your Azure Spring Apps instance, selectIdentityfrom the navigation pane.
+On the main overview page of your Azure Spring Apps instance, selectIdentityfrom the navigation pane.
+On theSystem assignedtab, make sure to set theStatusfield toon. A system assigned identity is managed by Azure internally and handles administrative tasks for you. The details and IDs of the identity are never exposed in your code.
+On theSystem assignedtab, make sure to set theStatusfield toon. A system assigned identity is managed by Azure internally and handles administrative tasks for you. The details and IDs of the identity are never exposed in your code.
+
+On the main overview page of your virtual machine, selectIdentityfrom the navigation pane.
+On the main overview page of your virtual machine, selectIdentityfrom the navigation pane.
+On theSystem assignedtab, make sure to set theStatusfield toon. A system assigned identity is managed by Azure internally and handles administrative tasks for you. The details and IDs of the identity are never exposed in your code.
+On theSystem assignedtab, make sure to set theStatusfield toon. A system assigned identity is managed by Azure internally and handles administrative tasks for you. The details and IDs of the identity are never exposed in your code.
+
+An Azure Kubernetes Service (AKS) cluster requires an identity to access Azure resources like load balancers and managed disks. This identity can be either a managed identity or a service principal. By default, when you create an AKS cluster, a system-assigned managed identity is automatically created.
+You can also assign managed identity on an Azure hosting environment by using the Azure CLI.
+App Service
+Service Connector
+Container Apps
+Azure Spring Apps
+Virtual Machines
+AKS
+You can assign a managed identity to an Azure App Service instance with theaz webapp identity assigncommand, as shown in the following example:
+export AZ_MI_OBJECT_ID=$(az webapp identity assign \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <service-instance-name> \
+    --query principalId \
+    --output tsv)
+export AZ_MI_OBJECT_ID=$(az webapp identity assign \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <service-instance-name> \
+    --query principalId \
+    --output tsv)
+You can use Service Connector to create a connection between an Azure compute hosting environment and a target service by using the Azure CLI. Service Connector currently supports the following compute services:
+Azure App Service
+Azure Spring Apps
+Azure Container Apps
+First, install theService Connectorpasswordless extension for the Azure CLI:
+az extension add --name serviceconnector-passwordless --upgrade
+az extension add --name serviceconnector-passwordless --upgrade
+If you're using Azure App Service, use theaz webapp connectioncommand, as shown in the following example:
+az webapp connection
+az webapp connection create postgres-flexible \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <app-service-name>
+    --target-resource-group $AZ_RESOURCE_GROUP \
+    --server $AZ_DATABASE_SERVER_NAME \
+    --database $AZ_DATABASE_NAME \
+    --system-identity
+az webapp connection create postgres-flexible \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <app-service-name>
+    --target-resource-group $AZ_RESOURCE_GROUP \
+    --server $AZ_DATABASE_SERVER_NAME \
+    --database $AZ_DATABASE_NAME \
+    --system-identity
+If you're using Azure Spring Apps, usethe az spring connectioncommand, as shown in the following example:
+the az spring connection
+az spring connection create postgres-flexible \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --service <service-name> \
+    --app <service-instance-name> \
+    --target-resource-group $AZ_RESOURCE_GROUP \
+    --server $AZ_DATABASE_SERVER_NAME \
+    --database $AZ_DATABASE_NAME \
+    --system-identity
+az spring connection create postgres-flexible \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --service <service-name> \
+    --app <service-instance-name> \
+    --target-resource-group $AZ_RESOURCE_GROUP \
+    --server $AZ_DATABASE_SERVER_NAME \
+    --database $AZ_DATABASE_NAME \
+    --system-identity
+If you're using Azure Container Apps, use theaz containerapp connectioncommand, as shown in the following example:
+az containerapp connection
+az containerapp connection create postgres-flexible \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <app-service-name>
+    --target-resource-group $AZ_RESOURCE_GROUP \
+    --server $AZ_DATABASE_SERVER_NAME \
+    --database $AZ_DATABASE_NAME \
+    --system-identity
+az containerapp connection create postgres-flexible \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <app-service-name>
+    --target-resource-group $AZ_RESOURCE_GROUP \
+    --server $AZ_DATABASE_SERVER_NAME \
+    --database $AZ_DATABASE_NAME \
+    --system-identity
+You can assign a managed identity to an Azure Container Apps instance with theaz containerapp identity assigncommand, as shown in the following example:
+export AZ_MI_OBJECT_ID=$(az containerapp identity assign \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <service-instance-name> \
+    --query principalId \
+    --output tsv)
+export AZ_MI_OBJECT_ID=$(az containerapp identity assign \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <service-instance-name> \
+    --query principalId \
+    --output tsv)
+You can assign a managed identity to an Azure Spring Apps instance with theaz spring app identity assigncommand, as shown in the following example:
+export AZ_MI_OBJECT_ID=$(az spring app identity assign \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <service-instance-name> \
+    --service <service-name> \
+    --query identity.principalId \
+    --output tsv)
+export AZ_MI_OBJECT_ID=$(az spring app identity assign \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <service-instance-name> \
+    --service <service-name> \
+    --query identity.principalId \
+    --output tsv)
+You can assign a managed identity to a virtual machine with theaz vm identity assigncommand, as shown in the following example:
+export AZ_MI_OBJECT_ID=$(az vm identity assign \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <service-instance-name> \
+    --query principalId \
+    --output tsv)
+export AZ_MI_OBJECT_ID=$(az vm identity assign \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <service-instance-name> \
+    --query principalId \
+    --output tsv)
+You can assign a managed identity to an Azure Kubernetes Service (AKS) instance with theaz aks updatecommand, as shown in the following example:
+export AZ_MI_OBJECT_ID=$(az aks update \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <AKS-cluster-name> \
+    --enable-managed-identity \
+    --query identityProfile.kubeletidentity.objectId \
+    --output tsv)
+export AZ_MI_OBJECT_ID=$(az aks update \
+    --resource-group $AZ_RESOURCE_GROUP \
+    --name <AKS-cluster-name> \
+    --enable-managed-identity \
+    --query identityProfile.kubeletidentity.objectId \
+    --output tsv)
+Next, grant permissions to the managed identity you assigned to access your PostgreSQL instance.
+Service Connector
+Azure CLI
+If you connected your services using Service Connector, the previous step's commands already assigned the role, so you can skip this step.
+The following steps will create a Microsoft Entra user for the managed identity and grant all permissions for the database$AZ_DATABASE_NAMEto it. You can change the database name$AZ_DATABASE_NAMEto fit your needs.
+$AZ_DATABASE_NAME
+$AZ_DATABASE_NAME
+First, create a SQL script calledcreate_ad_user_mi.sqlfor creating a non-admin user. Add the following contents and save it locally:
+export AZ_POSTGRESQL_AD_MI_USERNAME=$(az ad sp show \
+    --id $AZ_MI_OBJECT_ID \
+    --query displayName \
+    --output tsv)
+
+cat << EOF > create_ad_user_mi.sql
+select * from pgaadauth_create_principal_with_oid('$AZ_POSTGRESQL_AD_MI_USERNAME', '$AZ_MI_OBJECT_ID', 'service', false, false);
+EOF
+export AZ_POSTGRESQL_AD_MI_USERNAME=$(az ad sp show \
+    --id $AZ_MI_OBJECT_ID \
+    --query displayName \
+    --output tsv)
+
+cat << EOF > create_ad_user_mi.sql
+select * from pgaadauth_create_principal_with_oid('$AZ_POSTGRESQL_AD_MI_USERNAME', '$AZ_MI_OBJECT_ID', 'service', false, false);
+EOF
+Then, use the following command to run the SQL script to create the Microsoft Entra non-admin user:
+psql "host=$AZ_DATABASE_SERVER_NAME.postgres.database.azure.com user=$CURRENT_USERNAME dbname=postgres port=5432 password=$(az account get-access-token --resource-type oss-rdbms --output tsv --query accessToken) sslmode=require" < create_ad_user_mi.sql
+psql "host=$AZ_DATABASE_SERVER_NAME.postgres.database.azure.com user=$CURRENT_USERNAME dbname=postgres port=5432 password=$(az account get-access-token --resource-type oss-rdbms --output tsv --query accessToken) sslmode=require" < create_ad_user_mi.sql
+Now use the following command to remove the temporary SQL script file:
+rm create_ad_user_mi.sql
+rm create_ad_user_mi.sql
+Before deploying the app to the hosting environment, you need to make one more change to the code because the application is going to connect to PostgreSQL using the user created for the managed identity.
+Java
+Spring
+Update your code to use the user created for the managed identity:
+Note
+If you used the Service Connector command, skip this step.
+properties.put("user", "$AZ_POSTGRESQL_AD_MI_USERNAME");
+properties.put("user", "$AZ_POSTGRESQL_AD_MI_USERNAME");
+Update theapplication.yamlorapplication.propertiesfile. Change thespring.datasource.usernameto the user created for the managed identity.
+spring.datasource.username
+spring:
+  datasource:
+    url: jdbc:postgresql://${AZ_DATABASE_SERVER_NAME}.postgres.database.azure.com:5432/$AZ_DATABASE_NAME?sslmode=require
+    username: ${AZ_POSTGRESQL_AD_MI_USERNAME}
+    azure:
+      passwordless-enabled: true
+spring:
+  datasource:
+    url: jdbc:postgresql://${AZ_DATABASE_SERVER_NAME}.postgres.database.azure.com:5432/$AZ_DATABASE_NAME?sslmode=require
+    username: ${AZ_POSTGRESQL_AD_MI_USERNAME}
+    azure:
+      passwordless-enabled: true
+If you used the Service Connector command, remove the propertiesspring.datasource.urlandspring.datasource.username. You only need to add the following setting:
+spring.datasource.url
+spring.datasource.username
+spring:
+  datasource:
+    azure:
+      passwordless-enabled: true
+spring:
+  datasource:
+    azure:
+      passwordless-enabled: true
+After making these code changes, you can build and redeploy the application. Then, browse to your hosted application in the browser. Your app should be able to connect to the PostgreSQL database successfully. Keep in mind that it may take several minutes for the role assignments to propagate through your Azure environment. Your application is now configured to run both locally and in a production environment without the developers having to manage secrets in the application itself.
+Next steps
+In this tutorial, you learned how to migrate an application to passwordless connections.
+You can read the following resources to explore the concepts discussed in this article in more depth:
+Authorize access to blob data with managed identities for Azure resources.
+Authorize access to blobs using Microsoft Entra ID
+Feedback
+Was this page helpful?
+Additional resources

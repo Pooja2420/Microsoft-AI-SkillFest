@@ -1,0 +1,363 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Enable secure cluster connectivity
+Article
+2025-02-13
+2 contributors
+In this article
+This article explains how to use secure cluster connectivity for Azure Databricks workspaces. Secure cluster connectivity is also known as no public IP (NPIP). Although the serverless compute plane does not use secure cluster connectivity, serverless compute resources do not have public IP addresses.
+Secure cluster connectivity overview
+When secure cluster connectivity is enabled, customer virtual networks have no open ports and compute resources in the classic compute plane have no public IP addresses.
+Each cluster initiates a connection to the control plane secure cluster connectivity relay during cluster creation. The cluster establishes this connection using port 443 (HTTPS) and uses a different IP address than is used for the web application and REST API.
+When the control plane performs cluster administration tasks, these requests are sent to the cluster through this tunnel.
+Note
+All Azure Databricks network traffic between the classic compute plane VNet and the Azure Databricks control plane goes across theMicrosoft network backbone, not the public internet. This is true even if secure cluster connectivity is disabled.
+You can enable secure cluster connectivity on a new workspace or add it to an existing workspace that already usesVNet injection.
+Enable secure cluster connectivity on a new workspace
+Secure cluster connectivity is automatically enabled when you create a workspace using the Azure portal or an Azure Resource Manager (ARM) template.
+Azure Portal: When you provision the workspace, on theNetworkingtab,Deploy Azure Databricks workspace with Secure Cluster Connectivity (No Public IP)is defaulted toYes.For detailed instructions on using the Azure portal to create a workspace, seeUse the portal to create an Azure Databricks workspace.
+Azure Portal: When you provision the workspace, on theNetworkingtab,Deploy Azure Databricks workspace with Secure Cluster Connectivity (No Public IP)is defaulted toYes.
+For detailed instructions on using the Azure portal to create a workspace, seeUse the portal to create an Azure Databricks workspace.
+ARM template: TheenableNoPublicIpparameter within theMicrosoft.Databricks/workspacesresource is set totrueby default in version 2024-05-01 and above. If theenableNoPublicIpparameter is not explicitly included in the template, it will behave as if it were set to true. You can explicitly override this default by settingenableNoPublicIpto false in your template.For detailed instructions on using an ARM template to create a workspace, seeDeploy a workspace with an ARM template.
+For ARM templates that use VNet Injection, seeAdvanced configuration using Azure Resource Manager templates.
+ARM template: TheenableNoPublicIpparameter within theMicrosoft.Databricks/workspacesresource is set totrueby default in version 2024-05-01 and above. If theenableNoPublicIpparameter is not explicitly included in the template, it will behave as if it were set to true. You can explicitly override this default by settingenableNoPublicIpto false in your template.
+enableNoPublicIp
+Microsoft.Databricks/workspaces
+true
+enableNoPublicIp
+enableNoPublicIp
+For detailed instructions on using an ARM template to create a workspace, seeDeploy a workspace with an ARM template.
+For ARM templates that use VNet Injection, seeAdvanced configuration using Azure Resource Manager templates.
+Add secure cluster connectivity to an existing workspace
+You can enable secure cluster connectivity on an existing workspace using the Azure portal, an ARM template, orazurermTerraform provider version 3.41.0+. The upgrade requires that the workspace usesVNet injection.
+azurerm
+Important
+If you use a firewall or other network configuration changes to control ingress or egress from the classic compute plane, you might need to update your firewall or network security group rules at the same time as these changes for them to fully take effect. For example, using secure cluster connectivity, there is an additional outgoing connection to the control plane, and the incoming connections from the control plane are no longer used.
+Step 1: Stop all compute resources
+Stop all classic compute resources such as clusters, pools, or classic SQL warehouses. Databricks recommends planning the timing of the upgrade for down time.
+Step 2: Update the workspace
+You can update the workspace using the Azure portal, an ARM template, or Terraform.
+Go to your Azure Databricks workspace in the Azure portal.
+In the left navigation underSettings, clickNetworking.
+In theNetwork accesstab, setDeploy Azure Databricks workspace with Secure Cluster Connectivity (No Public IP)toEnabled.
+ClickSave.
+The network update might take over 15 minutes to complete.
+Use an ARM template to set theenableNoPublicIpparameter toTrue(true).
+enableNoPublicIp
+true
+Note
+If your managed resource group has a custom name, you must modify the template accordingly. Contact your Azure Databricks account team for more information.
+Copy the following upgrade ARM template JSON:{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "defaultValue": "[resourceGroup().location]",
+      "type": "String",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "workspaceName": {
+      "type": "String",
+      "metadata": {
+        "description": "The name of the Azure Databricks workspace to create."
+      }
+    },
+    "apiVersion": {
+      "defaultValue": "2023-02-01",
+      "allowedValues": ["2018-04-01", "2020-02-15", "2022-04-01-preview", "2023-02-01"],
+      "type": "String",
+      "metadata": {
+        "description": "2018-03-15 for 'full region isolation control plane' and 2020-02-15 for 'FedRAMP certified' regions"
+      }
+    },
+    "enableNoPublicIp": {
+      "defaultValue": true,
+      "type": "Bool"
+    },
+    "pricingTier": {
+      "defaultValue": "premium",
+      "allowedValues": ["premium", "standard", "trial"],
+      "type": "String",
+      "metadata": {
+        "description": "The pricing tier of workspace."
+      }
+    },
+    "publicNetworkAccess": {
+      "type": "string",
+      "defaultValue": "Enabled",
+      "allowedValues": ["Enabled", "Disabled"],
+      "metadata": {
+        "description": "Indicates whether public network access is allowed to the workspace - possible values are Enabled or Disabled."
+      }
+    },
+    "requiredNsgRules": {
+      "type": "string",
+      "defaultValue": "AllRules",
+      "allowedValues": ["AllRules", "NoAzureDatabricksRules"],
+      "metadata": {
+        "description": "Indicates whether to retain or remove the AzureDatabricks outbound NSG rule - possible values are AllRules or NoAzureDatabricksRules."
+      }
+    }
+  },
+  "variables": {
+    "managedResourceGroupName": "[concat('databricks-rg-', parameters('workspaceName'), '-', uniqueString(parameters('workspaceName'), resourceGroup().id))]",
+    "managedResourceGroupId": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('managedResourceGroupName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Databricks/workspaces",
+      "apiVersion": "[parameters('apiVersion')]",
+      "name": "[parameters('workspaceName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('pricingTier')]"
+      },
+      "properties": {
+        "ManagedResourceGroupId": "[variables('managedResourceGroupId')]",
+        "publicNetworkAccess": "[parameters('publicNetworkAccess')]",
+        "requiredNsgRules": "[parameters('requiredNsgRules')]",
+        "parameters": {
+          "enableNoPublicIp": {
+            "value": "[parameters('enableNoPublicIp')]"
+          }
+        }
+      }
+    }
+  ]
+}Go to the Azure portalCustom deploymentpage.ClickBuild your own template in the editor.Paste in the JSON for the template that you copied.ClickSave.Fill in the parameters.To update an existing workspace, use the same parameters that you used to create the workspace other thanenableNoPublicIpwhich you must set totrue. Set the subscription, region, workspace name, subnet names, resource ID of the existing VNet.ImportantThe resource group name, workspace name, and subnet names are identical to your existing workspace so that this command updates the existing workspace rather than creating a new workspace.ClickReview + Create.If there are no validation issues, clickCreate.The network update might take over 15 minutes to complete.
+Copy the following upgrade ARM template JSON:
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "defaultValue": "[resourceGroup().location]",
+      "type": "String",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "workspaceName": {
+      "type": "String",
+      "metadata": {
+        "description": "The name of the Azure Databricks workspace to create."
+      }
+    },
+    "apiVersion": {
+      "defaultValue": "2023-02-01",
+      "allowedValues": ["2018-04-01", "2020-02-15", "2022-04-01-preview", "2023-02-01"],
+      "type": "String",
+      "metadata": {
+        "description": "2018-03-15 for 'full region isolation control plane' and 2020-02-15 for 'FedRAMP certified' regions"
+      }
+    },
+    "enableNoPublicIp": {
+      "defaultValue": true,
+      "type": "Bool"
+    },
+    "pricingTier": {
+      "defaultValue": "premium",
+      "allowedValues": ["premium", "standard", "trial"],
+      "type": "String",
+      "metadata": {
+        "description": "The pricing tier of workspace."
+      }
+    },
+    "publicNetworkAccess": {
+      "type": "string",
+      "defaultValue": "Enabled",
+      "allowedValues": ["Enabled", "Disabled"],
+      "metadata": {
+        "description": "Indicates whether public network access is allowed to the workspace - possible values are Enabled or Disabled."
+      }
+    },
+    "requiredNsgRules": {
+      "type": "string",
+      "defaultValue": "AllRules",
+      "allowedValues": ["AllRules", "NoAzureDatabricksRules"],
+      "metadata": {
+        "description": "Indicates whether to retain or remove the AzureDatabricks outbound NSG rule - possible values are AllRules or NoAzureDatabricksRules."
+      }
+    }
+  },
+  "variables": {
+    "managedResourceGroupName": "[concat('databricks-rg-', parameters('workspaceName'), '-', uniqueString(parameters('workspaceName'), resourceGroup().id))]",
+    "managedResourceGroupId": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('managedResourceGroupName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Databricks/workspaces",
+      "apiVersion": "[parameters('apiVersion')]",
+      "name": "[parameters('workspaceName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('pricingTier')]"
+      },
+      "properties": {
+        "ManagedResourceGroupId": "[variables('managedResourceGroupId')]",
+        "publicNetworkAccess": "[parameters('publicNetworkAccess')]",
+        "requiredNsgRules": "[parameters('requiredNsgRules')]",
+        "parameters": {
+          "enableNoPublicIp": {
+            "value": "[parameters('enableNoPublicIp')]"
+          }
+        }
+      }
+    }
+  ]
+}
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "defaultValue": "[resourceGroup().location]",
+      "type": "String",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "workspaceName": {
+      "type": "String",
+      "metadata": {
+        "description": "The name of the Azure Databricks workspace to create."
+      }
+    },
+    "apiVersion": {
+      "defaultValue": "2023-02-01",
+      "allowedValues": ["2018-04-01", "2020-02-15", "2022-04-01-preview", "2023-02-01"],
+      "type": "String",
+      "metadata": {
+        "description": "2018-03-15 for 'full region isolation control plane' and 2020-02-15 for 'FedRAMP certified' regions"
+      }
+    },
+    "enableNoPublicIp": {
+      "defaultValue": true,
+      "type": "Bool"
+    },
+    "pricingTier": {
+      "defaultValue": "premium",
+      "allowedValues": ["premium", "standard", "trial"],
+      "type": "String",
+      "metadata": {
+        "description": "The pricing tier of workspace."
+      }
+    },
+    "publicNetworkAccess": {
+      "type": "string",
+      "defaultValue": "Enabled",
+      "allowedValues": ["Enabled", "Disabled"],
+      "metadata": {
+        "description": "Indicates whether public network access is allowed to the workspace - possible values are Enabled or Disabled."
+      }
+    },
+    "requiredNsgRules": {
+      "type": "string",
+      "defaultValue": "AllRules",
+      "allowedValues": ["AllRules", "NoAzureDatabricksRules"],
+      "metadata": {
+        "description": "Indicates whether to retain or remove the AzureDatabricks outbound NSG rule - possible values are AllRules or NoAzureDatabricksRules."
+      }
+    }
+  },
+  "variables": {
+    "managedResourceGroupName": "[concat('databricks-rg-', parameters('workspaceName'), '-', uniqueString(parameters('workspaceName'), resourceGroup().id))]",
+    "managedResourceGroupId": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('managedResourceGroupName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Databricks/workspaces",
+      "apiVersion": "[parameters('apiVersion')]",
+      "name": "[parameters('workspaceName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('pricingTier')]"
+      },
+      "properties": {
+        "ManagedResourceGroupId": "[variables('managedResourceGroupId')]",
+        "publicNetworkAccess": "[parameters('publicNetworkAccess')]",
+        "requiredNsgRules": "[parameters('requiredNsgRules')]",
+        "parameters": {
+          "enableNoPublicIp": {
+            "value": "[parameters('enableNoPublicIp')]"
+          }
+        }
+      }
+    }
+  ]
+}
+Go to the Azure portalCustom deploymentpage.
+Go to the Azure portalCustom deploymentpage.
+ClickBuild your own template in the editor.
+ClickBuild your own template in the editor.
+Paste in the JSON for the template that you copied.
+Paste in the JSON for the template that you copied.
+ClickSave.
+ClickSave.
+Fill in the parameters.
+Fill in the parameters.
+To update an existing workspace, use the same parameters that you used to create the workspace other thanenableNoPublicIpwhich you must set totrue. Set the subscription, region, workspace name, subnet names, resource ID of the existing VNet.ImportantThe resource group name, workspace name, and subnet names are identical to your existing workspace so that this command updates the existing workspace rather than creating a new workspace.
+To update an existing workspace, use the same parameters that you used to create the workspace other thanenableNoPublicIpwhich you must set totrue. Set the subscription, region, workspace name, subnet names, resource ID of the existing VNet.
+enableNoPublicIp
+true
+Important
+The resource group name, workspace name, and subnet names are identical to your existing workspace so that this command updates the existing workspace rather than creating a new workspace.
+ClickReview + Create.
+ClickReview + Create.
+If there are no validation issues, clickCreate.
+If there are no validation issues, clickCreate.
+The network update might take over 15 minutes to complete.
+For workspaces created with Terraform, you can update the workspace without recreating the workspace.
+Important
+You must useterraform-provider-azurermversion 3.41.0 or later, so upgrade your Terraform provider version as needed. Earlier versions attempt to recreate the workspace if you change any of these settings.
+terraform-provider-azurerm
+Change the following workspace settings:
+no_public_ipin thecustom_parametersblock can be changed fromfalsetotrue.
+no_public_ip
+custom_parameters
+false
+true
+The network update might take over 15 minutes to complete.
+Step 3: Validate the update
+Once the workspace is in active state, the update job is completed. Verify that the update was applied:
+Open Azure Databricks in your web browser.
+Open Azure Databricks in your web browser.
+Start one of the workspaceâs clusters and wait until the cluster is fully started.
+Start one of the workspaceâs clusters and wait until the cluster is fully started.
+Go to your workspace instance in the Azure portal.
+Go to your workspace instance in the Azure portal.
+Click the blue ID next to the field labelManaged Resource Group.
+Click the blue ID next to the field labelManaged Resource Group.
+In that group, find the VMs for the cluster and click on one of them.
+In that group, find the VMs for the cluster and click on one of them.
+In the VM settings, withinProperties, look for the fields in theNetworkingarea.
+In the VM settings, withinProperties, look for the fields in theNetworkingarea.
+Confirm that the Public IP address field is empty.If itâs populated, the VM has a public IP address, which means the update failed.
+Confirm that the Public IP address field is empty.
+If itâs populated, the VM has a public IP address, which means the update failed.
+Temporary rollback of upgrading to secure cluster connectivity
+If something goes wrong during deployment you can reverse the process as a temporary rollback, but disabling SCC on a workspace is not supported other than for temporary rollback before continuing the upgrade later. If this is necessary temporarily, you can follow the instructions above for upgrade but setenableNoPublicIptofalseinstead of true.
+enableNoPublicIp
+false
+Egress from workspace subnets
+When you enable secure cluster connectivity, both of your workspace subnets are private subnets, since cluster nodes do not have public IP addresses.
+The implementation details of network egress vary based on whether you use the default (managed) VNet or whether you use theVNet injectionto provide your own VNet in which to deploy your workspace.
+Important
+Additional costs may be incurred due to increased egress traffic when you use secure cluster connectivity. For the most secure deployment, Microsoft and Databricks strongly recommend that you enable secure cluster connectivity.
+Egress with default (managed) VNet
+If you use secure cluster connectivity with the default VNet that Azure Databricks creates, Azure Databricks automatically creates aNAT gatewayfor outbound traffic from your workspaceâs subnets to the Azure backbone and public network. The NAT gateway is created within the managed resource group managed by Azure Databricks. You cannot modify this resource group or any resources provisioned within it. This NAT gateway incurs additional cost.
+Egress with VNet injection
+If you enable secure cluster connectivity on your workspace that uses VNet injection, Databricks recommends that your workspace has a stable egress public IP. Stable egress public IP addresses are useful because you can add them to external allow lists. For example, to connect from Azure Databricks to Salesforce with a stable outgoing IP address.
+Warning
+Microsoft announced that on September 30, 2025, default outbound access connectivity for virtual machines in Azure will be retired. Seethis announcement. This means that existing Azure Databricks workspaces that use default outbound access rather than a stable egress public IP might not continue to work after that date. Databricks recommends that you add explicit outbound methods for your workspaces before that date.
+To add explicit outbound methods for you workspace, use anAzure NAT gatewayor user-defined routes (UDRs).
+Azure NAT gateway: Use an Azure NAT gateway if your deployments only need some customization. Configure the gateway on both of the workspaceâs subnets to ensure that all outbound traffic to the Azure backbone and public network transits through it. Clusters have a stable egress public IP, and you can modify the configuration for custom egress needs. You can configure this using either anAzure templateor from the Azure portal.
+UDRs: Use UDRs if your deployments require complex routing requirements or your workspaces use VNet injection with an egress firewall. UDRs ensure that network traffic is routed correctly for your workspace, either directly to the required endpoints or through an egress firewall. To use UDRs, you must add direct routes or allowed firewall rules for the Azure Databricks secure cluster connectivity relay and other required endpoints listed atUser-defined route settings for Azure Databricks.
+Warning
+Do not use anegress load balancerwith a workspace that has secure cluster connectivity enabled. In production systems, an egress load balancer can lead to risk of exhausting ports.
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,97 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Apache HBase advisories in Azure HDInsight
+Article
+2024-09-06
+6 contributors
+In this article
+This article describes several advisories to help you optimize the Apache HBase performance in Azure HDInsight.
+Optimize HBase to read most recently written data
+If your use case involves reading the most recently written data from HBase, this advisory can help you. For high performance, it's optimal that HBase reads are to be served frommemstore, instead of the remote storage.
+memstore
+The query advisory indicates that for a given column family in a table > 75% reads that are getting served frommemstore. This indicator suggests that even if a flush happens on thememstorethe recent file needs to be accessed and that needs to be in cache. The data is first written tomemstorethe system accesses the recent data there. There's a chance that the internal HBase flusher threads detect that a given region has reached 128M (default) size and can trigger a flush. This scenario happens to even the most recent data that was written when thememstorewas around 128M in size. Therefore, a later read of those recent records may require a file read rather than frommemstore. Hence it's best to optimize that even recent data that is recently flushed can reside in the cache.
+memstore
+memstore
+memstore
+memstore
+memstore
+To optimize the recent data in cache, consider the following configuration settings:
+Sethbase.rs.cacheblocksonwritetotrue. This default configuration in HDInsight HBase istrue, so check that is it not reset tofalse.
+Sethbase.rs.cacheblocksonwritetotrue. This default configuration in HDInsight HBase istrue, so check that is it not reset tofalse.
+hbase.rs.cacheblocksonwrite
+true
+true
+false
+Increase thehbase.hstore.compactionThresholdvalue so that you can avoid the compaction from kicking in. By default this value is3. You can increase it to a higher value like10.
+Increase thehbase.hstore.compactionThresholdvalue so that you can avoid the compaction from kicking in. By default this value is3. You can increase it to a higher value like10.
+hbase.hstore.compactionThreshold
+3
+10
+If you follow step 2 and set compactionThreshold, then changehbase.hstore.compaction.maxto a higher value for example100, and also increase the value for the confighbase.hstore.blockingStoreFilesto higher value for example300.
+If you follow step 2 and set compactionThreshold, then changehbase.hstore.compaction.maxto a higher value for example100, and also increase the value for the confighbase.hstore.blockingStoreFilesto higher value for example300.
+hbase.hstore.compaction.max
+100
+hbase.hstore.blockingStoreFiles
+300
+If you're sure that you need to read only the recent data, sethbase.rs.cachecompactedblocksonwriteconfiguration toON. This configuration tells the system that even if compaction happens, the data stays in cache. The configurations can be set at the family level also.In the HBase Shell, run the following command to sethbase.rs.cachecompactedblocksonwriteconfig:alter '<TableName>', {NAME => '<FamilyName>', CONFIGURATION => {'hbase.hstore.blockingStoreFiles' => '300'}}
+If you're sure that you need to read only the recent data, sethbase.rs.cachecompactedblocksonwriteconfiguration toON. This configuration tells the system that even if compaction happens, the data stays in cache. The configurations can be set at the family level also.
+hbase.rs.cachecompactedblocksonwrite
+In the HBase Shell, run the following command to sethbase.rs.cachecompactedblocksonwriteconfig:
+hbase.rs.cachecompactedblocksonwrite
+alter '<TableName>', {NAME => '<FamilyName>', CONFIGURATION => {'hbase.hstore.blockingStoreFiles' => '300'}}
+alter '<TableName>', {NAME => '<FamilyName>', CONFIGURATION => {'hbase.hstore.blockingStoreFiles' => '300'}}
+Block cache can be turned off for a given family in a table. Ensure that it's turnedONfor families that have most recent data reads. By default, block cache is turned ON for all families in a table. In case you have disabled the block cache for a family and need to turn it ON, use the alter command from the hbase shell.These configurations help ensure that the data is available in cache and that the recent data doesn't undergo compaction. If a TTL is possible in your scenario, then consider using date-tiered compaction. For more information, seeApache HBase Reference Guide: Date Tiered Compaction
+Block cache can be turned off for a given family in a table. Ensure that it's turnedONfor families that have most recent data reads. By default, block cache is turned ON for all families in a table. In case you have disabled the block cache for a family and need to turn it ON, use the alter command from the hbase shell.
+These configurations help ensure that the data is available in cache and that the recent data doesn't undergo compaction. If a TTL is possible in your scenario, then consider using date-tiered compaction. For more information, seeApache HBase Reference Guide: Date Tiered Compaction
+Optimize the flush queue
+This advisory indicates that HBase flushes may need tuning. The current configuration for flush handlers may not be high enough to handle with write traffic that may lead to slow down of flushes.
+In the region server UI, notice if the flush queue grows beyond 100. This threshold indicates the flushes are slow and you may have to tune thehbase.hstore.flusher.countconfiguration. By default, the value is 2. Ensure that the max flusher threads don't increase beyond 6.
+hbase.hstore.flusher.count
+Additionally, see if you have a recommendation for region count tuning. If yes, we suggest you try the region tuning to see if that helps in faster flushes. Otherwise, tuning the flusher threads may help you.
+Region count tuning
+The region count tuning advisory indicates that HBase has blocked updates, and the region count may be more than the optimally supported heap size. You can tune the heap size,memstoresize, and the region count.
+memstore
+As an example scenario:
+Assume the heap size for the region server is 10 GB. By default thehbase.hregion.memstore.flush.sizeis128M. The default value forhbase.regionserver.global.memstore.sizeis0.4. Which means that out of the 10 GB, 4 GB is allocated formemstore(globally).
+Assume the heap size for the region server is 10 GB. By default thehbase.hregion.memstore.flush.sizeis128M. The default value forhbase.regionserver.global.memstore.sizeis0.4. Which means that out of the 10 GB, 4 GB is allocated formemstore(globally).
+hbase.hregion.memstore.flush.size
+128M
+hbase.regionserver.global.memstore.size
+0.4
+memstore
+Assume there's an even distribution of the write load on all the regions and assuming every region grows upto 128 MB only then the max number of regions in this setup is32regions. If a given region server is configured to have 32 regions, the system better avoids blocking updates.
+Assume there's an even distribution of the write load on all the regions and assuming every region grows upto 128 MB only then the max number of regions in this setup is32regions. If a given region server is configured to have 32 regions, the system better avoids blocking updates.
+32
+With these settings in place, the number of regions is 100. The 4-GB globalmemstoreis now split across 100 regions. So effectively each region gets only 40 MB formemstore. When the writes are uniform, the system does frequent flushes and smaller size of the order < 40 MB. Having many flusher threads might increase the flush speedhbase.hstore.flusher.count.
+With these settings in place, the number of regions is 100. The 4-GB globalmemstoreis now split across 100 regions. So effectively each region gets only 40 MB formemstore. When the writes are uniform, the system does frequent flushes and smaller size of the order < 40 MB. Having many flusher threads might increase the flush speedhbase.hstore.flusher.count.
+memstore
+memstore
+hbase.hstore.flusher.count
+The advisory means that it would be good to reconsider the number of regions per server, the heap size, and the globalmemstoresize configuration along with the tuning of flush threads to avoid updates getting blocked.
+memstore
+Compaction queue tuning
+If the HBase compaction queue grows to more than 2000 and happens periodically, you can increase the compaction threads to a larger value.
+When there's an excessive number of files for compaction, it may lead to more heap usage related to how the files interact with the Azure file system. So it's better to complete the compaction as quickly as possible. Some times in older clusters the compaction configurations related to throttling might lead to slower compaction rate.
+Check the configurationshbase.hstore.compaction.throughput.lower.boundandhbase.hstore.compaction.throughput.higher.bound. If they're already set to 50M and 100M, leave them as it is. However, if you configured those settings to a lower value (which was the case with older clusters), change the limits to 50M and 100M respectively.
+hbase.hstore.compaction.throughput.lower.bound
+hbase.hstore.compaction.throughput.higher.bound
+The configurations arehbase.regionserver.thread.compaction.smallandhbase.regionserver.thread.compaction.large(the defaults are 1 each).
+Cap the max value for this configuration to be less than 3.
+hbase.regionserver.thread.compaction.small
+hbase.regionserver.thread.compaction.large
+Full table scan
+The full table scan advisory indicates that over 75% of the scans issued are full table/region scans. You can revisit the way your code calls the scans to improve query performance. Consider the following practices:
+Set the proper start and stop row for each scan.
+Set the proper start and stop row for each scan.
+Use theMultiRowRangeFilterAPI so that you can query different ranges in one scan call. For more information, seeMultiRowRangeFilter API documentation.
+Use theMultiRowRangeFilterAPI so that you can query different ranges in one scan call. For more information, seeMultiRowRangeFilter API documentation.
+In cases where you need a full table or region scan, check if there's a possibility to avoid cache usage for those queries, so that other queries that use of the cache might not evict the blocks that are hot. To ensure the scans don't use cache, use thescanAPI with thesetCaching(false)option in your code:scan#setCaching(false)
+In cases where you need a full table or region scan, check if there's a possibility to avoid cache usage for those queries, so that other queries that use of the cache might not evict the blocks that are hot. To ensure the scans don't use cache, use thescanAPI with thesetCaching(false)option in your code:
+scan#setCaching(false)
+scan#setCaching(false)
+Next steps
+Optimize Apache HBase using Ambari
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,453 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+How to run evaluations online with the Azure AI Foundry SDK
+Article
+2025-02-28
+2 contributors
+In this article
+Important
+Items marked (preview) in this article are currently in public preview. This preview is provided without a service-level agreement, and we don't recommend it for production workloads. Certain features might not be supported or might have constrained capabilities. For more information, seeSupplemental Terms of Use for Microsoft Azure Previews.
+In this article, you learn how to run evaluations online in a continuous manner with the Azure AI Foundry SDK.Evaluationsin pre-production environments is essential for ensuring that your application is safe, performant, and produces high-quality results. However, evaluation doesn't stop after your application is deployed. In production, various things can change, such as the types of queries users are sending to your application, which can influence your application's performance. To maintain a high degree of observability into your production generative AI application, it's important totraceand continuously evaluate your application's data. By doing so, you can maintain confidence in your application's safety, quality, and performance.
+How online evaluation works
+In this section, you'll learn how online evaluation works, how it integrates withAzure Monitor Application Insights, and how you can use it to run continuous evaluations overtracedata from your generative AI applications.
+After your application is instrumented to send trace data to Application Insights, set up an online evaluation schedule to continuously evaluate this data. Online evaluation is a service that uses Azure AI compute to continuously run a configurable set of evaluators. After you have set up an online evaluation schedule with the Azure AI Foundry SDK, it runs on a configurable schedule. Each time the scheduled job runs, it performs the following steps:
+Query application trace data from the connected Application Insights resource using provided Kusto (KQL) query.
+Run each evaluator over the trace data and calculate each metric (for example,groundedness: 3).
+Write evaluation scores back to each trace using standardized semantic conventions.
+Note
+Online evaluation supports the same metrics as Azure AI Evaluation. For more information on how evaluation works and which evaluation metrics are supported, seeEvaluate your Generative AI application with the Azure AI Evaluation SDK.
+For example, letâs say you have a deployed chat application that receives many customer questions on a daily basis. You want to continuously evaluate the quality of the responses from your application. You set up an online evaluation schedule with a daily recurrence. You configure the evaluators:Groundedness,Coherence, andFluency. Every day, the service computes the evaluation scores for these metrics and writes the data back to Application Insights for each trace that was collected during the recurrence time window (in this example, the past 24 hours). Then, the data can be queried from each trace and made accessible in Azure AI Foundry and Azure Monitor Application Insights.
+The evaluation results written back to each trace within Application Insights follow the following conventions. A unique span is added to each trace for each evaluation metric:
+customDimensions[âevent.nameâ]
+gen_ai.evaluation.relevance
+customDimensions[âgen_ai.evaluation.scoreâ]
+3
+message
+{âcommentâ: âI like the responseâ}
+Now that you understand how online evaluation works and how it connects to Azure Monitor Application Insights, the next step is to set up the service.
+Set up online evaluation
+In this section, you'll learn how to configure an online evaluation schedule to continuously monitor your deployed generative AI application. Azure AI Foundry SDK offers such capabilities via. A Python API and supports all of the features available in local evaluations. Use the following steps to submit your online evaluation schedule on your data using built-in or custom evaluators.
+Note
+Evaluations are only supported in the sameregionsas AI-assisted risk and safety metrics.
+Prerequisites
+Complete the following prerequisite steps to set up your environment and authentication to the necessary resources:
+AnAzure Subscription.
+AResource Groupin an Evaluation-supported region.
+A newUser-assigned Managed Identityin the same resource group and region. Make a note of theclientId; you'll need it later.
+clientId
+AnAzure AI Hubin the same resource group and region.
+An Azure AI project in this hub, seeCreate a project in Azure AI Foundry portal.
+AnAzure Monitor Application Insights resource.
+Navigate to the hub page in Azure portal and add Application Insights resource, seeUpdate Azure Application Insights and Azure Container Registry.
+Azure OpenAI Deployment with GPT model supportingchat completion, for examplegpt-4.
+chat completion
+gpt-4
+Connection Stringfor Azure AI project to easily createAIProjectClientobject. You can get theProject connection stringunderProject detailsfrom the project'sOverviewpage.
+Connection String
+AIProjectClient
+Navigate to your Application Insights resource in the Azure portal and use theAccess control (IAM)tab to add theLog Analytics Contributorrole to the User-assigned Managed Identity you created previously.
+Log Analytics Contributor
+Attach theUser-assigned Managed Identityto your project.
+Navigate to your Azure AI Services in the Azure portal and use theAccess control (IAM)tab to add theCognitive Services OpenAI Contributorrole to the User-assigned Managed Identity you created previously.
+Cognitive Services OpenAI Contributor
+Installation Instructions
+You install the Azure CLI and sign in from your local development environment, so that you can use your user credentials to call the Azure OpenAI service.
+In most cases you can install the Azure CLI from your terminal using the following command:
+Windows
+Linux
+macOS
+winget install -e --id Microsoft.AzureCLI
+winget install -e --id Microsoft.AzureCLI
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+brew update && brew install azure-cli
+brew update && brew install azure-cli
+You can follow instructionsHow to install the Azure CLIif these commands don't work for your particular operating system or setup.
+After you install the Azure CLI, sign in using theaz logincommand and sign-in using the browser:
+az login
+az login
+az login
+Alternatively, you can log in manually via the browser with a device code.
+az login --use-device-code
+az login --use-device-code
+First you need to create a new Python environment to use to install the package you need for this tutorial. DO NOT install packages into your global python installation. You should always use a virtual or conda environment when installing python packages, otherwise you can break your global install of Python.
+If needed, install Python
+We recommend using Python 3.10 or later, but having at least Python 3.8 is required. If you don't have a suitable version of Python installed, you can follow the instructions in theVS Code Python Tutorialfor the easiest way of installing Python on your operating system.
+Create a virtual environment
+If you already have Python 3.10 or higher installed, you can create a virtual environment using the following commands:
+Windows
+Linux
+macOS
+py -3 -m venv .venv
+.venv\scripts\activate
+py -3 -m venv .venv
+.venv\scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
+Activating the Python environment means that when you runpythonorpipfrom the command line, you then use the Python interpreter contained in the.venvfolder of your application.
+python
+pip
+.venv
+Note
+You can use thedeactivatecommand to exit the python virtual environment, and can later reactivate it when needed.
+deactivate
+You can also create a new Python environment usingconda:
+conda
+conda create -n online-evaluation
+conda activate online-evaluation
+conda create -n online-evaluation
+conda activate online-evaluation
+pip install azure-identity azure-ai-projects azure-ai-ml
+pip install azure-identity azure-ai-projects azure-ai-ml
+Tip
+Optionally, you can usepip install azure-ai-evaluationif you want a code-first experience to fetch evaluator ID for built-in evaluators in code. To learn how to do this, seeSpecifying evaluators from evaluator library.
+pip install azure-ai-evaluation
+Set up tracing for your generative AI application
+Prior to setting up online evaluation, ensure you have firstset up tracing for your generative AI application.
+To identify your application via a unique ID in Application Insights, you can use the service name OpenTelemetry property in your trace data. This is particularly useful if you're logging data from multiple applications to the same Application Insights resource, and you want to differentiate between them. For example, lets say you have two applications:App-1andApp-2, with tracing configured to log data to the same Application Insights resource. Perhaps you'd like to set upApp-1to be evaluated continuously byRelevanceandApp-2to be evaluated continuously byGroundedness. You can use the service name to differentiate between the applications in your online evaluation configurations.
+To set up the service name property, you can do so directly in your application code by following the steps, seeUsing multiple tracer providers with different Resource. Alternatively, you can set the environment variableOTEL_SERVICE_NAMEprior to deploying your app. To learn more about working with the service name, seeOTEL Environment VariablesandService Resource Semantic Conventions.
+OTEL_SERVICE_NAME
+For more information on using the service name to differentiate between your generative AI applications, seetracing.
+Query stored trace data in Application Insights
+Using theKusto Query Language (KQL), you can query your generative AI application's trace data from Application Insights to use for continuous online evaluation. If you use theAzure AI Tracing packageto trace your generative AI application, you can use the following Kusto query:
+Important
+The KQL query used by the online evaluation service must output the following columns:operation_Id,operation_ParentId, andgen_ai_response_id. Additionally, each evaluator has its own input data requirements. The KQL query must output these columns to be used as inputs to the evaluators themselves. For a list of data requirements for evaluators, seedata requirements for built-in evaluators.
+operation_Id
+operation_ParentId
+gen_ai_response_id
+let gen_ai_spans = (
+    dependencies
+    | where isnotnull(customDimensions["gen_ai.system"])
+    | extend response_id = tostring(customDimensions["gen_ai.response.id"])
+    | project id, operation_Id, operation_ParentId, timestamp, response_id
+);
+let gen_ai_events = (
+    traces
+    | where message in ("gen_ai.choice", "gen_ai.user.message", "gen_ai.system.message")
+        or tostring(customDimensions["event.name"]) in ("gen_ai.choice", "gen_ai.user.message", "gen_ai.system.message")
+    | project 
+        id = operation_ParentId, 
+        operation_Id, 
+        operation_ParentId, 
+        user_input = iff(
+            message == "gen_ai.user.message" or tostring(customDimensions["event.name"]) == "gen_ai.user.message", 
+            parse_json(iff(message == "gen_ai.user.message", tostring(customDimensions["gen_ai.event.content"]), message)).content, 
+            ""
+        ), 
+        system = iff(
+            message == "gen_ai.system.message" or tostring(customDimensions["event.name"]) == "gen_ai.system.message", 
+            parse_json(iff(message == "gen_ai.system.message", tostring(customDimensions["gen_ai.event.content"]), message)).content, 
+            ""
+        ), 
+        llm_response = iff(
+            message == "gen_ai.choice", 
+            parse_json(tostring(parse_json(tostring(customDimensions["gen_ai.event.content"])).message)).content, 
+            iff(tostring(customDimensions["event.name"]) == "gen_ai.choice", parse_json(parse_json(message).message).content, "")
+        )
+    | summarize 
+        operation_ParentId = any(operation_ParentId), 
+        Input = maxif(user_input, user_input != ""), 
+        System = maxif(system, system != ""), 
+        Output = maxif(llm_response, llm_response != "") 
+    by operation_Id, id
+);
+gen_ai_spans
+| join kind=inner (gen_ai_events) on id, operation_Id
+| project Input, System, Output, operation_Id, operation_ParentId, gen_ai_response_id = response_id
+let gen_ai_spans = (
+    dependencies
+    | where isnotnull(customDimensions["gen_ai.system"])
+    | extend response_id = tostring(customDimensions["gen_ai.response.id"])
+    | project id, operation_Id, operation_ParentId, timestamp, response_id
+);
+let gen_ai_events = (
+    traces
+    | where message in ("gen_ai.choice", "gen_ai.user.message", "gen_ai.system.message")
+        or tostring(customDimensions["event.name"]) in ("gen_ai.choice", "gen_ai.user.message", "gen_ai.system.message")
+    | project 
+        id = operation_ParentId, 
+        operation_Id, 
+        operation_ParentId, 
+        user_input = iff(
+            message == "gen_ai.user.message" or tostring(customDimensions["event.name"]) == "gen_ai.user.message", 
+            parse_json(iff(message == "gen_ai.user.message", tostring(customDimensions["gen_ai.event.content"]), message)).content, 
+            ""
+        ), 
+        system = iff(
+            message == "gen_ai.system.message" or tostring(customDimensions["event.name"]) == "gen_ai.system.message", 
+            parse_json(iff(message == "gen_ai.system.message", tostring(customDimensions["gen_ai.event.content"]), message)).content, 
+            ""
+        ), 
+        llm_response = iff(
+            message == "gen_ai.choice", 
+            parse_json(tostring(parse_json(tostring(customDimensions["gen_ai.event.content"])).message)).content, 
+            iff(tostring(customDimensions["event.name"]) == "gen_ai.choice", parse_json(parse_json(message).message).content, "")
+        )
+    | summarize 
+        operation_ParentId = any(operation_ParentId), 
+        Input = maxif(user_input, user_input != ""), 
+        System = maxif(system, system != ""), 
+        Output = maxif(llm_response, llm_response != "") 
+    by operation_Id, id
+);
+gen_ai_spans
+| join kind=inner (gen_ai_events) on id, operation_Id
+| project Input, System, Output, operation_Id, operation_ParentId, gen_ai_response_id = response_id
+If you're using theOTEL_SERVICE_NAMEenvironment variable in your generative AI application to set the service name, you can query for thecloud_RoleNamewithin your online evaluation schedule by adding the following line to your Kusto (KQL) query:
+OTEL_SERVICE_NAME
+cloud_RoleName
+| where cloud_RoleName == "service_name"
+| where cloud_RoleName == "service_name"
+Optionally, you can use thesample operatorortake operatorin your Kusto query such that it only returns a subset of traces. Since AI-assisted evaluations can be costly at scale, this approach can help you control costs by only evaluating a random sample (orntraces) of your data.
+n
+Set up online evaluation with Azure AI Project SDK
+You can submit an online evaluation scheduled job with the Azure AI Project SDK via a Python API. See the below script to learn how to set up online evaluation with performance and quality (AI-assisted) evaluators. To view a comprehensive list of supported evaluators, seeEvaluate with the Azure AI Evaluation SDK. To learn how to use custom evaluators, seecustom evaluators.
+Start by importing the required packages and configuring the required variables:
+from azure.ai.projects import AIProjectClient 
+from azure.identity import DefaultAzureCredential 
+from azure.ai.projects.models import ( 
+    ApplicationInsightsConfiguration,
+    EvaluatorConfiguration,
+    EvaluationSchedule,
+    RecurrenceTrigger,
+)
+from azure.ai.evaluation import CoherenceEvaluator 
+
+# This sample includes the setup for an online evaluation schedule using the Azure AI Project SDK and Azure AI Evaluation SDK
+# The schedule is configured to run daily over the collected trace data while running two evaluators: CoherenceEvaluator and RelevanceEvaluator
+# This sample can be modified to fit your application's requirements
+
+# Name of your online evaluation schedule
+SAMPLE_NAME = "online_eval_name"
+
+# Connection string to your Azure AI Foundry project
+# Currently, it should be in the format "<HostName>;<AzureSubscriptionId>;<ResourceGroup>;<HubName>"
+PROJECT_CONNECTION_STRING = "<HostName>;<AzureSubscriptionId>;<ResourceGroup>;<HubName>"
+
+# Your Application Insights resource ID
+APPLICATION_INSIGHTS_RESOURCE_ID = "appinsights_resource_id"
+
+# Kusto Query Language (KQL) query to query data from Application Insights resource
+# This query is compatible with data logged by the Azure AI Inferencing Tracing SDK (linked in documentation)
+# You can modify it depending on your data schema
+# The KQL query must output these required columns: operation_ID, operation_ParentID, and gen_ai_response_id
+# You can choose which other columns to output as required by the evaluators you are using
+KUSTO_QUERY = "let gen_ai_spans=(dependencies | where isnotnull(customDimensions[\"gen_ai.system\"]) | extend response_id = tostring(customDimensions[\"gen_ai.response.id\"]) | project id, operation_Id, operation_ParentId, timestamp, response_id); let gen_ai_events=(traces | where message in (\"gen_ai.choice\", \"gen_ai.user.message\", \"gen_ai.system.message\") or tostring(customDimensions[\"event.name\"]) in (\"gen_ai.choice\", \"gen_ai.user.message\", \"gen_ai.system.message\") | project id= operation_ParentId, operation_Id, operation_ParentId, user_input = iff(message == \"gen_ai.user.message\" or tostring(customDimensions[\"event.name\"]) == \"gen_ai.user.message\", parse_json(iff(message == \"gen_ai.user.message\", tostring(customDimensions[\"gen_ai.event.content\"]), message)).content, \"\"), system = iff(message == \"gen_ai.system.message\" or tostring(customDimensions[\"event.name\"]) == \"gen_ai.system.message\", parse_json(iff(message == \"gen_ai.system.message\", tostring(customDimensions[\"gen_ai.event.content\"]), message)).content, \"\"), llm_response = iff(message == \"gen_ai.choice\", parse_json(tostring(parse_json(tostring(customDimensions[\"gen_ai.event.content\"])).message)).content, iff(tostring(customDimensions[\"event.name\"]) == \"gen_ai.choice\", parse_json(parse_json(message).message).content, \"\")) | summarize operation_ParentId = any(operation_ParentId), Input = maxif(user_input, user_input != \"\"), System = maxif(system, system != \"\"), Output = maxif(llm_response, llm_response != \"\") by operation_Id, id); gen_ai_spans | join kind=inner (gen_ai_events) on id, operation_Id | project Input, System, Output, operation_Id, operation_ParentId, gen_ai_response_id = response_id"
+from azure.ai.projects import AIProjectClient 
+from azure.identity import DefaultAzureCredential 
+from azure.ai.projects.models import ( 
+    ApplicationInsightsConfiguration,
+    EvaluatorConfiguration,
+    EvaluationSchedule,
+    RecurrenceTrigger,
+)
+from azure.ai.evaluation import CoherenceEvaluator 
+
+# This sample includes the setup for an online evaluation schedule using the Azure AI Project SDK and Azure AI Evaluation SDK
+# The schedule is configured to run daily over the collected trace data while running two evaluators: CoherenceEvaluator and RelevanceEvaluator
+# This sample can be modified to fit your application's requirements
+
+# Name of your online evaluation schedule
+SAMPLE_NAME = "online_eval_name"
+
+# Connection string to your Azure AI Foundry project
+# Currently, it should be in the format "<HostName>;<AzureSubscriptionId>;<ResourceGroup>;<HubName>"
+PROJECT_CONNECTION_STRING = "<HostName>;<AzureSubscriptionId>;<ResourceGroup>;<HubName>"
+
+# Your Application Insights resource ID
+APPLICATION_INSIGHTS_RESOURCE_ID = "appinsights_resource_id"
+
+# Kusto Query Language (KQL) query to query data from Application Insights resource
+# This query is compatible with data logged by the Azure AI Inferencing Tracing SDK (linked in documentation)
+# You can modify it depending on your data schema
+# The KQL query must output these required columns: operation_ID, operation_ParentID, and gen_ai_response_id
+# You can choose which other columns to output as required by the evaluators you are using
+KUSTO_QUERY = "let gen_ai_spans=(dependencies | where isnotnull(customDimensions[\"gen_ai.system\"]) | extend response_id = tostring(customDimensions[\"gen_ai.response.id\"]) | project id, operation_Id, operation_ParentId, timestamp, response_id); let gen_ai_events=(traces | where message in (\"gen_ai.choice\", \"gen_ai.user.message\", \"gen_ai.system.message\") or tostring(customDimensions[\"event.name\"]) in (\"gen_ai.choice\", \"gen_ai.user.message\", \"gen_ai.system.message\") | project id= operation_ParentId, operation_Id, operation_ParentId, user_input = iff(message == \"gen_ai.user.message\" or tostring(customDimensions[\"event.name\"]) == \"gen_ai.user.message\", parse_json(iff(message == \"gen_ai.user.message\", tostring(customDimensions[\"gen_ai.event.content\"]), message)).content, \"\"), system = iff(message == \"gen_ai.system.message\" or tostring(customDimensions[\"event.name\"]) == \"gen_ai.system.message\", parse_json(iff(message == \"gen_ai.system.message\", tostring(customDimensions[\"gen_ai.event.content\"]), message)).content, \"\"), llm_response = iff(message == \"gen_ai.choice\", parse_json(tostring(parse_json(tostring(customDimensions[\"gen_ai.event.content\"])).message)).content, iff(tostring(customDimensions[\"event.name\"]) == \"gen_ai.choice\", parse_json(parse_json(message).message).content, \"\")) | summarize operation_ParentId = any(operation_ParentId), Input = maxif(user_input, user_input != \"\"), System = maxif(system, system != \"\"), Output = maxif(llm_response, llm_response != \"\") by operation_Id, id); gen_ai_spans | join kind=inner (gen_ai_events) on id, operation_Id | project Input, System, Output, operation_Id, operation_ParentId, gen_ai_response_id = response_id"
+Next, define a client and an Azure OpenAI GPT deployment (such asGPT-4) which will be used to run your online evaluation schedule. Also, connect to your Application Insights resource:
+GPT-4
+# Connect to your Azure AI Foundry Project
+project_client = AIProjectClient.from_connection_string(
+    credential=DefaultAzureCredential(),
+    conn_str=PROJECT_CONNECTION_STRING
+)
+
+# Connect to your Application Insights resource 
+app_insights_config = ApplicationInsightsConfiguration(
+    resource_id=APPLICATION_INSIGHTS_RESOURCE_ID,
+    query=KUSTO_QUERY
+)
+
+# Connect to your Azure OpenAI Service resource. You must use a GPT model deployment for this example.
+deployment_name = "gpt-4"
+api_version = "2024-08-01-preview"
+
+# This is your Azure OpenAI Service connection name, which can be found in your Azure AI Foundry project under the 'Models + Endpoints' tab.
+default_connection = project_client.connections._get_connection(
+    "aoai_connection_name"
+)
+
+model_config = {
+    "azure_deployment": deployment_name,
+    "api_version": api_version,
+    "type": "azure_openai",
+    "azure_endpoint": default_connection.properties["target"]
+}
+# Connect to your Azure AI Foundry Project
+project_client = AIProjectClient.from_connection_string(
+    credential=DefaultAzureCredential(),
+    conn_str=PROJECT_CONNECTION_STRING
+)
+
+# Connect to your Application Insights resource 
+app_insights_config = ApplicationInsightsConfiguration(
+    resource_id=APPLICATION_INSIGHTS_RESOURCE_ID,
+    query=KUSTO_QUERY
+)
+
+# Connect to your Azure OpenAI Service resource. You must use a GPT model deployment for this example.
+deployment_name = "gpt-4"
+api_version = "2024-08-01-preview"
+
+# This is your Azure OpenAI Service connection name, which can be found in your Azure AI Foundry project under the 'Models + Endpoints' tab.
+default_connection = project_client.connections._get_connection(
+    "aoai_connection_name"
+)
+
+model_config = {
+    "azure_deployment": deployment_name,
+    "api_version": api_version,
+    "type": "azure_openai",
+    "azure_endpoint": default_connection.properties["target"]
+}
+Next, configure the evaluators you wish to use:
+# RelevanceEvaluator
+# id for each evaluator can be found in your Azure AI Foundry registry - please see documentation for more information
+# init_params is the configuration for the model to use to perform the evaluation
+# data_mapping is used to map the output columns of your query to the names required by the evaluator
+relevance_evaluator_config = EvaluatorConfiguration(
+    id="azureml://registries/azureml-staging/models/Relevance-Evaluator/versions/4",
+    init_params={"model_config": model_config},
+    data_mapping={"query": "${data.Input}", "response": "${data.Output}"}
+)
+
+# CoherenceEvaluator
+coherence_evaluator_config = EvaluatorConfiguration(
+    id=CoherenceEvaluator.id,
+    init_params={"model_config": model_config},
+    data_mapping={"query": "${data.Input}", "response": "${data.Output}"}
+)
+# RelevanceEvaluator
+# id for each evaluator can be found in your Azure AI Foundry registry - please see documentation for more information
+# init_params is the configuration for the model to use to perform the evaluation
+# data_mapping is used to map the output columns of your query to the names required by the evaluator
+relevance_evaluator_config = EvaluatorConfiguration(
+    id="azureml://registries/azureml-staging/models/Relevance-Evaluator/versions/4",
+    init_params={"model_config": model_config},
+    data_mapping={"query": "${data.Input}", "response": "${data.Output}"}
+)
+
+# CoherenceEvaluator
+coherence_evaluator_config = EvaluatorConfiguration(
+    id=CoherenceEvaluator.id,
+    init_params={"model_config": model_config},
+    data_mapping={"query": "${data.Input}", "response": "${data.Output}"}
+)
+Lastly, define the recurrence and create the schedule:
+Note: In the prerequisite steps, you created a User-assigned managed identity to authenticate the online evaluation schedule to your Application Insights resource. TheAzureMSIClientIdin thepropertiesparameter of theEvaluationScheduleclass is theclientIdof this identity.
+AzureMSIClientId
+properties
+EvaluationSchedule
+clientId
+# Frequency to run the schedule
+recurrence_trigger = RecurrenceTrigger(frequency="day", interval=1)
+
+# Dictionary of evaluators
+evaluators = {
+    "relevance": relevance_evaluator_config,
+    "coherence" : coherence_evaluator_config
+}
+
+name = SAMPLE_NAME
+description = f"{SAMPLE_NAME} description"
+# AzureMSIClientId is the clientID of the User-assigned managed identity created during set-up - see documentation for how to find it
+properties = {"AzureMSIClientId": "your_client_id"}
+
+# Configure the online evaluation schedule
+evaluation_schedule = EvaluationSchedule(
+    data=app_insights_config,
+    evaluators=evaluators,
+    trigger=recurrence_trigger,
+    description=description,
+    properties=properties)
+
+# Create the online evaluation schedule 
+created_evaluation_schedule = project_client.evaluations.create_or_replace_schedule(name, evaluation_schedule)
+print(f"Successfully submitted the online evaluation schedule creation request - {created_evaluation_schedule.name}, currently in {created_evaluation_schedule.provisioning_state} state.")
+# Frequency to run the schedule
+recurrence_trigger = RecurrenceTrigger(frequency="day", interval=1)
+
+# Dictionary of evaluators
+evaluators = {
+    "relevance": relevance_evaluator_config,
+    "coherence" : coherence_evaluator_config
+}
+
+name = SAMPLE_NAME
+description = f"{SAMPLE_NAME} description"
+# AzureMSIClientId is the clientID of the User-assigned managed identity created during set-up - see documentation for how to find it
+properties = {"AzureMSIClientId": "your_client_id"}
+
+# Configure the online evaluation schedule
+evaluation_schedule = EvaluationSchedule(
+    data=app_insights_config,
+    evaluators=evaluators,
+    trigger=recurrence_trigger,
+    description=description,
+    properties=properties)
+
+# Create the online evaluation schedule 
+created_evaluation_schedule = project_client.evaluations.create_or_replace_schedule(name, evaluation_schedule)
+print(f"Successfully submitted the online evaluation schedule creation request - {created_evaluation_schedule.name}, currently in {created_evaluation_schedule.provisioning_state} state.")
+You can get, list, and disable online evaluation schedules by adding the following code to your online evaluation configuration script:
+Warning: Please wait a small amount of time (~30 seconds) between creating an online evaluation schedule and running theget_schedule()API.
+get_schedule()
+Get an online evaluation schedule:
+name = "<my-online-evaluation-name>"
+get_evaluation_schedule = project_client.evaluations.get_schedule(name)
+name = "<my-online-evaluation-name>"
+get_evaluation_schedule = project_client.evaluations.get_schedule(name)
+List all online evaluation schedules:
+count = 0
+for evaluation_schedule in project_client.evaluations.list_schedule():
+    count += 1
+        print(f"{count}. {evaluation_schedule.name} "
+        f"[IsEnabled: {evaluation_schedule.is_enabled}]")
+        print(f"Total evaluation schedules: {count}")
+count = 0
+for evaluation_schedule in project_client.evaluations.list_schedule():
+    count += 1
+        print(f"{count}. {evaluation_schedule.name} "
+        f"[IsEnabled: {evaluation_schedule.is_enabled}]")
+        print(f"Total evaluation schedules: {count}")
+Disable (soft-delete) online evaluation schedule:
+name = "<my-online-evaluation-name>"
+project_client.evaluations.disable_schedule(name)
+name = "<my-online-evaluation-name>"
+project_client.evaluations.disable_schedule(name)
+Related content
+Monitor your generative AI applications
+Trace your application with Azure AI Inference SDK
+Visualize your traces
+Evaluation of Generative AI Models & Applications
+Azure Monitor Application Insights
+Azure Workbooks
+Feedback
+Was this page helpful?
+Additional resources

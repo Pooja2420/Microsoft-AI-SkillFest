@@ -1,0 +1,295 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Create and deploy a Flask Python web app to Azure with system-assigned managed identity
+Article
+2024-09-23
+8 contributors
+In this article
+In this tutorial, you deploy PythonFlaskcode to create and deploy a web app running in Azure App Service. The web app uses its system-assignedmanaged identity(passwordless connections) with Azure role-based access control to accessAzure StorageandAzure Database for PostgreSQL - Flexible Serverresources. The code uses theDefaultAzureCredentialclass of theAzure Identity client libraryfor Python. TheDefaultAzureCredentialclass automatically detects that a managed identity exists for the App Service and uses it to access other Azure resources.
+DefaultAzureCredential
+You can configure passwordless connections to Azure services using Service Connector or you can configure them manually. This tutorial shows how to use Service Connector. For more information about passwordless connections, seePasswordless connections for Azure services. For information about Service Connector, see theService Connector documentation.
+This tutorial shows you how to create and deploy a Python web app using the Azure CLI. The commands in this tutorial are written to be run in a Bash shell. You can run the tutorial commands in any Bash environment with the CLI installed, such as your local environment or theAzure Cloud Shell. With some modification -- for example, setting and using environment variables -- you can run these commands in other environments like Windows command shell. For examples of using a user-assigned managed identity, seeCreate and deploy a Django web app to Azure with a user-assigned managed identity.
+Get the sample app
+A sample Python application using the Flask framework are available to help you follow along with this tutorial. Download or clone one of the sample applications to your local workstation.
+Clone the sample in an Azure Cloud Shell session.git clone https://github.com/Azure-Samples/msdocs-flask-web-app-managed-identity.git
+Clone the sample in an Azure Cloud Shell session.
+git clone https://github.com/Azure-Samples/msdocs-flask-web-app-managed-identity.git
+git clone https://github.com/Azure-Samples/msdocs-flask-web-app-managed-identity.git
+Navigate to the application folder.cd msdocs-flask-web-app-managed-identity
+Navigate to the application folder.
+cd msdocs-flask-web-app-managed-identity
+cd msdocs-flask-web-app-managed-identity
+Examine authentication code
+The sample web app needs to authenticate to two different data stores:
+Azure blob storage server where it stores and retrieves photos submitted by reviewers.
+An Azure Database for PostgreSQL - Flexible Server database where it stores restaurants and reviews.
+It usesDefaultAzureCredentialto authenticate to both data stores. WithDefaultAzureCredential, the app can be configured to run under the identity of different service principals, depending on the environment it's running in, without making changes to code. For example, in a local development environment, the app can run under the identity of the developer signed in to the Azure CLI, while in Azure, as in this tutorial, it can run under its system-assigned managed identity.
+DefaultAzureCredential
+In either case, the security principal that the app runs under must have a role on each Azure resource the app uses that permits it to perform the actions on the resource that the app requires. In this tutorial, you use service connectors to automatically enable the system-assigned managed identity on your app in Azure and to assign that identity appropriate roles on your Azure storage account and Azure Database for PostgreSQL server.
+After the system-assigned managed identity is enabled and is assigned appropriate roles on the data stores, you can useDefaultAzureCredentialto authenticate with the required Azure resources.
+DefaultAzureCredential
+The following code is used to create a blob storage client to upload photos inapp.py. An instance ofDefaultAzureCredentialis supplied to the client, which it uses to acquire access tokens to perform operations against Azure storage.
+app.py
+DefaultAzureCredential
+from azure.identity import DefaultAzureCredential
+from azure.storage.blob import BlobServiceClient
+
+azure_credential = DefaultAzureCredential()
+blob_service_client = BlobServiceClient(
+    account_url=account_url,
+    credential=azure_credential)
+from azure.identity import DefaultAzureCredential
+from azure.storage.blob import BlobServiceClient
+
+azure_credential = DefaultAzureCredential()
+blob_service_client = BlobServiceClient(
+    account_url=account_url,
+    credential=azure_credential)
+An instance ofDefaultAzureCredentialis also used to get an access token for Azure Database for PostgreSQL in./azureproject/get_conn.py. In this case, the token is acquired directly by callingget_tokenon the credential instance and passing it the appropriatescopevalue. The token is then used in the place of the password in the PostgreSQL connection URI returned to the caller.
+DefaultAzureCredential
+./azureproject/get_conn.py
+scope
+azure_credential = DefaultAzureCredential()
+token = azure_credential.get_token("https://ossrdbms-aad.database.windows.net")
+conn = str(current_app.config.get('DATABASE_URI')).replace('PASSWORDORTOKEN', token.token)
+azure_credential = DefaultAzureCredential()
+token = azure_credential.get_token("https://ossrdbms-aad.database.windows.net")
+conn = str(current_app.config.get('DATABASE_URI')).replace('PASSWORDORTOKEN', token.token)
+To learn more about authenticating your apps with Azure services, seeAuthenticate Python apps to Azure services by using the Azure SDK for Python. To learn more aboutDefaultAzureCredential, including how to customize the credential chain it evaluates for your environment, seeDefaultAzureCredential overview.
+DefaultAzureCredential
+Create an Azure PostgreSQL server
+Set up the environment variables needed for the tutorial.LOCATION="eastus"
+RAND_ID=$RANDOM
+RESOURCE_GROUP_NAME="msdocs-mi-web-app"
+APP_SERVICE_NAME="msdocs-mi-web-$RAND_ID"
+DB_SERVER_NAME="msdocs-mi-postgres-$RAND_ID"
+ADMIN_USER="demoadmin"
+ADMIN_PW="ChAnG33#ThsPssWD$RAND_ID"ImportantTheADMIN_PWmust contain 8 to 128 characters from three of the following categories: English uppercase letters, English lowercase letters, numbers, and nonalphanumeric characters. When creating usernames or passwordsdo notuse the$character. Later you create environment variables with these values where the$character has special meaning within the Linux container used to run Python apps.
+Set up the environment variables needed for the tutorial.
+LOCATION="eastus"
+RAND_ID=$RANDOM
+RESOURCE_GROUP_NAME="msdocs-mi-web-app"
+APP_SERVICE_NAME="msdocs-mi-web-$RAND_ID"
+DB_SERVER_NAME="msdocs-mi-postgres-$RAND_ID"
+ADMIN_USER="demoadmin"
+ADMIN_PW="ChAnG33#ThsPssWD$RAND_ID"
+LOCATION="eastus"
+RAND_ID=$RANDOM
+RESOURCE_GROUP_NAME="msdocs-mi-web-app"
+APP_SERVICE_NAME="msdocs-mi-web-$RAND_ID"
+DB_SERVER_NAME="msdocs-mi-postgres-$RAND_ID"
+ADMIN_USER="demoadmin"
+ADMIN_PW="ChAnG33#ThsPssWD$RAND_ID"
+Important
+TheADMIN_PWmust contain 8 to 128 characters from three of the following categories: English uppercase letters, English lowercase letters, numbers, and nonalphanumeric characters. When creating usernames or passwordsdo notuse the$character. Later you create environment variables with these values where the$character has special meaning within the Linux container used to run Python apps.
+ADMIN_PW
+$
+$
+Create a resource group with theaz group createcommand.az group create --location $LOCATION --name $RESOURCE_GROUP_NAME
+Create a resource group with theaz group createcommand.
+az group create --location $LOCATION --name $RESOURCE_GROUP_NAME
+az group create --location $LOCATION --name $RESOURCE_GROUP_NAME
+Create a PostgreSQL server with theaz postgres flexible-server createcommand. (This and subsequent commands use the line continuation character for Bash Shell ('\'). Change the line continuation character for your shell if needed.)az postgres flexible-server create \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $DB_SERVER_NAME \
+  --location $LOCATION \
+  --admin-user $ADMIN_USER \
+  --admin-password $ADMIN_PW \
+  --sku-name Standard_D2ds_v4Thesku-nameis the name of the pricing tier and compute configuration. For more information, seeAzure Database for PostgreSQL pricing. To list available SKUs, useaz postgres flexible-server list-skus --location $LOCATION.
+Create a PostgreSQL server with theaz postgres flexible-server createcommand. (This and subsequent commands use the line continuation character for Bash Shell ('\'). Change the line continuation character for your shell if needed.)
+az postgres flexible-server create \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $DB_SERVER_NAME \
+  --location $LOCATION \
+  --admin-user $ADMIN_USER \
+  --admin-password $ADMIN_PW \
+  --sku-name Standard_D2ds_v4
+az postgres flexible-server create \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $DB_SERVER_NAME \
+  --location $LOCATION \
+  --admin-user $ADMIN_USER \
+  --admin-password $ADMIN_PW \
+  --sku-name Standard_D2ds_v4
+Thesku-nameis the name of the pricing tier and compute configuration. For more information, seeAzure Database for PostgreSQL pricing. To list available SKUs, useaz postgres flexible-server list-skus --location $LOCATION.
+az postgres flexible-server list-skus --location $LOCATION
+Create a database namedrestaurantusing theaz postgres flexible-server executecommand.az postgres flexible-server execute \
+  --name $DB_SERVER_NAME \
+  --admin-user $ADMIN_USER \
+  --admin-password $ADMIN_PW \
+  --database-name postgres \
+  --querytext 'create database restaurant;'
+Create a database namedrestaurantusing theaz postgres flexible-server executecommand.
+restaurant
+az postgres flexible-server execute \
+  --name $DB_SERVER_NAME \
+  --admin-user $ADMIN_USER \
+  --admin-password $ADMIN_PW \
+  --database-name postgres \
+  --querytext 'create database restaurant;'
+az postgres flexible-server execute \
+  --name $DB_SERVER_NAME \
+  --admin-user $ADMIN_USER \
+  --admin-password $ADMIN_PW \
+  --database-name postgres \
+  --querytext 'create database restaurant;'
+Create an Azure App Service and deploy the code
+Create an app service using theaz webapp upcommand.az webapp up \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --runtime PYTHON:3.9 \
+  --sku B1Theskudefines the size (CPU, memory) and cost of the app service plan. The B1 (Basic) service plan incurs a small cost in your Azure subscription. For a full list of App Service plans, view theApp Service pricingpage.
+Create an app service using theaz webapp upcommand.
+az webapp up \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --runtime PYTHON:3.9 \
+  --sku B1
+az webapp up \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --runtime PYTHON:3.9 \
+  --sku B1
+Theskudefines the size (CPU, memory) and cost of the app service plan. The B1 (Basic) service plan incurs a small cost in your Azure subscription. For a full list of App Service plans, view theApp Service pricingpage.
+Configure App Service to use thestart.shin the repo with theaz webapp config setcommand.az webapp config set \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --startup-file "start.sh"
+Configure App Service to use thestart.shin the repo with theaz webapp config setcommand.
+az webapp config set \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --startup-file "start.sh"
+az webapp config set \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --startup-file "start.sh"
+Create passwordless connectors to Azure resources
+The Service Connector commands configure Azure Storage and Azure Database for PostgreSQL resources to use managed identity and Azure role-based access control. The commands create app settings in the App Service that connect your web app to these resources. The output from the commands lists the service connector actions taken to enable passwordless capability.
+Add a PostgreSQL service connector with theaz webapp connection create postgres-flexiblecommand. The system-assigned managed identity is used to authenticate the web app to the target resource, PostgreSQL in this case.az webapp connection create postgres-flexible \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --target-resource-group $RESOURCE_GROUP_NAME \
+  --server $DB_SERVER_NAME \
+  --database restaurant \
+  --client-type python \
+  --system-identity
+Add a PostgreSQL service connector with theaz webapp connection create postgres-flexiblecommand. The system-assigned managed identity is used to authenticate the web app to the target resource, PostgreSQL in this case.
+az webapp connection create postgres-flexible \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --target-resource-group $RESOURCE_GROUP_NAME \
+  --server $DB_SERVER_NAME \
+  --database restaurant \
+  --client-type python \
+  --system-identity
+az webapp connection create postgres-flexible \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --target-resource-group $RESOURCE_GROUP_NAME \
+  --server $DB_SERVER_NAME \
+  --database restaurant \
+  --client-type python \
+  --system-identity
+Add a storage service connector with theaz webapp connection create storage-blobcommand.This command also adds a storage account and adds the web app with roleStorage Blob Data Contributorto the storage account.STORAGE_ACCOUNT_URL=$(az webapp connection create storage-blob \
+  --new true \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --target-resource-group $RESOURCE_GROUP_NAME \
+  --client-type python \
+  --system-identity \
+  --query configurations[].value \
+  --output tsv)
+STORAGE_ACCOUNT_NAME=$(cut -d . -f1 <<< $(cut -d / -f3 <<< $STORAGE_ACCOUNT_URL))
+Add a storage service connector with theaz webapp connection create storage-blobcommand.
+This command also adds a storage account and adds the web app with roleStorage Blob Data Contributorto the storage account.
+STORAGE_ACCOUNT_URL=$(az webapp connection create storage-blob \
+  --new true \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --target-resource-group $RESOURCE_GROUP_NAME \
+  --client-type python \
+  --system-identity \
+  --query configurations[].value \
+  --output tsv)
+STORAGE_ACCOUNT_NAME=$(cut -d . -f1 <<< $(cut -d / -f3 <<< $STORAGE_ACCOUNT_URL))
+STORAGE_ACCOUNT_URL=$(az webapp connection create storage-blob \
+  --new true \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --name $APP_SERVICE_NAME \
+  --target-resource-group $RESOURCE_GROUP_NAME \
+  --client-type python \
+  --system-identity \
+  --query configurations[].value \
+  --output tsv)
+STORAGE_ACCOUNT_NAME=$(cut -d . -f1 <<< $(cut -d / -f3 <<< $STORAGE_ACCOUNT_URL))
+Create a container in the storage account
+The sample Python app stores photos submitted by reviewers as blobs in a container in your storage account.
+When a user submits a photo with their review, the sample app writes the image to the container using its system-assigned managed identity for authentication and authorization. You configured this functionality in the last section.
+When a user submits a photo with their review, the sample app writes the image to the container using its system-assigned managed identity for authentication and authorization. You configured this functionality in the last section.
+When a user views the reviews for a restaurant, the app returns a link to the photo in blob storage for each review that has one associated with it. For the browser to display the photo, it must be able to access it in your storage account. The blob data must be available for read publicly through anonymous (unauthenticated) access.
+When a user views the reviews for a restaurant, the app returns a link to the photo in blob storage for each review that has one associated with it. For the browser to display the photo, it must be able to access it in your storage account. The blob data must be available for read publicly through anonymous (unauthenticated) access.
+To enhance security, storage accounts are created with anonymous access to blob data disabled by default. In this section, you enable anonymous read access on your storage account and then create a container namedphotosthat provides public (anonymous) access to its blobs.
+Update the storage account to allow anonymous read access to blobs with theaz storage account updatecommand.az storage account update \
+  --name $STORAGE_ACCOUNT_NAME \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --allow-blob-public-access trueEnabling anonymous access on the storage account doesn't affect access for individual blobs. You must explicitly enable public access to blobs at the container-level.
+Update the storage account to allow anonymous read access to blobs with theaz storage account updatecommand.
+az storage account update \
+  --name $STORAGE_ACCOUNT_NAME \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --allow-blob-public-access true
+az storage account update \
+  --name $STORAGE_ACCOUNT_NAME \
+  --resource-group $RESOURCE_GROUP_NAME \
+  --allow-blob-public-access true
+Enabling anonymous access on the storage account doesn't affect access for individual blobs. You must explicitly enable public access to blobs at the container-level.
+Create a container calledphotosin the storage account with theaz storage container createcommand. Allow anonymous read (public) access to blobs in the newly created container.az storage container create \
+  --account-name $STORAGE_ACCOUNT_NAME \
+  --name photos \
+  --public-access blob \
+  --account-key $(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME \
+      --query [0].value --output tsv)NoteFor brevity, this command uses the storage account key to authorize with the storage account. For most scenarios, Microsoft's recommended approach is to use Microsoft Entra ID and Azure (RBAC) roles. For a quick set of instructions, seeQuickstart: Create, download, and list blobs with Azure CLI. Note that several Azure roles permit you to create containers in a storage account, including "Owner", "Contributor", "Storage Blob Data Owner", and "Storage Blob Data Contributor".
+Create a container calledphotosin the storage account with theaz storage container createcommand. Allow anonymous read (public) access to blobs in the newly created container.
+az storage container create \
+  --account-name $STORAGE_ACCOUNT_NAME \
+  --name photos \
+  --public-access blob \
+  --account-key $(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME \
+      --query [0].value --output tsv)
+az storage container create \
+  --account-name $STORAGE_ACCOUNT_NAME \
+  --name photos \
+  --public-access blob \
+  --account-key $(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME \
+      --query [0].value --output tsv)
+Note
+For brevity, this command uses the storage account key to authorize with the storage account. For most scenarios, Microsoft's recommended approach is to use Microsoft Entra ID and Azure (RBAC) roles. For a quick set of instructions, seeQuickstart: Create, download, and list blobs with Azure CLI. Note that several Azure roles permit you to create containers in a storage account, including "Owner", "Contributor", "Storage Blob Data Owner", and "Storage Blob Data Contributor".
+To learn more about anonymous read access to blob data, seeConfigure anonymous read access for containers and blobs.
+Test the Python web app in Azure
+The sample Python app uses theazure.identitypackage and itsDefaultAzureCredentialclass. When the app is running in Azure,DefaultAzureCredentialautomatically detects if a managed identity exists for the App Service and, if so, uses it to access other Azure resources (storage and PostgreSQL in this case). There's no need to provide storage keys, certificates, or credentials to the App Service to access these resources.
+DefaultAzureCredential
+DefaultAzureCredential
+Browse to the deployed application at the URLhttp://$APP_SERVICE_NAME.azurewebsites.net.It can take a minute or two for the app to start. If you see a default app page that isn't the default sample app page, wait a minute and refresh the browser.
+Browse to the deployed application at the URLhttp://$APP_SERVICE_NAME.azurewebsites.net.
+http://$APP_SERVICE_NAME.azurewebsites.net
+It can take a minute or two for the app to start. If you see a default app page that isn't the default sample app page, wait a minute and refresh the browser.
+Test the functionality of the sample app by adding a restaurant and some reviews with photos for the restaurant.The restaurant and review information is stored in Azure Database for PostgreSQL and the photos are stored in Azure Storage. Here's an example screenshot:
+Test the functionality of the sample app by adding a restaurant and some reviews with photos for the restaurant.
+The restaurant and review information is stored in Azure Database for PostgreSQL and the photos are stored in Azure Storage. Here's an example screenshot:
+
+Clean up
+In this tutorial, all the Azure resources were created in the same resource group. Removing the resource group removes with theaz group deletecommand removes all resources in the resource group and is the fastest way to remove all Azure resources used for your app.
+az group delete  --name $RESOURCE_GROUP_NAME
+az group delete  --name $RESOURCE_GROUP_NAME
+You can optionally add the--no-waitargument to allow the command to return before the operation is complete.
+--no-wait
+Next steps
+Create and deploy a Django web app to Azure with a user-assigned managed identity
+Create and deploy a Django web app to Azure with a user-assigned managed identity
+Deploy a Python (Django or Flask) web app with PostgreSQL in Azure App Service
+Deploy a Python (Django or Flask) web app with PostgreSQL in Azure App Service
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,189 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Train a model by using a custom Docker image
+Article
+2025-03-31
+6 contributors
+In this article
+APPLIES TO:Python SDK azuremlv1
+Important
+This article provides information on using the Azure Machine Learning SDK v1. The SDK v1 is deprecated as of March 31, 2025 and support for it will end on June 30, 2026. You're able to install and use the SDK v1 until that date.
+We recommend that you transition to the SDK v2 before June 30, 2026. For more information on the SDK v2, seeWhat is the Azure Machine Learning Python SDK v2and theSDK v2 reference.
+This article describes how to use a custom Docker image to train models with Azure Machine Learning. Example scripts show how to classify images by creating a convolutional neural network.
+Azure Machine Learning provides a default Docker base image. You can also use Azure Machine Learning environments to specify a different base image, such as a maintainedAzure Machine Learning base imageor your owncustom image. Custom base images allow you to closely manage your dependencies and maintain tighter control over component versions when you run training jobs.
+Prerequisites
+To run the example code, your configuration must include one of the following environments:
+Azure Machine Learning compute instance with a dedicated notebook server preloaded with the Machine Learning SDK and Samples repository.This configuration requires no downloads or other installation. To prepare this environment, seeCreate resources to get started.
+Azure Machine Learning compute instance with a dedicated notebook server preloaded with the Machine Learning SDK and Samples repository.
+This configuration requires no downloads or other installation. To prepare this environment, seeCreate resources to get started.
+Jupyter Notebook server. The following resources provide instructions to help you prepare this environment:Create aworkspace configuration file.Install theAzure Machine Learning SDK.Create anAzure Container Registryor other Docker registry available on the internet.
+Jupyter Notebook server. The following resources provide instructions to help you prepare this environment:
+Create aworkspace configuration file.
+Install theAzure Machine Learning SDK.
+Create anAzure Container Registryor other Docker registry available on the internet.
+Set up a training experiment
+The first task is to set up your training experiment by initializing a Machine Learning workspace, defining your environment, and configuring a compute target.
+Initialize a workspace
+TheAzure Machine Learning workspaceis the top-level resource for the service. It gives you a centralized place to work with all the artifacts you create. In the Python SDK, you can access the workspace artifacts by creating aWorkspaceobject.
+Workspace
+As needed, create aWorkspaceobject from the config.json file that you created as aprerequisite.
+Workspace
+from azureml.core import Workspace
+
+ws = Workspace.from_config()
+from azureml.core import Workspace
+
+ws = Workspace.from_config()
+Define your environment
+Create anEnvironmentobject.
+Environment
+from azureml.core import Environment
+
+fastai_env = Environment("fastai2")
+from azureml.core import Environment
+
+fastai_env = Environment("fastai2")
+The specified base image in the following code supports the fast.ai library, which allows for distributed deep-learning capabilities. For more information, see thefast.ai Docker Hub repository.
+When you use your custom Docker image, you might already have your Python environment properly set up. In that case, set theuser_managed_dependenciesflag toTrueto use your custom image's built-in Python environment. By default, Azure Machine Learning builds a Conda environment with dependencies that you specified. The service runs the script in that environment instead of using any Python libraries that you installed on the base image.
+user_managed_dependencies
+True
+fastai_env.docker.base_image = "fastdotai/fastai2:latest"
+fastai_env.python.user_managed_dependencies = True
+fastai_env.docker.base_image = "fastdotai/fastai2:latest"
+fastai_env.python.user_managed_dependencies = True
+To use an image from a private container registry that isn't in your workspace, usedocker.base_image_registryto specify the address of the repository and a username and password:
+docker.base_image_registry
+# Set the container registry information
+fastai_env.docker.base_image_registry.address = "myregistry.azurecr.io"
+fastai_env.docker.base_image_registry.username = "username"
+fastai_env.docker.base_image_registry.password = "password"
+# Set the container registry information
+fastai_env.docker.base_image_registry.address = "myregistry.azurecr.io"
+fastai_env.docker.base_image_registry.username = "username"
+fastai_env.docker.base_image_registry.password = "password"
+It's also possible to use a custom Dockerfile. Use this approach if you need to install non-Python packages as dependencies. Remember to set the base image toNone.
+None
+# Specify Docker steps as a string
+dockerfile = r"""
+FROM mcr.microsoft.com/azureml/openmpi3.1.2-ubuntu18.04:20210615.v1
+RUN echo "Hello from custom container!"
+"""
+
+# Set the base image to None, because the image is defined by Dockerfile
+fastai_env.docker.base_image = None
+fastai_env.docker.base_dockerfile = dockerfile
+
+# Alternatively, load the string from a file
+fastai_env.docker.base_image = None
+fastai_env.docker.base_dockerfile = "./Dockerfile"
+# Specify Docker steps as a string
+dockerfile = r"""
+FROM mcr.microsoft.com/azureml/openmpi3.1.2-ubuntu18.04:20210615.v1
+RUN echo "Hello from custom container!"
+"""
+
+# Set the base image to None, because the image is defined by Dockerfile
+fastai_env.docker.base_image = None
+fastai_env.docker.base_dockerfile = dockerfile
+
+# Alternatively, load the string from a file
+fastai_env.docker.base_image = None
+fastai_env.docker.base_dockerfile = "./Dockerfile"
+Important
+Azure Machine Learning only supports Docker images that provide the following software:
+Ubuntu 18.04 or greater
+Conda 4.7.# or greater
+Python 3.7+
+A POSIX compliant shell available at /bin/sh is required in any container image used for training
+For more information about creating and managing Azure Machine Learning environments, seeCreate and use software environments.
+Create or attach a compute target
+You need to create acompute targetfor training your model. In this tutorial, you createAmlComputeas your training compute resource.
+AmlCompute
+Creation ofAmlComputetakes a few minutes. If theAmlComputeresource is already in your workspace, this code skips the creation process.
+AmlCompute
+AmlCompute
+As with other Azure services, there are limits on certain resources (for example,AmlCompute) associated with the Azure Machine Learning service. For more information, seeDefault limits and how to request a higher quota.
+AmlCompute
+from azureml.core.compute import ComputeTarget, AmlCompute
+from azureml.core.compute_target import ComputeTargetException
+
+# Choose a name for your cluster
+cluster_name = "gpu-cluster"
+
+try:
+    compute_target = ComputeTarget(workspace=ws, name=cluster_name)
+    print('Found existing compute target.')
+except ComputeTargetException:
+    print('Creating a new compute target...')
+    compute_config = AmlCompute.provisioning_configuration(vm_size='STANDARD_NC6',
+                                                           max_nodes=4)
+
+    # Create the cluster
+    compute_target = ComputeTarget.create(ws, cluster_name, compute_config)
+
+    compute_target.wait_for_completion(show_output=True)
+
+# Use get_status() to get a detailed status for the current AmlCompute
+print(compute_target.get_status().serialize())
+from azureml.core.compute import ComputeTarget, AmlCompute
+from azureml.core.compute_target import ComputeTargetException
+
+# Choose a name for your cluster
+cluster_name = "gpu-cluster"
+
+try:
+    compute_target = ComputeTarget(workspace=ws, name=cluster_name)
+    print('Found existing compute target.')
+except ComputeTargetException:
+    print('Creating a new compute target...')
+    compute_config = AmlCompute.provisioning_configuration(vm_size='STANDARD_NC6',
+                                                           max_nodes=4)
+
+    # Create the cluster
+    compute_target = ComputeTarget.create(ws, cluster_name, compute_config)
+
+    compute_target.wait_for_completion(show_output=True)
+
+# Use get_status() to get a detailed status for the current AmlCompute
+print(compute_target.get_status().serialize())
+Important
+Use CPU SKUs for any image build on compute.
+Configure your training job
+For this tutorial, use the training scripttrain.pyonGitHub. In practice, you can take any custom training script and run it, as is, with Azure Machine Learning.
+Create aScriptRunConfigresource to configure your job for running on the desiredcompute target.
+ScriptRunConfig
+from azureml.core import ScriptRunConfig
+
+src = ScriptRunConfig(source_directory='fastai-example',
+                      script='train.py',
+                      compute_target=compute_target,
+                      environment=fastai_env)
+from azureml.core import ScriptRunConfig
+
+src = ScriptRunConfig(source_directory='fastai-example',
+                      script='train.py',
+                      compute_target=compute_target,
+                      environment=fastai_env)
+Submit your training job
+When you submit a training run by using aScriptRunConfigobject, thesubmitmethod returns an object of typeScriptRun. The returnedScriptRunobject gives you programmatic access to information about the training run.
+ScriptRunConfig
+submit
+ScriptRun
+ScriptRun
+from azureml.core import Experiment
+
+run = Experiment(ws,'Tutorial-fastai').submit(src)
+run.wait_for_completion(show_output=True)
+from azureml.core import Experiment
+
+run = Experiment(ws,'Tutorial-fastai').submit(src)
+run.wait_for_completion(show_output=True)
+Warning
+Azure Machine Learning runs training scripts by copying the entire source directory. If you have sensitive data that you don't want to upload, use an.ignore fileor don't include it in the source directory. Instead, access your data by using adatastore.
+Related content
+Track run metrics
+Deploy a model by using a custom Docker image
+Feedback
+Was this page helpful?
+Additional resources

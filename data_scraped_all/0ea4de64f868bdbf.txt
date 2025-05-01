@@ -1,0 +1,850 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Hierarchical partition keys in Azure Cosmos DB
+Article
+2024-08-14
+15 contributors
+In this article
+APPLIES TO:NoSQL
+Azure Cosmos DB distributes your data across logical and physical partitions based on your partition keys to support horizontal scaling. By using hierarchical partition keys (also calledsubpartitoning), you can configure up to a three-level hierarchy for your partition keys to further optimize data distribution and for a higher level of scaling.
+If you use synthetic keys today, have scenarios in which partition keys can exceed 20 GB of data, or would like to ensure that each tenant's document maps to its own logical partition, subpartitioning can help. If you use this feature, logical partition key prefixes can exceed 20 GB and 10,000 request units per second (RU/s). Queries by prefix are efficiently routed to the subset of partitions that hold the data.
+Choosing your hierarchical partition keys
+If you have multitenant applications and currently isolate tenants by partition key, hierarchical partitions might benefit you. Hierarchical partitions allow you to scale beyond the logical partition key limit of 20 GB, and are a good solution if you'd like to ensure each of your tenants' documents can scale infinitely. If your current partition key or if a single partition key is frequently reaching 20 GB, hierarchical partitions are a great choice for your workload.
+However, depending on the nature of your workload and how cardinal your first level key is, there can be some tradeoffs which we cover in depth in our hierarchical partition scenarios page.
+When you choose each level of your hierarchical partition key, it's important to keep the following general partitioning concepts in mind and understand how each one can affect your workload:
+Forallcontainers,each levelof the full path (starting with thefirst level) of your hierarchical partition key should:Have a high cardinality. The first, second, and third (if applicable) keys of the hierarchical partition should all have a wide range of possible values.Having low cardinality at the first level of the hierarchical partition key will limit all of your write operations at the time of ingestion to just one physical partition until it reaches 50 GB and splits into two physical partitions. For example, suppose your first level key is onTenantIdand only have 5 unique tenants. Each of these tenants' operations will be scoped to just one physical partition, limiting your throughput consumption to just what is on that one physical partition. This is because hierarchical partitions optimize for all documents with the same first-level key to be collocated on the same physical partition to avoid full-fanout queries.While this may be okay for workloads where we do a one-time ingest of all our tenants' data and the following operations are primarily read-heavy afterwards, this can be unideal for workloads where your business requirements involve ingestion of data within a specific time. For example, if you have strict business requirements to avoid latencies, the maximum throughput your workload can theoretically achieve to ingest data is number of physical partitions * 10k. If your top-level key has low cardinality, your number of physical partitions will likely be 1, unless there is sufficient data for the level 1 key for it to be spread across multiple partitions after splits which can take between 4-6 hours to complete.Spread request unit (RU) consumption and data storage evenly across all logical partitions. This spread ensures even RU consumption and storage distribution across your physical partitions.If you choose a first level key that seems to have high cardinality likeUserId, but in practice your workload performs operations on just one specificUserId, then you are likely to run into a hot partition as all of your operations will be scoped to just one or few physical partitions.
+Forallcontainers,each levelof the full path (starting with thefirst level) of your hierarchical partition key should:
+Have a high cardinality. The first, second, and third (if applicable) keys of the hierarchical partition should all have a wide range of possible values.Having low cardinality at the first level of the hierarchical partition key will limit all of your write operations at the time of ingestion to just one physical partition until it reaches 50 GB and splits into two physical partitions. For example, suppose your first level key is onTenantIdand only have 5 unique tenants. Each of these tenants' operations will be scoped to just one physical partition, limiting your throughput consumption to just what is on that one physical partition. This is because hierarchical partitions optimize for all documents with the same first-level key to be collocated on the same physical partition to avoid full-fanout queries.While this may be okay for workloads where we do a one-time ingest of all our tenants' data and the following operations are primarily read-heavy afterwards, this can be unideal for workloads where your business requirements involve ingestion of data within a specific time. For example, if you have strict business requirements to avoid latencies, the maximum throughput your workload can theoretically achieve to ingest data is number of physical partitions * 10k. If your top-level key has low cardinality, your number of physical partitions will likely be 1, unless there is sufficient data for the level 1 key for it to be spread across multiple partitions after splits which can take between 4-6 hours to complete.
+Have a high cardinality. The first, second, and third (if applicable) keys of the hierarchical partition should all have a wide range of possible values.
+Having low cardinality at the first level of the hierarchical partition key will limit all of your write operations at the time of ingestion to just one physical partition until it reaches 50 GB and splits into two physical partitions. For example, suppose your first level key is onTenantIdand only have 5 unique tenants. Each of these tenants' operations will be scoped to just one physical partition, limiting your throughput consumption to just what is on that one physical partition. This is because hierarchical partitions optimize for all documents with the same first-level key to be collocated on the same physical partition to avoid full-fanout queries.
+TenantId
+While this may be okay for workloads where we do a one-time ingest of all our tenants' data and the following operations are primarily read-heavy afterwards, this can be unideal for workloads where your business requirements involve ingestion of data within a specific time. For example, if you have strict business requirements to avoid latencies, the maximum throughput your workload can theoretically achieve to ingest data is number of physical partitions * 10k. If your top-level key has low cardinality, your number of physical partitions will likely be 1, unless there is sufficient data for the level 1 key for it to be spread across multiple partitions after splits which can take between 4-6 hours to complete.
+Spread request unit (RU) consumption and data storage evenly across all logical partitions. This spread ensures even RU consumption and storage distribution across your physical partitions.If you choose a first level key that seems to have high cardinality likeUserId, but in practice your workload performs operations on just one specificUserId, then you are likely to run into a hot partition as all of your operations will be scoped to just one or few physical partitions.
+Spread request unit (RU) consumption and data storage evenly across all logical partitions. This spread ensures even RU consumption and storage distribution across your physical partitions.
+If you choose a first level key that seems to have high cardinality likeUserId, but in practice your workload performs operations on just one specificUserId, then you are likely to run into a hot partition as all of your operations will be scoped to just one or few physical partitions.
+UserId
+UserId
+Read-heavy workloads:We recommend that you choose hierarchical partition keys that appear frequently in your queries.For example, a workload that frequently runs queries to filter out specific user sessions in a multitenant application can benefit from hierarchical partition keys ofTenantId,UserId, andSessionId, in that order. Queries can be efficiently routed to only the relevant physical partitions by including the partition key in the filter predicate. For more information about choosing partition keys for read-heavy workloads, see thepartitioning overview.
+Read-heavy workloads:We recommend that you choose hierarchical partition keys that appear frequently in your queries.
+For example, a workload that frequently runs queries to filter out specific user sessions in a multitenant application can benefit from hierarchical partition keys ofTenantId,UserId, andSessionId, in that order. Queries can be efficiently routed to only the relevant physical partitions by including the partition key in the filter predicate. For more information about choosing partition keys for read-heavy workloads, see thepartitioning overview.
+TenantId
+UserId
+SessionId
+Write-heavy workloads:We recommend using a high cardinal value for thefirst-levelof your hierarchical partition key. High cardinality means that the first-level key (and subsequent levels as well) has at least thousands of unique values and more unique values than the number of your physical partitions.For example, suppose we have a workload that isolates tenants by partition key, and has a few large tenants that are more write-heavy than others. Today, Azure Cosmos DB will stop ingesting data on any partition key value if it exceeds 20 GB of data. In this workload, Microsoft and Contoso are large tenants and we anticipate it growing much faster than our other tenants. To avoid the risk of not being able to ingest data for these tenants, hierarchical partition keys allows us to scale these tenants beyond the 20 GB limit. We can add more levels like UserId and SessionId to ensure higher scalability across tenants.To ensure that your workload can accommodate writes for all documents with the same first-level key, consider using item ID as a second or third level key.If your first level does not have high cardinality and you are hitting the 20 GB logical partition limit on your partition key today, we suggest using a synthetic partition key instead of a hierarchical partition key.
+Write-heavy workloads:We recommend using a high cardinal value for thefirst-levelof your hierarchical partition key. High cardinality means that the first-level key (and subsequent levels as well) has at least thousands of unique values and more unique values than the number of your physical partitions.
+For example, suppose we have a workload that isolates tenants by partition key, and has a few large tenants that are more write-heavy than others. Today, Azure Cosmos DB will stop ingesting data on any partition key value if it exceeds 20 GB of data. In this workload, Microsoft and Contoso are large tenants and we anticipate it growing much faster than our other tenants. To avoid the risk of not being able to ingest data for these tenants, hierarchical partition keys allows us to scale these tenants beyond the 20 GB limit. We can add more levels like UserId and SessionId to ensure higher scalability across tenants.
+For example, suppose we have a workload that isolates tenants by partition key, and has a few large tenants that are more write-heavy than others. Today, Azure Cosmos DB will stop ingesting data on any partition key value if it exceeds 20 GB of data. In this workload, Microsoft and Contoso are large tenants and we anticipate it growing much faster than our other tenants. To avoid the risk of not being able to ingest data for these tenants, hierarchical partition keys allows us to scale these tenants beyond the 20 GB limit. We can add more levels like UserId and SessionId to ensure higher scalability across tenants.
+To ensure that your workload can accommodate writes for all documents with the same first-level key, consider using item ID as a second or third level key.
+To ensure that your workload can accommodate writes for all documents with the same first-level key, consider using item ID as a second or third level key.
+If your first level does not have high cardinality and you are hitting the 20 GB logical partition limit on your partition key today, we suggest using a synthetic partition key instead of a hierarchical partition key.
+If your first level does not have high cardinality and you are hitting the 20 GB logical partition limit on your partition key today, we suggest using a synthetic partition key instead of a hierarchical partition key.
+Example use case
+Suppose you have a multitenant scenario in which you store event information for users in each tenant. The event information might have event occurrences including but not limited to sign-in, clickstream, or payment events.
+In a real-world scenario, some tenants can grow large, with thousands of users, while the many other tenants are smaller and have a few users. Partitioning by/TenantIdmight lead to exceeding the Azure Cosmos DB 20-GB storage limit on a single logical partition. Partitioning by/UserIdmakes all queries on a tenant cross-partition. Both approaches have significant downsides.
+/TenantId
+/UserId
+Using a synthetic partition key that combinesTenantIdandUserIdadds complexity to the application. Additionally, the synthetic partition key queries for a tenant are still cross-partition, unless all users are known and specified in advance.
+TenantId
+UserId
+If your workload has tenants with roughly the same workload patterns, hierarchical partition key can help. With hierarchical partition keys, you can partition first onTenantId, and then onUserId. If you expect theTenantIdandUserIdcombination to produce partitions that exceed 20 GB, you can even partition further down to another level, such as onSessionId. The overall depth can't exceed three levels. When a physical partition exceeds 50 GB of storage, Azure Cosmos DB automatically splits the physical partition so that roughly half of the data is on one physical partition, and half is on the other. Effectively, subpartitioning means that a singleTenantIdvalue can exceed 20 GB of data, and it's possible forTenantIddata to span multiple physical partitions.
+TenantId
+UserId
+TenantId
+UserId
+SessionId
+TenantId
+TenantId
+Queries that specify eitherTenantId, or bothTenantIdandUserId, are efficiently routed to only the subset of physical partitions that contain the relevant data. Specifying the full or prefix subpartitioned partition key path effectively avoids a full fan-out query. For example, if the container had 1,000 physical partitions, but a specificTenantIdvalue was only on 5 physical partitions, the query would be routed to the smaller number of relevant physical partitions.
+TenantId
+TenantId
+UserId
+TenantId
+Use item ID in hierarchy
+If your container has a property that has a large range of possible values, the property is likely a great partition key choice for the last level of your hierarchy. One possible example of this type of property is theitem ID. The system property item ID exists in every item in your container. Adding the item ID as another level guarantees that you can scale beyond the logical partition key limit of 20 GB. You can scale beyond this limit for the first level or for the first and second levels of keys.
+For example, you might have a container for a multitenant workload that's partitioned byTenantIdandUserId. If it's possible for a single combination ofTenantIdandUserIdto exceed 20 GB, then we recommend that you partition by using three levels of keys, and in which the third-level key has high cardinality. An example of this scenario is if the third-level key is a GUID that has naturally high cardinality. It's unlikely that the combination ofTenantId,UserId, and a GUID exceeds 20 GB, so the combination ofTenantIdandUserIdcan effectively scale beyond 20 GB.
+TenantId
+UserId
+TenantId
+UserId
+TenantId
+UserId
+TenantId
+UserId
+For more information about using item ID as a partition key, see thepartitioning overview.
+Get started
+Important
+Working with containers that use hierarchical partition keys is supported only in following SDK versions. You must use a supported SDK to create new containers with hierarchical partition keys and to perform create, read, update, and delete (CRUD) or query operations on the data.
+If you want to use an SDK or connector that isn't currently supported, please file a request on ourcommunity forum.
+Find the latest preview version of each supported SDK:
+Create a container by using hierarchical partition keys
+To get started, create a new container by using a predefined list of subpartitioning key paths up to three levels of depth.
+You can create a new container by using one of these options:
+Azure portal
+SDK
+Azure Resource Manager template
+Azure Cosmos DB emulator
+Azure portal
+The simplest way to create a container and specify hierarchical partition keys is by using the Azure portal.
+Sign in to theAzure portal.
+Sign in to theAzure portal.
+Go to the existing Azure Cosmos DB for NoSQL account page.
+Go to the existing Azure Cosmos DB for NoSQL account page.
+On the left menu, selectData Explorer.
+On the left menu, selectData Explorer.
+
+OnData Explorer, select theNew Containeroption.
+OnData Explorer, select theNew Containeroption.
+
+InNew Container, forPartition key, enter/TenantId. For the remaining fields, enter any value that matches your scenario.NoteWe use/TenantIdas an example here. You can specify any key for the first level when you implement hierarchical partition keys on your own containers.
+InNew Container, forPartition key, enter/TenantId. For the remaining fields, enter any value that matches your scenario.
+/TenantId
+Note
+We use/TenantIdas an example here. You can specify any key for the first level when you implement hierarchical partition keys on your own containers.
+/TenantId
+SelectAdd hierarchical partition keytwice.
+SelectAdd hierarchical partition keytwice.
+
+For the second and third tiers of subpartitioning, enter/UserIdand/SessionIdrespectively.
+For the second and third tiers of subpartitioning, enter/UserIdand/SessionIdrespectively.
+/UserId
+/SessionId
+
+SelectOKto create the container.
+SelectOKto create the container.
+SDK
+When you create a new container by using the SDK, define a list of subpartitioning key paths up to three levels of depth. Use the list of subpartition keys when you configure the properties of the new container.
+.NET SDK v3
+Java SDK v4
+JavaScript SDK v4
+Python SDK
+// List of partition keys, in hierarchical order. You can have up to three levels of keys.
+List<string> subpartitionKeyPaths = new List<string> { 
+    "/TenantId",
+    "/UserId",
+    "/SessionId"
+};
+
+// Create a container properties object
+ContainerProperties containerProperties = new ContainerProperties(
+    id: "<container-name>",
+    partitionKeyPaths: subpartitionKeyPaths
+);
+
+// Create a container that's subpartitioned by TenantId > UserId > SessionId
+Container container = await database.CreateContainerIfNotExistsAsync(containerProperties, throughput: 400);
+// List of partition keys, in hierarchical order. You can have up to three levels of keys.
+List<string> subpartitionKeyPaths = new List<string> { 
+    "/TenantId",
+    "/UserId",
+    "/SessionId"
+};
+
+// Create a container properties object
+ContainerProperties containerProperties = new ContainerProperties(
+    id: "<container-name>",
+    partitionKeyPaths: subpartitionKeyPaths
+);
+
+// Create a container that's subpartitioned by TenantId > UserId > SessionId
+Container container = await database.CreateContainerIfNotExistsAsync(containerProperties, throughput: 400);
+// List of partition keys, in hierarchical order. You can have up to three levels of keys.
+List<String> subpartitionKeyPaths = new ArrayList<String>();
+subpartitionKeyPaths.add("/TenantId");
+subpartitionKeyPaths.add("/UserId");
+subpartitionKeyPaths.add("/SessionId");
+
+//Create a partition key definition object with Kind ("MultiHash") and Version V2
+PartitionKeyDefinition subpartitionKeyDefinition = new PartitionKeyDefinition();
+subpartitionKeyDefinition.setPaths(subpartitionKeyPaths);
+subpartitionKeyDefinition.setKind(PartitionKind.MULTI_HASH);
+subpartitionKeyDefinition.setVersion(PartitionKeyDefinitionVersion.V2);
+
+// Create a container properties object
+CosmosContainerProperties containerProperties = new CosmosContainerProperties("<container-name>", subpartitionKeyDefinition);
+
+// Create a throughput properties object
+ThroughputProperties throughputProperties = ThroughputProperties.createManualThroughput(400);
+
+// Create a container that's subpartitioned by TenantId > UserId > SessionId
+Mono<CosmosContainerResponse> container = database.createContainerIfNotExists(containerProperties, throughputProperties);
+// List of partition keys, in hierarchical order. You can have up to three levels of keys.
+List<String> subpartitionKeyPaths = new ArrayList<String>();
+subpartitionKeyPaths.add("/TenantId");
+subpartitionKeyPaths.add("/UserId");
+subpartitionKeyPaths.add("/SessionId");
+
+//Create a partition key definition object with Kind ("MultiHash") and Version V2
+PartitionKeyDefinition subpartitionKeyDefinition = new PartitionKeyDefinition();
+subpartitionKeyDefinition.setPaths(subpartitionKeyPaths);
+subpartitionKeyDefinition.setKind(PartitionKind.MULTI_HASH);
+subpartitionKeyDefinition.setVersion(PartitionKeyDefinitionVersion.V2);
+
+// Create a container properties object
+CosmosContainerProperties containerProperties = new CosmosContainerProperties("<container-name>", subpartitionKeyDefinition);
+
+// Create a throughput properties object
+ThroughputProperties throughputProperties = ThroughputProperties.createManualThroughput(400);
+
+// Create a container that's subpartitioned by TenantId > UserId > SessionId
+Mono<CosmosContainerResponse> container = database.createContainerIfNotExists(containerProperties, throughputProperties);
+const containerDefinition = {
+  id: "Test Database",
+  partitionKey: {
+    paths: ["/name", "/address/zip"],
+    version: PartitionKeyDefinitionVersion.V2,
+    kind: PartitionKeyKind.MultiHash,
+  },
+}
+const { container } = await database.containers.createIfNotExists(containerDefinition);
+console.log(container.id);
+const containerDefinition = {
+  id: "Test Database",
+  partitionKey: {
+    paths: ["/name", "/address/zip"],
+    version: PartitionKeyDefinitionVersion.V2,
+    kind: PartitionKeyKind.MultiHash,
+  },
+}
+const { container } = await database.containers.createIfNotExists(containerDefinition);
+console.log(container.id);
+container = database.create_container(
+        id=container_name, partition_key=PartitionKey(path=["/tenantId", "/userId", "/sessionId"], kind="MultiHash")
+    )
+container = database.create_container(
+        id=container_name, partition_key=PartitionKey(path=["/tenantId", "/userId", "/sessionId"], kind="MultiHash")
+    )
+Azure Resource Manager templates
+The Azure Resource Manager template for a subpartitioned container is almost identical to a standard container. The only key difference is the value of theproperties/partitionKeypath. For more information about creating an Azure Resource Manager template for an Azure Cosmos DB resource, see theAzure Resource Manager template reference for Azure Cosmos DB.
+properties/partitionKey
+Configure thepartitionKeyobject by using the values in the following table to create a subpartitioned container:
+partitionKey
+paths
+kind
+MultiHash
+version
+2
+For example, assume that you have a hierarchical partition key that's composed ofTenantId>UserId>SessionId. ThepartitionKeyobject would be configured to include all three values in thepathsproperty, akindvalue ofMultiHash, and aversionvalue of2.
+TenantId
+UserId
+SessionId
+partitionKey
+paths
+kind
+MultiHash
+version
+2
+Bicep
+JSON
+partitionKey: {
+  paths: [
+    '/TenantId'
+    '/UserId'
+    '/SessionId'
+  ]
+  kind: 'MultiHash'
+  version: 2
+}
+partitionKey: {
+  paths: [
+    '/TenantId'
+    '/UserId'
+    '/SessionId'
+  ]
+  kind: 'MultiHash'
+  version: 2
+}
+"partitionKey": {
+    "paths": [
+        "/TenantId",
+        "/UserId",
+        "/SessionId"
+    ],
+    "kind": "MultiHash",
+    "version": 2
+}
+"partitionKey": {
+    "paths": [
+        "/TenantId",
+        "/UserId",
+        "/SessionId"
+    ],
+    "kind": "MultiHash",
+    "version": 2
+}
+For more information about thepartitionKeyobject, see theContainerPartitionKey specification.
+partitionKey
+Azure Cosmos DB emulator
+You can test the subpartitioning feature by using the latest version of the local emulator for Azure Cosmos DB. To enable subparitioning on the emulator, start the emulator from the installation directory with the/EnablePreviewflag:
+/EnablePreview
+.\CosmosDB.Emulator.exe /EnablePreview
+.\CosmosDB.Emulator.exe /EnablePreview
+Warning
+The emulator doesn't currently support all of the hiearchical partition key features as the portal. The emulator currently doesn't support:
+Using the Data Explorer to create containers with hierarchical partition keys
+Using the Data Explorer to navigate to and interact with items using hierarchical partition keys
+For more information, seeAzure Cosmos DB emulator.
+
+Use the SDKs to work with containers that have hierarchical partition keys
+When you have a container that has hierarchical partition keys, use the previously specified versions of the .NET or Java SDKs to perform operations and execute queries on that container.
+Add an item to a container
+There are two options to add a new item to a container with hierarchical partition keys enabled:
+Automatic extraction
+Manually specify the path
+If you pass in an object with the partition key value set, the SDK can automatically extract the full partition key path.
+.NET SDK v3
+Java SDK v4
+JavaScript SDK v4
+Python SDK
+// Create a new item
+UserSession item = new UserSession()
+{
+    id = "f7da01b0-090b-41d2-8416-dacae09fbb4a",
+    TenantId = "Microsoft",
+    UserId = "00aa00aa-bb11-cc22-dd33-44ee44ee44ee",
+    SessionId = "0000-11-0000-1111"
+};
+
+// Pass in the object, and the SDK automatically extracts the full partition key path
+ItemResponse<UserSession> createResponse = await container.CreateItemAsync(item);
+// Create a new item
+UserSession item = new UserSession()
+{
+    id = "f7da01b0-090b-41d2-8416-dacae09fbb4a",
+    TenantId = "Microsoft",
+    UserId = "00aa00aa-bb11-cc22-dd33-44ee44ee44ee",
+    SessionId = "0000-11-0000-1111"
+};
+
+// Pass in the object, and the SDK automatically extracts the full partition key path
+ItemResponse<UserSession> createResponse = await container.CreateItemAsync(item);
+// Create a new item
+UserSession item = new UserSession();
+item.setId("f7da01b0-090b-41d2-8416-dacae09fbb4a");
+item.setTenantId("Microsoft");
+item.setUserId("00aa00aa-bb11-cc22-dd33-44ee44ee44ee");
+item.setSessionId("0000-11-0000-1111");
+   
+// Pass in the object, and the SDK automatically extracts the full partition key path
+Mono<CosmosItemResponse<UserSession>> createResponse = container.createItem(item);
+// Create a new item
+UserSession item = new UserSession();
+item.setId("f7da01b0-090b-41d2-8416-dacae09fbb4a");
+item.setTenantId("Microsoft");
+item.setUserId("00aa00aa-bb11-cc22-dd33-44ee44ee44ee");
+item.setSessionId("0000-11-0000-1111");
+   
+// Pass in the object, and the SDK automatically extracts the full partition key path
+Mono<CosmosItemResponse<UserSession>> createResponse = container.createItem(item);
+// Create a new item
+const item: UserSession = {
+    Id: 'f7da01b0-090b-41d2-8416-dacae09fbb4a',
+    TenantId: 'Microsoft',
+    UserId: '00aa00aa-bb11-cc22-dd33-44ee44ee44ee',
+    SessionId: '0000-11-0000-1111'
+}
+
+// Pass in the object, and the SDK automatically extracts the full partition key path
+const { resource: document } = await = container.items.create(item);
+// Create a new item
+const item: UserSession = {
+    Id: 'f7da01b0-090b-41d2-8416-dacae09fbb4a',
+    TenantId: 'Microsoft',
+    UserId: '00aa00aa-bb11-cc22-dd33-44ee44ee44ee',
+    SessionId: '0000-11-0000-1111'
+}
+
+// Pass in the object, and the SDK automatically extracts the full partition key path
+const { resource: document } = await = container.items.create(item);
+# specify values for all fields on partition key path
+item_definition = {'id': 'f7da01b0-090b-41d2-8416-dacae09fbb4a',
+                        'tenantId': 'Microsoft',
+                        'userId': '00aa00aa-bb11-cc22-dd33-44ee44ee44ee',
+                        'sessionId': '0000-11-0000-1111'}
+
+item = container.create_item(body=item_definition)
+# specify values for all fields on partition key path
+item_definition = {'id': 'f7da01b0-090b-41d2-8416-dacae09fbb4a',
+                        'tenantId': 'Microsoft',
+                        'userId': '00aa00aa-bb11-cc22-dd33-44ee44ee44ee',
+                        'sessionId': '0000-11-0000-1111'}
+
+item = container.create_item(body=item_definition)
+ThePartitionKeyBuilderclass in the SDK can construct a value for a previously defined hierarchical partition key path. Use this class when you add a new item to a container that has subpartitioning enabled.
+PartitionKeyBuilder
+Tip
+At scale, performance might be improved if you specify the full partition key path, even if the SDK can extract the path from the object.
+.NET SDK v3
+Java SDK v4
+JavaScript SDK v4
+Python SDK
+// Create a new item object
+PaymentEvent item = new PaymentEvent()
+{
+    id = Guid.NewGuid().ToString(),
+    TenantId = "Microsoft",
+    UserId = "00aa00aa-bb11-cc22-dd33-44ee44ee44ee",
+    SessionId = "0000-11-0000-1111"
+};
+
+// Specify the full partition key path when creating the item
+PartitionKey partitionKey = new PartitionKeyBuilder()
+            .Add(item.TenantId)
+            .Add(item.UserId)
+            .Add(item.SessionId)
+            .Build();
+
+// Create the item in the container
+ItemResponse<PaymentEvent> createResponse = await container.CreateItemAsync(item, partitionKey);
+// Create a new item object
+PaymentEvent item = new PaymentEvent()
+{
+    id = Guid.NewGuid().ToString(),
+    TenantId = "Microsoft",
+    UserId = "00aa00aa-bb11-cc22-dd33-44ee44ee44ee",
+    SessionId = "0000-11-0000-1111"
+};
+
+// Specify the full partition key path when creating the item
+PartitionKey partitionKey = new PartitionKeyBuilder()
+            .Add(item.TenantId)
+            .Add(item.UserId)
+            .Add(item.SessionId)
+            .Build();
+
+// Create the item in the container
+ItemResponse<PaymentEvent> createResponse = await container.CreateItemAsync(item, partitionKey);
+// Create a new item object
+UserSession item = new UserSession();
+item.setTenantId("Microsoft");
+item.setUserId("00aa00aa-bb11-cc22-dd33-44ee44ee44ee");
+item.setSessionId("0000-11-0000-1111");
+item.setId(UUID.randomUUID().toString());
+
+// Specify the full partition key path when creating the item
+PartitionKey partitionKey = new PartitionKeyBuilder()
+            .add(item.getTenantId())
+            .add(item.getUserId())
+            .add(item.getSessionId())
+            .build();
+       
+// Create the item in the container     
+Mono<CosmosItemResponse<UserSession>> createResponse = container.createItem(item, partitionKey);
+// Create a new item object
+UserSession item = new UserSession();
+item.setTenantId("Microsoft");
+item.setUserId("00aa00aa-bb11-cc22-dd33-44ee44ee44ee");
+item.setSessionId("0000-11-0000-1111");
+item.setId(UUID.randomUUID().toString());
+
+// Specify the full partition key path when creating the item
+PartitionKey partitionKey = new PartitionKeyBuilder()
+            .add(item.getTenantId())
+            .add(item.getUserId())
+            .add(item.getSessionId())
+            .build();
+       
+// Create the item in the container     
+Mono<CosmosItemResponse<UserSession>> createResponse = container.createItem(item, partitionKey);
+const item: UserSession = {
+    Id: 'f7da01b0-090b-41d2-8416-dacae09fbb4a',
+    TenantId: 'Microsoft',
+    UserId: '00aa00aa-bb11-cc22-dd33-44ee44ee44ee',
+    SessionId: '0000-11-0000-1111'
+}
+
+// Specify the full partition key path when creating the item
+const partitionKey: PartitionKey = new PartitionKeyBuilder()
+    .addValue(item.TenantId)
+    .addValue(item.UserId)
+    .addValue(item.SessionId)
+    .build();
+
+// Create the item in the container
+const { resource: document } = await container.items.create(item, partitionKey);
+const item: UserSession = {
+    Id: 'f7da01b0-090b-41d2-8416-dacae09fbb4a',
+    TenantId: 'Microsoft',
+    UserId: '00aa00aa-bb11-cc22-dd33-44ee44ee44ee',
+    SessionId: '0000-11-0000-1111'
+}
+
+// Specify the full partition key path when creating the item
+const partitionKey: PartitionKey = new PartitionKeyBuilder()
+    .addValue(item.TenantId)
+    .addValue(item.UserId)
+    .addValue(item.SessionId)
+    .build();
+
+// Create the item in the container
+const { resource: document } = await container.items.create(item, partitionKey);
+For python, just make sure that values for all the fields in the partition key path are specified in the item definition.
+# specify values for all fields on partition key path
+item_definition = {'id': 'f7da01b0-090b-41d2-8416-dacae09fbb4a',
+                        'tenantId': 'Microsoft',
+                        'userId': '00aa00aa-bb11-cc22-dd33-44ee44ee44ee',
+                        'sessionId': '0000-11-0000-1111'}
+
+item = container.create_item(body=item_definition)
+# specify values for all fields on partition key path
+item_definition = {'id': 'f7da01b0-090b-41d2-8416-dacae09fbb4a',
+                        'tenantId': 'Microsoft',
+                        'userId': '00aa00aa-bb11-cc22-dd33-44ee44ee44ee',
+                        'sessionId': '0000-11-0000-1111'}
+
+item = container.create_item(body=item_definition)
+Perform a key/value lookup (point read) of an item
+Key/value lookups (point reads) are performed in a way that's similar to a non-subpartitioned container. For example, assume you have a hierarchical partition key that consists ofTenantId>UserId>SessionId. The unique identifier for the item is a GUID. It's represented as a string that serves as a unique document transaction identifier. To perform a point read on a single item, pass in theidproperty of the item and the full value for the partition key, including all three components of the path.
+TenantId
+UserId
+SessionId
+id
+.NET SDK v3
+Java SDK v4
+JavaScript SDK v4
+Python SDK
+// Store the unique identifier
+string id = "f7da01b0-090b-41d2-8416-dacae09fbb4a";
+
+// Build the full partition key path
+PartitionKey partitionKey = new PartitionKeyBuilder()
+    .Add("Microsoft") //TenantId
+    .Add("00aa00aa-bb11-cc22-dd33-44ee44ee44ee") //UserId
+    .Add("0000-11-0000-1111") //SessionId
+    .Build();
+
+// Perform a point read
+ItemResponse<UserSession> readResponse = await container.ReadItemAsync<UserSession>(
+    id,
+    partitionKey
+);
+// Store the unique identifier
+string id = "f7da01b0-090b-41d2-8416-dacae09fbb4a";
+
+// Build the full partition key path
+PartitionKey partitionKey = new PartitionKeyBuilder()
+    .Add("Microsoft") //TenantId
+    .Add("00aa00aa-bb11-cc22-dd33-44ee44ee44ee") //UserId
+    .Add("0000-11-0000-1111") //SessionId
+    .Build();
+
+// Perform a point read
+ItemResponse<UserSession> readResponse = await container.ReadItemAsync<UserSession>(
+    id,
+    partitionKey
+);
+// Store the unique identifier
+String id = "f7da01b0-090b-41d2-8416-dacae09fbb4a"; 
+
+// Build the full partition key path
+PartitionKey partitionKey = new PartitionKeyBuilder()
+    .add("Microsoft") //TenantId
+    .add("00aa00aa-bb11-cc22-dd33-44ee44ee44ee") //UserId
+    .add("0000-11-0000-1111") //SessionId
+    .build();
+    
+// Perform a point read
+Mono<CosmosItemResponse<UserSession>> readResponse = container.readItem(id, partitionKey, UserSession.class);
+// Store the unique identifier
+String id = "f7da01b0-090b-41d2-8416-dacae09fbb4a"; 
+
+// Build the full partition key path
+PartitionKey partitionKey = new PartitionKeyBuilder()
+    .add("Microsoft") //TenantId
+    .add("00aa00aa-bb11-cc22-dd33-44ee44ee44ee") //UserId
+    .add("0000-11-0000-1111") //SessionId
+    .build();
+    
+// Perform a point read
+Mono<CosmosItemResponse<UserSession>> readResponse = container.readItem(id, partitionKey, UserSession.class);
+// Store the unique identifier
+const id = "f7da01b0-090b-41d2-8416-dacae09fbb4a";
+
+// Build the full partition key path
+const partitionKey: PartitionKey = new PartitionKeyBuilder()
+    .addValue(item.TenantId)
+    .addValue(item.UserId)
+    .addValue(item.SessionId)
+    .build();
+
+// Perform a point read
+const { resource: document } = await container.item(id, partitionKey).read();
+// Store the unique identifier
+const id = "f7da01b0-090b-41d2-8416-dacae09fbb4a";
+
+// Build the full partition key path
+const partitionKey: PartitionKey = new PartitionKeyBuilder()
+    .addValue(item.TenantId)
+    .addValue(item.UserId)
+    .addValue(item.SessionId)
+    .build();
+
+// Perform a point read
+const { resource: document } = await container.item(id, partitionKey).read();
+item_id = "f7da01b0-090b-41d2-8416-dacae09fbb4a"
+pk = ["Microsoft", "00aa00aa-bb11-cc22-dd33-44ee44ee44ee", "0000-11-0000-1111"]
+container.read_item(item=item_id, partition_key=pk)
+item_id = "f7da01b0-090b-41d2-8416-dacae09fbb4a"
+pk = ["Microsoft", "00aa00aa-bb11-cc22-dd33-44ee44ee44ee", "0000-11-0000-1111"]
+container.read_item(item=item_id, partition_key=pk)
+Run a query
+The SDK code that you use to run a query on a subpartitioned container is identical to running a query on a non-subpartitioned container.
+When the query specifies all values of the partition keys in theWHEREfilter or in a prefix of the key hierarchy, the SDK automatically routes the query to the corresponding physical partitions. Queries that provide only the "middle" of the hierarchy are cross-partition queries.
+WHERE
+For example, consider a hierarchical partition key that's composed ofTenantId>UserId>SessionId. The components of the query's filter determines if the query is a single-partition query, a targeted cross-partition query, or a fan-out query.
+TenantId
+UserId
+SessionId
+SELECT * FROM c WHERE c.TenantId = 'Microsoft' AND c.UserId = '00aa00aa-bb11-cc22-dd33-44ee44ee44ee' AND c.SessionId = '0000-11-0000-1111'
+TenantId
+UserId
+SessionId
+SELECT * FROM c WHERE c.TenantId = 'Microsoft' AND c.UserId = '00aa00aa-bb11-cc22-dd33-44ee44ee44ee'
+TenantId
+UserId
+SELECT * FROM c WHERE c.TenantId = 'Microsoft'
+TenantId
+SELECT * FROM c WHERE c.UserId = '00aa00aa-bb11-cc22-dd33-44ee44ee44ee'
+SELECT * FROM c WHERE c.SessionId = '0000-11-0000-1111'
+Here's an example of running a query that includes all the levels of subpartitioning, effectively making the query a single-partition query.
+.NET SDK v3
+Java SDK v4
+JavaScript SDK v4
+Python SDK
+// Define a single-partition query that specifies the full partition key path
+QueryDefinition query = new QueryDefinition(
+    "SELECT * FROM c WHERE c.TenantId = @tenant-id AND c.UserId = @user-id AND c.SessionId = @session-id")
+    .WithParameter("@tenant-id", "Microsoft")
+    .WithParameter("@user-id", "00aa00aa-bb11-cc22-dd33-44ee44ee44ee")
+    .WithParameter("@session-id", "0000-11-0000-1111");
+
+// Retrieve an iterator for the result set
+using FeedIterator<PaymentEvent> results = container.GetItemQueryIterator<PaymentEvent>(query);
+
+while (results.HasMoreResults)
+{
+    FeedResponse<UserSession> resultsPage = await resultSet.ReadNextAsync();
+    foreach(UserSession result in resultsPage)
+    {
+        // Process result
+    }
+}
+// Define a single-partition query that specifies the full partition key path
+QueryDefinition query = new QueryDefinition(
+    "SELECT * FROM c WHERE c.TenantId = @tenant-id AND c.UserId = @user-id AND c.SessionId = @session-id")
+    .WithParameter("@tenant-id", "Microsoft")
+    .WithParameter("@user-id", "00aa00aa-bb11-cc22-dd33-44ee44ee44ee")
+    .WithParameter("@session-id", "0000-11-0000-1111");
+
+// Retrieve an iterator for the result set
+using FeedIterator<PaymentEvent> results = container.GetItemQueryIterator<PaymentEvent>(query);
+
+while (results.HasMoreResults)
+{
+    FeedResponse<UserSession> resultsPage = await resultSet.ReadNextAsync();
+    foreach(UserSession result in resultsPage)
+    {
+        // Process result
+    }
+}
+// Define a single-partition query that specifies the full partition key path
+String query = String.format(
+    "SELECT * FROM c WHERE c.TenantId = '%s' AND c.UserId = '%s' AND c.SessionId = '%s'",
+    "Microsoft",
+    "00aa00aa-bb11-cc22-dd33-44ee44ee44ee",
+    "0000-11-0000-1111"
+);
+
+// Retrieve an iterator for the result set
+CosmosPagedFlux<UserSession> pagedResponse = container.queryItems(
+    query, options, UserSession.class);
+
+pagedResponse.byPage().flatMap(fluxResponse -> {
+    for (UserSession result : page.getResults()) {
+        // Process result
+    }
+    return Flux.empty();
+}).blockLast();
+// Define a single-partition query that specifies the full partition key path
+String query = String.format(
+    "SELECT * FROM c WHERE c.TenantId = '%s' AND c.UserId = '%s' AND c.SessionId = '%s'",
+    "Microsoft",
+    "00aa00aa-bb11-cc22-dd33-44ee44ee44ee",
+    "0000-11-0000-1111"
+);
+
+// Retrieve an iterator for the result set
+CosmosPagedFlux<UserSession> pagedResponse = container.queryItems(
+    query, options, UserSession.class);
+
+pagedResponse.byPage().flatMap(fluxResponse -> {
+    for (UserSession result : page.getResults()) {
+        // Process result
+    }
+    return Flux.empty();
+}).blockLast();
+// Define a single-partition query that specifies the full partition key path
+const query: string = "SELECT * FROM c WHERE c.TenantId = 'Microsoft' AND c.UserId = '00aa00aa-bb11-cc22-dd33-44ee44ee44ee' AND c.SessionId = '0000-11-0000-1111'";
+
+// Retrieve an iterator for the result set
+const queryIterator = container.items.query(query);
+
+while (queryIterator.hasMoreResults()) {
+    const { resources: results } = await queryIterator.fetchNext();
+    // Process result
+}
+// Define a single-partition query that specifies the full partition key path
+const query: string = "SELECT * FROM c WHERE c.TenantId = 'Microsoft' AND c.UserId = '00aa00aa-bb11-cc22-dd33-44ee44ee44ee' AND c.SessionId = '0000-11-0000-1111'";
+
+// Retrieve an iterator for the result set
+const queryIterator = container.items.query(query);
+
+while (queryIterator.hasMoreResults()) {
+    const { resources: results } = await queryIterator.fetchNext();
+    // Process result
+}
+pk = ["Microsoft", "00aa00aa-bb11-cc22-dd33-44ee44ee44ee", "0000-11-0000-1111"]
+items = list(container.query_items(
+    query="SELECT * FROM r WHERE r.tenantId=@tenant_id and r.userId=@user_id and r.sessionId=@session_id",
+    parameters=[
+        {"name": "@tenant_id", "value": pk[0]},
+        {"name": "@user_id", "value": pk[1]},
+        {"name": "@session_id", "value": pk[2]}
+    ]
+))
+pk = ["Microsoft", "00aa00aa-bb11-cc22-dd33-44ee44ee44ee", "0000-11-0000-1111"]
+items = list(container.query_items(
+    query="SELECT * FROM r WHERE r.tenantId=@tenant_id and r.userId=@user_id and r.sessionId=@session_id",
+    parameters=[
+        {"name": "@tenant_id", "value": pk[0]},
+        {"name": "@user_id", "value": pk[1]},
+        {"name": "@session_id", "value": pk[2]}
+    ]
+))
+Here's an example of a query that includes a subset of the levels of subpartitioning, effectively making this query a targeted multi-partition query.
+.NET SDK v3
+Java SDK v4
+JavaScript SDK v4
+Python SDK
+// Define a targeted cross-partition query specifying prefix path[s]
+QueryDefinition query = new QueryDefinition(
+    "SELECT * FROM c WHERE c.TenantId = @tenant-id")
+    .WithParameter("@tenant-id", "Microsoft")
+
+// Retrieve an iterator for the result set
+using FeedIterator<PaymentEvent> results = container.GetItemQueryIterator<PaymentEvent>(query);
+
+while (results.HasMoreResults)
+{
+    FeedResponse<UserSession> resultsPage = await resultSet.ReadNextAsync();
+    foreach(UserSession result in resultsPage)
+    {
+        // Process result
+    }
+}
+// Define a targeted cross-partition query specifying prefix path[s]
+QueryDefinition query = new QueryDefinition(
+    "SELECT * FROM c WHERE c.TenantId = @tenant-id")
+    .WithParameter("@tenant-id", "Microsoft")
+
+// Retrieve an iterator for the result set
+using FeedIterator<PaymentEvent> results = container.GetItemQueryIterator<PaymentEvent>(query);
+
+while (results.HasMoreResults)
+{
+    FeedResponse<UserSession> resultsPage = await resultSet.ReadNextAsync();
+    foreach(UserSession result in resultsPage)
+    {
+        // Process result
+    }
+}
+// Define a targeted cross-partition query specifying prefix path[s]
+String query = String.format(
+    "SELECT * FROM c WHERE c.TenantId = '%s'",
+    "Microsoft"
+);
+
+// Retrieve an iterator for the result set
+CosmosPagedFlux<UserSession> pagedResponse = container.queryItems(
+    query, options, UserSession.class);
+
+pagedResponse.byPage().flatMap(fluxResponse -> {
+    for (UserSession result : page.getResults()) {
+        // Process result
+    }
+    return Flux.empty();
+}).blockLast();
+// Define a targeted cross-partition query specifying prefix path[s]
+String query = String.format(
+    "SELECT * FROM c WHERE c.TenantId = '%s'",
+    "Microsoft"
+);
+
+// Retrieve an iterator for the result set
+CosmosPagedFlux<UserSession> pagedResponse = container.queryItems(
+    query, options, UserSession.class);
+
+pagedResponse.byPage().flatMap(fluxResponse -> {
+    for (UserSession result : page.getResults()) {
+        // Process result
+    }
+    return Flux.empty();
+}).blockLast();
+// Define a targeted cross-partition query specifying prefix path[s]
+const query: string = "SELECT * FROM c WHERE c.TenantId = 'Microsoft'";
+
+// Retrieve an iterator for the result set
+const queryIterator = container.items.query(query);
+
+while (queryIterator.hasMoreResults()) {
+    const { resources: results } = await queryIterator.fetchNext();
+    // Process result
+}
+// Define a targeted cross-partition query specifying prefix path[s]
+const query: string = "SELECT * FROM c WHERE c.TenantId = 'Microsoft'";
+
+// Retrieve an iterator for the result set
+const queryIterator = container.items.query(query);
+
+while (queryIterator.hasMoreResults()) {
+    const { resources: results } = await queryIterator.fetchNext();
+    // Process result
+}
+pk = ["Microsoft", "00aa00aa-bb11-cc22-dd33-44ee44ee44ee", "0000-11-0000-1111"]
+# enable_cross_partition_query should be set to True as the container is partitioned
+items = list(container.query_items(
+    query="SELECT * FROM r WHERE r.tenantId=@tenant_id and r.userId=@user_id",
+    parameters=[
+        {"name": "@tenant_id", "value": pk[0]},
+        {"name": "@user_id", "value": pk[1]}
+    ],
+    enable_cross_partition_query=True
+))
+pk = ["Microsoft", "00aa00aa-bb11-cc22-dd33-44ee44ee44ee", "0000-11-0000-1111"]
+# enable_cross_partition_query should be set to True as the container is partitioned
+items = list(container.query_items(
+    query="SELECT * FROM r WHERE r.tenantId=@tenant_id and r.userId=@user_id",
+    parameters=[
+        {"name": "@tenant_id", "value": pk[0]},
+        {"name": "@user_id", "value": pk[1]}
+    ],
+    enable_cross_partition_query=True
+))
+Limitations and known issues
+Working with containers that use hierarchical partition keys is supported only in the .NET v3 SDK, in the Java v4 SDK, in the Python SDK, and in the preview version of the JavaScript SDK. You must use a supported SDK to create new containers that have hierarchical partition keys and to perform CRUD or query operations on the data. Support for other SDKs, including Python, isn't available currently.
+There are limitations with various Azure Cosmos DB connectors (for example, with Azure Data Factory).
+You can specify hierarchical partition keys only up to three layers in depth.
+Hierarchical partition keys can currently be enabled only on new containers. You must set partition key paths at the time of container creation, and you can't change them later. To use hierarchical partitions on existing containers, create a new container with the hierarchical partition keys set and move the data by usingcontainer copy jobs.
+Hierarchical partition keys are currently supported only for the API for NoSQL accounts. The APIs for MongoDB and Cassandra aren't currently supported.
+Hierarchical partition keys aren't currently supported with the users and permissions feature. You can't assign a permission to a partial prefix of the hierarchical partition key path. Permissions can only be assigned to the entire logical partition key path. For example, if you have partitioned byTenantId- >UserId, you can't assign a permission that is for a specific value ofTenantId. However, you can assign a permission for a partition key if you specify both the value forTenantIdand ``UserId```.
+TenantId
+UserId
+TenantId
+TenantId
+Next steps
+See the FAQ onhierarchical partition keys.
+Learn more aboutpartitioning in Azure Cosmos DB.
+Learn more aboutusing Azure Resource Manager templates with Azure Cosmos DB.
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,336 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use Key Vault references as app settings in Azure App Service and Azure Functions
+Article
+2025-04-15
+26 contributors
+In this article
+This article shows you how to use secrets from Azure Key Vault as values ofapp settingsorconnection stringsin your Azure App Service or Azure Functions apps.
+
+Note
+Starting June 1, 2024, newly created App Service apps can generate a unique default host name that uses the naming convention<app-name>-<random-hash>.<region>.azurewebsites.net. For example:myapp-ds27dh7271aah175.westus-01.azurewebsites.net. Existing app names remain unchanged.
+<app-name>-<random-hash>.<region>.azurewebsites.net
+myapp-ds27dh7271aah175.westus-01.azurewebsites.net
+For more information, see theblog post about creating a web app with a unique default host name.
+Key Vaultis a service that provides centralized secrets management, with full control over access policies and audit history. When an app setting or connection string is a Key Vault reference, your application code can use it like any other app setting or connection string. This way, you can maintain secrets apart from your app's configuration. App settings are securely encrypted at rest, but if you need capabilities for managing secrets, they should go into a key vault.
+Grant your app access to a key vault
+To read secrets from a key vault, you first need to create a vault and give your app permission to access it:
+Create a key vault by following theKey Vault quickstart.
+Create a key vault by following theKey Vault quickstart.
+Create amanaged identityfor your application.Key vault references use the app's system-assigned identity by default, but you canspecify a user-assigned identity.
+Create amanaged identityfor your application.
+Key vault references use the app's system-assigned identity by default, but you canspecify a user-assigned identity.
+Authorizeread access to secrets in your key vaultfor the managed identity that you created. How you do it depends on the permissions model of your key vault:Azure role-based access control: Assign theKey Vault Secrets Userrole to the managed identity. SeeProvide access to Key Vault keys, certificates, and secrets with Azure role-based access control.Vault access policy: Assign theGetsecrets permission to the managed identity. SeeAssign a Key Vault access policy.
+Authorizeread access to secrets in your key vaultfor the managed identity that you created. How you do it depends on the permissions model of your key vault:
+Azure role-based access control: Assign theKey Vault Secrets Userrole to the managed identity. SeeProvide access to Key Vault keys, certificates, and secrets with Azure role-based access control.
+Vault access policy: Assign theGetsecrets permission to the managed identity. SeeAssign a Key Vault access policy.
+Access network-restricted vaults
+If your vault is configured withnetwork restrictions, ensure that the application has network access. Vaults shouldn't depend on the app's public outbound IP addresses because the origin IP address of the secret request could be different. Instead, the vault should be configured to accept traffic from a virtual network that the app uses.
+Make sure that the application has outbound networking capabilities configured, as described inApp Service networking featuresandAzure Functions networking options.Currently, Linux applications that connect to private endpoints must be explicitly configured to route all traffic through the virtual network. To configure this setting, run the following command:Azure CLIAzure PowerShellaz webapp config set --resource-group <group-name>  --subscription <subscription> --name <app-name> --generic-configurations '{"vnetRouteAllEnabled": true}'Update-AzFunctionAppSetting -Name <app-name> -ResourceGroupName <group-name> -AppSetting @{vnetRouteAllEnabled = $true}
+Make sure that the application has outbound networking capabilities configured, as described inApp Service networking featuresandAzure Functions networking options.
+Currently, Linux applications that connect to private endpoints must be explicitly configured to route all traffic through the virtual network. To configure this setting, run the following command:
+Azure CLI
+Azure PowerShell
+az webapp config set --resource-group <group-name>  --subscription <subscription> --name <app-name> --generic-configurations '{"vnetRouteAllEnabled": true}'
+az webapp config set --resource-group <group-name>  --subscription <subscription> --name <app-name> --generic-configurations '{"vnetRouteAllEnabled": true}'
+Update-AzFunctionAppSetting -Name <app-name> -ResourceGroupName <group-name> -AppSetting @{vnetRouteAllEnabled = $true}
+Update-AzFunctionAppSetting -Name <app-name> -ResourceGroupName <group-name> -AppSetting @{vnetRouteAllEnabled = $true}
+Make sure that the vault's configuration allows the network or subnet that your app uses to access it.
+Make sure that the vault's configuration allows the network or subnet that your app uses to access it.
+Note that even if you have correctly configured the vault to accept traffic from your virtual network the vault's audit logs may still show a failed (403 - Forbidden) SecretGet event from the app's public outbound IP. This will be followed by a successful SecretGet event from the app's private IP, and is by design.
+Access vaults with a user-assigned identity
+Some apps need to refer to secrets at creation time, when a system-assigned identity isn't available yet. In these cases, create a user-assigned identity and give it access to the vault in advance.
+After you grant permissions to the user-assigned identity, follow these steps:
+Assign the identityto your application.
+Assign the identityto your application.
+Configure the app to use this identity for Key Vault reference operations by setting thekeyVaultReferenceIdentityproperty to the resource ID of the user-assigned identity:Azure CLIAzure PowerShellidentityResourceId=$(az identity show --resource-group <group-name> --name <identity-name> --query id -o tsv)
+az webapp update --resource-group <group-name> --name <app-name> --set keyVaultReferenceIdentity=${identityResourceId}$identityResourceId = Get-AzUserAssignedIdentity -ResourceGroupName <group-name> -Name <identity-name> | Select-Object -ExpandProperty Id
+$appResourceId = Get-AzFunctionApp -ResourceGroupName <group-name> -Name <app-name> | Select-Object -ExpandProperty Id
+
+$Path = "{0}?api-version=2021-01-01" -f $appResourceId
+Invoke-AzRestMethod -Method PATCH -Path $Path -Payload "{'properties':{'keyVaultReferenceIdentity':'$identityResourceId'}}"
+Configure the app to use this identity for Key Vault reference operations by setting thekeyVaultReferenceIdentityproperty to the resource ID of the user-assigned identity:
+keyVaultReferenceIdentity
+Azure CLI
+Azure PowerShell
+identityResourceId=$(az identity show --resource-group <group-name> --name <identity-name> --query id -o tsv)
+az webapp update --resource-group <group-name> --name <app-name> --set keyVaultReferenceIdentity=${identityResourceId}
+identityResourceId=$(az identity show --resource-group <group-name> --name <identity-name> --query id -o tsv)
+az webapp update --resource-group <group-name> --name <app-name> --set keyVaultReferenceIdentity=${identityResourceId}
+$identityResourceId = Get-AzUserAssignedIdentity -ResourceGroupName <group-name> -Name <identity-name> | Select-Object -ExpandProperty Id
+$appResourceId = Get-AzFunctionApp -ResourceGroupName <group-name> -Name <app-name> | Select-Object -ExpandProperty Id
+
+$Path = "{0}?api-version=2021-01-01" -f $appResourceId
+Invoke-AzRestMethod -Method PATCH -Path $Path -Payload "{'properties':{'keyVaultReferenceIdentity':'$identityResourceId'}}"
+$identityResourceId = Get-AzUserAssignedIdentity -ResourceGroupName <group-name> -Name <identity-name> | Select-Object -ExpandProperty Id
+$appResourceId = Get-AzFunctionApp -ResourceGroupName <group-name> -Name <app-name> | Select-Object -ExpandProperty Id
+
+$Path = "{0}?api-version=2021-01-01" -f $appResourceId
+Invoke-AzRestMethod -Method PATCH -Path $Path -Payload "{'properties':{'keyVaultReferenceIdentity':'$identityResourceId'}}"
+This setting applies to all Key Vault references for the app.
+Understand rotation
+If the secret version isn't specified in the reference, the app uses the latest version that exists in the key vault. When newer versions become available, such as with rotation, the app is automatically updated and begins using the latest version within 24 hours.
+The delay is because App Service caches the values of the Key Vault references and refetches them every 24 hours. Any configuration change to the app causes an app restart and an immediate refetch of all referenced secrets.
+Understand source app settings from Key Vault
+To use a Key Vault reference, set the reference as the value of the setting. Your app can reference the secret through its key as normal. No code changes are required.
+Tip
+Because you should have separate vaults for each environment, most app settings that use Key Vault references should be marked as slot settings.
+A Key Vault reference is of the form@Microsoft.KeyVault({referenceString}), where{referenceString}is in one of the following formats:
+@Microsoft.KeyVault({referenceString})
+{referenceString}
+SecretUri=<secretUri>
+SecretUri
+https://myvault.vault.azure.net/secrets/mysecret
+https://myvault.vault.azure.net/secrets/mysecret/ec96f02080254f109c51a1f14cdb1931
+VaultName=<vaultName>;SecretName=<secretName>
+SecretVersion=<secretVersion>
+VaultName
+SecretName
+SecretVersion
+For example, a complete reference without a specific version would look like the following string:
+@Microsoft.KeyVault(SecretUri=https://myvault.vault.azure.net/secrets/mysecret)
+@Microsoft.KeyVault(SecretUri=https://myvault.vault.azure.net/secrets/mysecret)
+Alternatively:
+@Microsoft.KeyVault(VaultName=myvault;SecretName=mysecret)
+@Microsoft.KeyVault(VaultName=myvault;SecretName=mysecret)
+Considerations for Azure Files mounting
+Apps can use theWEBSITE_CONTENTAZUREFILECONNECTIONSTRINGapplication setting to mountAzure Filesas the file system. This setting has validation checks to ensure that the app can be properly started.
+WEBSITE_CONTENTAZUREFILECONNECTIONSTRING
+The platform relies on having a content share within Azure Files. The platform assumes a default name unless one is specified by using theWEBSITE_CONTENTSHAREsetting. For any requests that modify these settings, the platform validates that this content share exists. If the content share doesn't exist, the platform tries to create it. If the platform can't locate or create the content share, it blocks the request.
+WEBSITE_CONTENTSHARE
+When you use Key Vault references in this setting, the validation check fails by default, because the secret can't be resolved during processing of the incoming request. To avoid this problem, you can skip the validation by settingWEBSITE_SKIP_CONTENTSHARE_VALIDATIONto1. This setting tells App Service to bypass all checks, and it doesn't create the content share for you. You should ensure that the content share is created in advance.
+WEBSITE_SKIP_CONTENTSHARE_VALIDATION
+1
+Caution
+If you skip validation and either the connection string or the content share is invalid, the app doesn't start properly and creates HTTP 500 errors.
+As part of creating the app, attempted mounting of the content share could fail because managed identity permissions aren't being propagated or the virtual network integration isn't set up. You can defer setting up Azure Files until later in the deployment template to accommodate this behavior. For more information, seeAzure Resource Manager deploymentlater in this article.
+In this case, App Service uses a default file system until Azure Files is set up, and files aren't copied over. You must ensure that no deployment attempts occur during the interim period before Azure Files is mounted.
+Considerations for Application Insights instrumentation
+Apps can use theAPPINSIGHTS_INSTRUMENTATIONKEYorAPPLICATIONINSIGHTS_CONNECTION_STRINGapplication settings to integrate withApplication Insights.
+APPINSIGHTS_INSTRUMENTATIONKEY
+APPLICATIONINSIGHTS_CONNECTION_STRING
+For App Service and Azure Functions, the Azure portal also uses these settings to surface telemetry data from the resource. If these values are referenced from Key Vault, this approach isn't available. Instead, you need to work directly with the Application Insights resource to view the telemetry. However, these valuesaren't considered secrets, so you might consider configuring them directly instead of using Key Vault references.
+Azure Resource Manager deployment
+When you automate resource deployments through Azure Resource Manager templates, you might need to sequence your dependencies in a particular order. Be sure to define your app settings as their own resource, rather than using asiteConfigproperty in the app definition. The app needs to be defined first so that the system-assigned identity is created with it and can be used in the access policy.
+siteConfig
+The following pseudo-template is an example of what a function app might look like:
+{
+    //...
+    "resources": [
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('storageAccountName')]",
+            //...
+        },
+        {
+            "type": "Microsoft.Insights/components",
+            "name": "[variables('appInsightsName')]",
+            //...
+        },
+        {
+            "type": "Microsoft.Web/sites",
+            "name": "[variables('functionAppName')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            //...
+            "resources": [
+                {
+                    "type": "config",
+                    "name": "appsettings",
+                    //...
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
+                        "[resourceId('Microsoft.KeyVault/vaults/', variables('keyVaultName'))]",
+                        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), variables('storageConnectionStringName'))]",
+                        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), variables('appInsightsKeyName'))]"
+                    ],
+                    "properties": {
+                        "AzureWebJobsStorage": "[concat('@Microsoft.KeyVault(SecretUri=', reference(variables('storageConnectionStringName')).secretUriWithVersion, ')')]",
+                        "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING": "[concat('@Microsoft.KeyVault(SecretUri=', reference(variables('storageConnectionStringName')).secretUriWithVersion, ')')]",
+                        "APPINSIGHTS_INSTRUMENTATIONKEY": "[concat('@Microsoft.KeyVault(SecretUri=', reference(variables('appInsightsKeyName')).secretUriWithVersion, ')')]",
+                        "WEBSITE_ENABLE_SYNC_UPDATE_SITE": "true"
+                        //...
+                    }
+                },
+                {
+                    "type": "sourcecontrols",
+                    "name": "web",
+                    //...
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
+                        "[resourceId('Microsoft.Web/sites/config', variables('functionAppName'), 'appsettings')]"
+                    ],
+                }
+            ]
+        },
+        {
+            "type": "Microsoft.KeyVault/vaults",
+            "name": "[variables('keyVaultName')]",
+            //...
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
+            ],
+            "properties": {
+                //...
+                "accessPolicies": [
+                    {
+                        "tenantId": "[reference(resourceId('Microsoft.Web/sites/', variables('functionAppName')), '2020-12-01', 'Full').identity.tenantId]",
+                        "objectId": "[reference(resourceId('Microsoft.Web/sites/', variables('functionAppName')), '2020-12-01', 'Full').identity.principalId]",
+                        "permissions": {
+                            "secrets": [ "get" ]
+                        }
+                    }
+                ]
+            },
+            "resources": [
+                {
+                    "type": "secrets",
+                    "name": "[variables('storageConnectionStringName')]",
+                    //...
+                    "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults/', variables('keyVaultName'))]",
+                        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+                    ],
+                    "properties": {
+                        "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';AccountKey=', listKeys(variables('storageAccountResourceId'),'2019-09-01').key1)]"
+                    }
+                },
+                {
+                    "type": "secrets",
+                    "name": "[variables('appInsightsKeyName')]",
+                    //...
+                    "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults/', variables('keyVaultName'))]",
+                        "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]"
+                    ],
+                    "properties": {
+                        "value": "[reference(resourceId('microsoft.insights/components/', variables('appInsightsName')), '2019-09-01').InstrumentationKey]"
+                    }
+                }
+            ]
+        }
+    ]
+}
+{
+    //...
+    "resources": [
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('storageAccountName')]",
+            //...
+        },
+        {
+            "type": "Microsoft.Insights/components",
+            "name": "[variables('appInsightsName')]",
+            //...
+        },
+        {
+            "type": "Microsoft.Web/sites",
+            "name": "[variables('functionAppName')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            //...
+            "resources": [
+                {
+                    "type": "config",
+                    "name": "appsettings",
+                    //...
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
+                        "[resourceId('Microsoft.KeyVault/vaults/', variables('keyVaultName'))]",
+                        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), variables('storageConnectionStringName'))]",
+                        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), variables('appInsightsKeyName'))]"
+                    ],
+                    "properties": {
+                        "AzureWebJobsStorage": "[concat('@Microsoft.KeyVault(SecretUri=', reference(variables('storageConnectionStringName')).secretUriWithVersion, ')')]",
+                        "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING": "[concat('@Microsoft.KeyVault(SecretUri=', reference(variables('storageConnectionStringName')).secretUriWithVersion, ')')]",
+                        "APPINSIGHTS_INSTRUMENTATIONKEY": "[concat('@Microsoft.KeyVault(SecretUri=', reference(variables('appInsightsKeyName')).secretUriWithVersion, ')')]",
+                        "WEBSITE_ENABLE_SYNC_UPDATE_SITE": "true"
+                        //...
+                    }
+                },
+                {
+                    "type": "sourcecontrols",
+                    "name": "web",
+                    //...
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]",
+                        "[resourceId('Microsoft.Web/sites/config', variables('functionAppName'), 'appsettings')]"
+                    ],
+                }
+            ]
+        },
+        {
+            "type": "Microsoft.KeyVault/vaults",
+            "name": "[variables('keyVaultName')]",
+            //...
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', variables('functionAppName'))]"
+            ],
+            "properties": {
+                //...
+                "accessPolicies": [
+                    {
+                        "tenantId": "[reference(resourceId('Microsoft.Web/sites/', variables('functionAppName')), '2020-12-01', 'Full').identity.tenantId]",
+                        "objectId": "[reference(resourceId('Microsoft.Web/sites/', variables('functionAppName')), '2020-12-01', 'Full').identity.principalId]",
+                        "permissions": {
+                            "secrets": [ "get" ]
+                        }
+                    }
+                ]
+            },
+            "resources": [
+                {
+                    "type": "secrets",
+                    "name": "[variables('storageConnectionStringName')]",
+                    //...
+                    "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults/', variables('keyVaultName'))]",
+                        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+                    ],
+                    "properties": {
+                        "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';AccountKey=', listKeys(variables('storageAccountResourceId'),'2019-09-01').key1)]"
+                    }
+                },
+                {
+                    "type": "secrets",
+                    "name": "[variables('appInsightsKeyName')]",
+                    //...
+                    "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults/', variables('keyVaultName'))]",
+                        "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]"
+                    ],
+                    "properties": {
+                        "value": "[reference(resourceId('microsoft.insights/components/', variables('appInsightsName')), '2019-09-01').InstrumentationKey]"
+                    }
+                }
+            ]
+        }
+    ]
+}
+Note
+In this example, the source control deployment depends on the application settings. This dependency is normally unsafe behavior, because the app setting update behaves asynchronously. However, because you included theWEBSITE_ENABLE_SYNC_UPDATE_SITEapplication setting, the update is synchronous. The source control deployment begins only after the application settings are fully updated. For more app settings, seeEnvironment variables and app settings in Azure App Service.
+WEBSITE_ENABLE_SYNC_UPDATE_SITE
+Troubleshoot Key Vault references
+If a reference isn't resolved properly, the reference string is used instead, for example,@Microsoft.KeyVault(...). This situation might cause the application to throw errors, because it's expecting a secret of a different value.
+@Microsoft.KeyVault(...)
+Failure to resolve is commonly due to a misconfiguration of theKey Vault access policy. However, the reason could also be that a secret no longer exists or the reference contains a syntax error.
+If the syntax is correct, you can view other causes for an error by checking the current resolution status in the Azure portal. Go toApplication Settingsand selectEditfor the reference in question. The edit dialog shows status information, including any errors. If you don't see the status message, it means that the syntax is invalid and not recognized as a Key Vault reference.
+You can also use one of the built-in detectors to get more information.
+To use the detector for App Service:
+In the Azure portal, go to your app.
+SelectDiagnose and solve problems.
+SelectAvailability and Performance>Web app down.
+In the search box, search for and selectKey Vault Application Settings Diagnostics.
+To use the detector for Azure Functions:
+In the Azure portal, go to your app.
+Go toPlatform features.
+SelectDiagnose and solve problems.
+SelectAvailability and Performance>Function app down or reporting errors.
+SelectKey Vault Application Settings Diagnostics.
+Feedback
+Was this page helpful?
+Additional resources

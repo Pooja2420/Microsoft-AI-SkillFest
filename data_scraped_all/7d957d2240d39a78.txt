@@ -1,0 +1,202 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Migrate Tomcat applications to Tomcat on Azure App Service
+Article
+2024-11-25
+9 contributors
+In this article
+This guide describes what you should be aware of when you want to migrate an existing Tomcat application to run on Azure App Service using Tomcat 9.0.
+Pre-migration
+To ensure a successful migration, before you start, complete the assessment and inventory steps described in the following sections.
+If you can't meet any of these pre-migration requirements, see the following companion migration guides:
+Migrate Tomcat applications to containers on Azure Kubernetes Service
+Migrate Tomcat Applications to Azure Virtual Machines (guidance planned)
+Switch to a supported platform
+App Service offers specific versions of Tomcat on specific versions of Java. To ensure compatibility, migrate your application to one of the supported versions of Tomcat and Java in its current environment before you continue with any of the remaining steps. Be sure to fully test the resulting configuration. Use the latest stable release of your Linux distribution in such tests.
+Note
+This validation is especially important if your current server is running on an unsupported JDK (such as Oracle JDK or IBM OpenJ9).
+To obtain your current Java version, sign in to your production server and run the following command:
+java -version
+java -version
+On Azure App Service, the binaries for Java 8 are provided from Eclipse Temurin. For Java 11, 17, and all future LTS releases of Java, App Service provides theMicrosoft Build of OpenJDK. These binaries are available for free download at the following sites:
+Download Java 8
+Download Java 11, 17, and all future LTS versions
+To obtain your current Tomcat version, sign in to your production server and run the following command:
+${CATALINA_HOME}/bin/version.sh
+${CATALINA_HOME}/bin/version.sh
+To obtain the current version used by Azure App Service, downloadTomcat 9, depending on which version you plan to use in Azure App Service.
+Inventory external resources
+External resources, such as data sources, JMS message brokers, and others are injected via Java Naming and Directory Interface (JNDI). Some such resources may require migration or reconfiguration.
+Inspect theMETA-INF/context.xmlfile. Look for<Resource>elements inside the<Context>element.
+<Resource>
+<Context>
+Inspect the$CATALINA_BASE/conf/context.xmland$CATALINA_BASE/conf/server.xmlfiles as well as the.xmlfiles found in$CATALINA_BASE/conf/<engine-name>/<host-name>directories.
+Incontext.xmlfiles, JNDI resources will be described by the<Resource>elements inside the top-level<Context>element.
+<Resource>
+<Context>
+Inserver.xmlfiles, JNDI resources will be described by the<Resource>elements inside the<GlobalNamingResources>element.
+<Resource>
+<GlobalNamingResources>
+Datasources are JNDI resources with thetypeattribute set tojavax.sql.DataSource. For each datasource, document the following information:
+type
+javax.sql.DataSource
+What is the datasource name?
+What is the connection pool configuration?
+Where can I find the JDBC driver JAR file?
+For more information, seeJNDI Datasource HOW-TOin the Tomcat documentation.
+It isn't feasible to document every possible external dependency in this guide. It's your team's responsibility to verify that you can satisfy every external dependency of your application after the migration.
+Inventory secrets
+Check all properties and configuration files on the production server(s) for any secret strings and passwords. Be sure to checkserver.xmlandcontext.xmlin$CATALINA_BASE/conf. You may also find configuration files containing passwords or credentials inside your application. These may includeMETA-INF/context.xml, and, for Spring Boot applications,application.propertiesorapplication.ymlfiles.
+Inventory certificates
+Document all the certificates used for public SSL endpoints or communication with backend databases and other systems. You can view all certificates on the production server(s) by running the following command:
+keytool -list -v -keystore <path to keystore>
+keytool -list -v -keystore <path to keystore>
+Determine whether and how the file system is used
+Any usage of the file system on the application server will require reconfiguration or, in rare cases, architectural changes. You may identify some or all of the following scenarios.
+If your application currently serves static content, you need an alternate location for it. You should consider moving static content to Azure Blob Storage and adding Azure Front Door for fast downloads globally. For more information, seeStatic website hosting in Azure StorageandIntegrate an Azure Storage account with Azure Front Door.
+For files that are frequently written and read by your application (such as temporary data files), or static files that are visible only to your application, you can mount Azure Storage into the App Service file system. For more information, seeMount Azure Storage as a local share in App Service.
+Identify session persistence mechanism
+To identify the session persistence manager in use, inspect thecontext.xmlfiles in your application and Tomcat configuration. Look for the<Manager>element, and then note the value of theclassNameattribute.
+<Manager>
+className
+Tomcat's built-inPersistentManagerimplementations, such asStandardManagerorFileStorearen't designed for use with a distributed, scaled platform such as App Service. Because App Service may load balance among several instances and transparently restart any instance at any time, persisting mutable state to a file system isn't recommended.
+If session persistence is required, you'll need to use an alternatePersistentManagerimplementation that will write to an external data store, such as VMware Tanzu Session Manager with Redis Cache. For more information, seeUse Redis as a session cache with Tomcat.
+PersistentManager
+Identify all outside processes and daemons running on the production servers
+If you have any processes running outside the application server, such as monitoring daemons, you'll need to eliminate them or migrate them elsewhere.
+Special cases
+Certain production scenarios may require additional changes or impose additional limitations. While such scenarios can be infrequent, it's important to ensure that they're either inapplicable to your application or correctly resolved.
+Scheduled jobs, such as Quartz Scheduler tasks or cron jobs, can't be used with App Service. App Service won't prevent you from deploying an application containing scheduled tasks internally. However, if your application is scaled out, the same scheduled job may run more than once per scheduled period. This situation can lead to unintended consequences.
+Inventory any scheduled jobs, inside or outside the application server.
+If your application contains any code with dependencies on the host OS, then you need to refactor it to remove those dependencies. For example, you may need to replace any use of/or\in file system paths withFile.SeparatororPaths.getif your application is running on Windows.
+/
+\
+File.Separator
+Paths.get
+Tomcat clusteringisn't supported on Azure App Service. Instead, you can configure and manage scaling and load balancing through Azure App Service without Tomcat-specific functionality. You can persist session state to an alternate location to make it available across replicas. For more information, seeIdentify session persistence mechanism.
+To determine whether your application uses clustering, look for the<Cluster>element inside the<Host>or<Engine>elements in theserver.xmlfile.
+<Cluster>
+<Host>
+<Engine>
+App Service supports only a single HTTP connector. If your application requires additional connectors, such as the AJP connector, don't use App Service.
+To identify HTTP connectors used by your application, look for<Connector>elements inside theserver.xmlfile in your Tomcat configuration.
+<Connector>
+MemoryRealmrequires a persisted XML file. On Azure AppService, you'll need to upload this file to the/homedirectory or one of its subdirectories, or to mounted storage. You'll then need to modify thepathNameparameter accordingly.
+pathName
+To determine whetherMemoryRealmis currently used, inspect yourserver.xmlandcontext.xmlfiles and search for<Realm>elements where theclassNameattribute is set toorg.apache.catalina.realm.MemoryRealm.
+MemoryRealm
+<Realm>
+className
+org.apache.catalina.realm.MemoryRealm
+App Service performs session offloading outside of the Tomcat runtime, so you can't useSSL session tracking. Use a different session tracking mode instead (COOKIEorURL). If you need SSL session tracking, don't use App Service.
+COOKIE
+URL
+If you useAccessLogValve, you should set thedirectoryparameter to/home/LogFilesor one of its subdirectories.
+directory
+/home/LogFiles
+Migration
+Parameterize the configuration
+In the pre-migration steps, you likely identified some secrets and external dependencies, such as datasources, inserver.xmlandcontext.xmlfiles. For each item you identified, replace any username, password, connection string, or URL with an environment variable.
+Note
+Microsoft recommends using the most secure authentication flow available. The authentication flow described in this procedure, such as for databases, caches, messaging, or AI services, requires a very high degree of trust in the application and carries risks not present in other flows. Use this flow only when more secure options, like managed identities for passwordless or keyless connections, are not viable. For local machine operations, prefer user identities for passwordless or keyless connections.
+For example, suppose thecontext.xmlfile contains the following element:
+<Resource
+    name="jdbc/dbconnection"
+    type="javax.sql.DataSource"
+    url="jdbc:postgresql://postgresdb.contoso.com/wickedsecret?ssl=true"
+    driverClassName="org.postgresql.Driver"
+    username="postgres"
+    password="{password}"
+/>
+<Resource
+    name="jdbc/dbconnection"
+    type="javax.sql.DataSource"
+    url="jdbc:postgresql://postgresdb.contoso.com/wickedsecret?ssl=true"
+    driverClassName="org.postgresql.Driver"
+    username="postgres"
+    password="{password}"
+/>
+In this case, you could change it as shown in the following example:
+<Resource
+    name="jdbc/dbconnection"
+    type="javax.sql.DataSource"
+    url="${postgresdb.connectionString}"
+    driverClassName="org.postgresql.Driver"
+    username="${postgresdb.username}"
+    password="${postgresdb.password}"
+/>
+<Resource
+    name="jdbc/dbconnection"
+    type="javax.sql.DataSource"
+    url="${postgresdb.connectionString}"
+    driverClassName="org.postgresql.Driver"
+    username="${postgresdb.username}"
+    password="${postgresdb.password}"
+/>
+To ensure that parameter substitution occurs for anycontext.xmlfile within theMETA-INFfolder inside a deployed.warfile, be sure to set theCATALINA_OPTSenvironment variable as shown in the following example:
+CATALINA_OPTS
+export CATALINA_OPTS="-Dorg.apache.tomcat.util.digester.PROPERTY_SOURCE=org.apache.tomcat.util.digester.EnvironmentPropertySource"
+export CATALINA_OPTS="-Dorg.apache.tomcat.util.digester.PROPERTY_SOURCE=org.apache.tomcat.util.digester.EnvironmentPropertySource"
+Provision an App Service plan
+From the list of available service plans atApp Service pricing, select the plan whose specifications meet or exceed those of the current production hardware.
+Note
+If you plan to run staging/canary deployments or use deployment slots, the App Service plan must include that additional capacity. We recommend using Premium or higher plans for Java applications. For more information, seeSet up staging environments in Azure App Service.
+Then, create the App Service plan. For more information, seeManage an App Service plan in Azure.
+Create and deploy Web App(s)
+You'll need to create a Web App on your App Service Plan (choosing a version of Tomcat as the runtime stack) for every WAR file deployed to your Tomcat server.
+Note
+While it's possible to deploy multiple WAR files to a single web app, this is highly undesirable. Deploying multiple WAR files to a single web app prevents each application from scaling according to its own usage demands. It also adds complexity to subsequent deployment pipelines. If multiple applications need to be available on a single URL, consider using a routing solution such asAzure Application Gateway.
+If your application is built from a Maven POM file,use the Webapp plugin for Mavento create the Web App and deploy your application.
+If you can't use the Maven plugin, you'll need to provision the Web App through other mechanisms, such as:
+Azure portal
+Azure CLI
+Azure PowerShell
+Once the Web App has been created, use one of theavailable deployment mechanismsto deploy your application.
+Migrate JVM runtime options
+If your application requires specific runtime options,use the most appropriate mechanism to specify them.
+Populate secrets
+Use Application Settings to store any secrets specific to your application. If you intend to use the same secret(s) among multiple applications or require fine-grained access policies and audit capabilities,use Azure Key Vaultinstead.
+Configure custom domain and SSL
+If your application will be visible on a custom domain, you'll need to map your web application to it. For more information, seeTutorial: Map an existing custom DNS name to Azure App Service.
+Then, you'll need to bind the SSL certificate for that domain to your App Service Web App. For more information, seeSecure a custom DNS name with an SSL binding in Azure App Service.
+Import backend certificates
+All certificates for communicating with backend systems, such as databases, need to be made available to App Service. For more information, seeAdd an SSL certificate in App Service.
+Migrate data sources, libraries, and JNDI resources
+For data source configuration steps, see theData sourcessection ofConfigure a Linux Java app for Azure App Service.
+For additional data source instructions, see the following sections of theJNDI Datasource How-Toin the Tomcat documentation:
+MySQL
+PostgreSQL
+SQL Server
+Migrate any additional server-level classpath dependencies by followingthe same steps as for data source JAR files.
+Migrate any additionalShared server-level JDNI resources.
+Note
+If you're following the recommended architecture of one WAR per webapp, consider migrating server-level classpath libraries and JNDI resources into your application. This will significantly simplify component governance and change management.
+Migrate remaining configuration
+Upon completing the preceding section, you should have your customizable server configuration in/home/tomcat/conf.
+Complete the migration by copying any additional configuration (such asrealmsandJASPIC)
+Migrate scheduled jobs
+To execute scheduled jobs on Azure, consider using aTimer trigger for Azure Functions. You don't need to migrate the job code itself into a function. The function can simply invoke a URL in your application to trigger the job. If such job executions have to be dynamically invoked and/or centrally tracked, consider usingSpring Batch.
+Alternatively, you can create a Logic app with a Recurrence trigger to invoke the URL without writing any code outside your application. For more information, seeOverview - What is Azure Logic Apps?andCreate, schedule, and run recurring tasks and workflows with the Recurrence trigger in Azure Logic Apps.
+Note
+To prevent malicious use, you'll likely need to ensure that the job invocation endpoint requires credentials. In this case, the trigger function will need to provide the credentials.
+Restart and smoke-test
+Finally, you'll need to restart your Web App to apply all configuration changes. Upon completion of the restart, verify that your application is running correctly.
+Post-migration
+Now that you have your application migrated to Azure App Service you should verify that it works as you expect. Once you've done that we have some recommendations for you that can make your application more Cloud native.
+Recommendations
+If you opted to use the/homedirectory for file storage, considerreplacing it with Azure Storage.
+If you opted to use the/homedirectory for file storage, considerreplacing it with Azure Storage.
+If you have configuration in the/homedirectory that contains connection strings, SSL keys, and other secret information, consider using a combination ofAzure Key Vaultand/orparameter injection with application settingswhere possible.NoteMicrosoft recommends using the most secure authentication flow available. The authentication flow described in this procedure, such as for databases, caches, messaging, or AI services, requires a very high degree of trust in the application and carries risks not present in other flows. Use this flow only when more secure options, like managed identities for passwordless or keyless connections, are not viable. For local machine operations, prefer user identities for passwordless or keyless connections.
+If you have configuration in the/homedirectory that contains connection strings, SSL keys, and other secret information, consider using a combination ofAzure Key Vaultand/orparameter injection with application settingswhere possible.
+Note
+Microsoft recommends using the most secure authentication flow available. The authentication flow described in this procedure, such as for databases, caches, messaging, or AI services, requires a very high degree of trust in the application and carries risks not present in other flows. Use this flow only when more secure options, like managed identities for passwordless or keyless connections, are not viable. For local machine operations, prefer user identities for passwordless or keyless connections.
+Considerusing Deployment Slotsfor reliable deployments with zero downtime.
+Considerusing Deployment Slotsfor reliable deployments with zero downtime.
+Design and implement a DevOps strategy. To maintain reliability while increasing your development velocity, considerautomating deployments and testing with Azure Pipelines. When you use Deployment Slots, you canautomate deployment to a slotfollowed by the slot swap.
+Design and implement a DevOps strategy. To maintain reliability while increasing your development velocity, considerautomating deployments and testing with Azure Pipelines. When you use Deployment Slots, you canautomate deployment to a slotfollowed by the slot swap.
+Design and implement a business continuity and disaster recovery strategy. For mission-critical applications, consider amulti-region deployment architecture.
+Design and implement a business continuity and disaster recovery strategy. For mission-critical applications, consider amulti-region deployment architecture.
+Feedback
+Was this page helpful?
+Additional resources

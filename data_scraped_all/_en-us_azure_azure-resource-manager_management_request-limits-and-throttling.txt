@@ -1,0 +1,164 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Understand how Azure Resource Manager throttles requests
+Article
+2025-01-23
+9 contributors
+In this article
+This article describes how Azure Resource Manager throttles requests. It shows you how to track the number of requests that remain before reaching the limit, and how to respond when you reach the limit.
+Throttling happens at two levels. Azure Resource Manager throttles requests for the subscription and tenant. If the request is under the throttling limits for the subscription and tenant, Resource Manager routes the request to the resource provider. The resource provider applies throttling limits that are tailored to its operations.
+The following image shows how throttling is applied as a request goes from the user to Azure Resource Manager and the resource provider. Requests are initially throttled per principal ID and per Azure Resource Manager instance in the region of the user sending the request. The requests are throttled per hour. When the request is forwarded to the resource provider, requests are throttled per region of the resource rather than per Azure Resource Manager instance in region of the user. The resource provider requests are also throttled per principal user ID and per hour.
+
+Subscription and tenant limits
+Every subscription-level and tenant-level operation is subject to throttling limits. Subscription requests are ones that involve passing your subscription ID, such as retrieving the resource groups in your subscription. For example, sending a request tohttps://management.azure.com/subscriptions/{subscriptionId}/resourceGroups?api-version=2022-01-01is a subscription-level operation. Tenant requests don't include your subscription ID, such as retrieving valid Azure locations. For example, sending a request tohttps://management.azure.com/tenants?api-version=2022-01-01is a tenant-level operation.
+https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups?api-version=2022-01-01
+https://management.azure.com/tenants?api-version=2022-01-01
+The default throttling limits per hour are shown in the following table.
+These limits are scoped to the security principal (user or application) making the requests and the subscription ID or tenant ID. If your requests come from more than one security principal, your limit across the subscription or tenant is greater than 12,000 and 1,200 per hour.
+These limits apply to each Azure Resource Manager instance. There are multiple instances in every Azure region, and Azure Resource Manager is deployed to all Azure regions. So, in practice, the limits are higher than these limits. Different instances of Azure Resource Manager usually handle the user's requests.
+The remaining requests are returned in theresponse header values.
+Migrating to regional throttling and token bucket algorithm
+Starting in 2024, Microsoft is migrating Azure subscriptions to a new throttling architecture. With this change, you experience new throttling limits. The new throttling limits are applied per region rather than per instance of Azure Resource Manager. The new architecture uses atoken bucket algorithmto manage API throttling.
+The token bucket represents the maximum number of requests that you can send for each second. When you reach the maximum number of requests, the refill rate determines how quickly tokens become available in the bucket.
+These updated limits make it easier for you to refresh and manage your quota.
+The new limits are:
+The subscription limits apply per subscription, per service principal, and per operation type. There are also global subscription limits that are equivalent to 15 times the individual service principal limits for each operation type. The global limits apply across all service principals. Requests are throttled if the global, service principal, or tenant specific limits are exceeded.
+The limits might be smaller for free or trial customers.
+For example, suppose you have a bucket size of 250 tokens for read requests and refill rate of 25 tokens per second. If you send 250 read requests in a second, the bucket is empty and your requests are throttled. Each second, 25 tokens become available until the bucket reaches its maximum capacity of 250 tokens. You can use tokens as they become available.
+Reading metrics using the*/providers/microsoft.insights/metricsAPI contributes significantly to overall Azure Resource Manager traffic and is a common cause of subscription throttling events. If you use this API heavily, we recommend that you switch to thegetBatchAPI. You can query multiple resources in a single REST request, which improves performance and reduces throttling. For more information about converting your operations, seeHow to migrate from the metrics API to the getBatch API.
+*/providers/microsoft.insights/metrics
+getBatch
+How do I know if my subscription uses the new throttling experience?
+After your subscription is migrated to the new throttling experience, the response header shows the remaining requests per minute instead of per hour. Also, yourRetry-Aftervalue shows one minute or less, instead of five minutes. For more information, seeError code.
+Retry-After
+Why is throttling changing to per region rather than per instance?
+Since different regions have a different number of Resource Manager instances, throttling per instance causes inconsistent throttling performance. Throttling per region makes throttling consistent and predictable.
+How does the new throttling experience affect my limits?
+You can send more requests. Write requests increase by 30 times. Delete requests increase by 2.4 times. Read requests increase by 7.5 times.
+Can I prevent my subscription from migrating to the new throttling experience?
+No, all subscriptions will eventually be migrated.
+Resource provider limits
+Resource providers apply their own throttling limits. Within each subscription, the resource provider throttles per region of the resource in the request. Because Resource Manager throttles by instance of Resource Manager, and there are several instances of Resource Manager in each region, the resource provider might receive more requests than the default limits in the previous section.
+This section discusses the throttling limits of some widely used resource providers.
+Storage throttling
+The following limits apply only when you perform management operations by using Azure Resource Manager with Azure Storage and the Storage Resource Provider. The limits apply per subscription per region of the resource in the request.
+Network throttling
+The Microsoft.Network resource provider applies the following throttle limits:
+In addition to those general limits, see theusage limits for Azure DNS.
+Compute throttling
+Microsoft Compute implements throttling to provide an optimal experience for Virtual Machine and Virtual Machine Scale Set users.Compute Throttling Limitsprovides comprehensive information on throttling policies and limits for VM, Virtual Machine Scale Sets, and Scale Set VMs.
+Azure Resource Graph throttling
+Azure Resource Graphlimits the number of requests to its operations. The steps in this article to determine the remaining requests and how to respond when the limit is reached also apply to Resource Graph. However, Resource Graph sets its own limit and reset rate. For more information, seeResource Graph throttling headers.
+Other resource providers
+For information about throttling in other resource providers, see:
+Azure Key Vault throttling guidance
+AKS troubleshooting
+Managed identities
+Error code
+When you reach the limit, you receive the HTTP status code429 Too many requests. The response includes aRetry-Aftervalue, which specifies the number of seconds your application should wait before sending the next request. If you send a request before the retry value elapses, your request isn't processed and a new retry value is returned.
+If you're using an Azure SDK, the SDK might have an auto retry configuration. For more information, seeRetry guidance for Azure services.
+Some resource providers return 429 to report a temporary problem. The problem could be an overload condition that your request didn't cause. Or, it could be a temporary error about the state of the target resource or dependent resource. For example, the network resource provider returns 429 with theRetryableErrorDueToAnotherOperationerror code when another operation locks the target resource. To determine if the error comes from throttling or a temporary condition, view the error details in the response.
+Remaining requests
+You can determine the number of remaining requests by examining response headers. Read requests return a value in the header for the number of remaining read requests. Write requests include a value for the number of remaining write requests. The following table describes the response headers you can examine for those values:
+The resource provider can also return response headers with information about remaining requests. For information about response headers returned by the Compute resource provider, seeCall rate informational response headers.
+Retrieving the header values
+Retrieving these header values in your code or script is no different than retrieving any header value.
+For example, inC#, you retrieve the header value from anHttpWebResponseobject namedresponsewith the following code:
+response.Headers.GetValues("x-ms-ratelimit-remaining-subscription-reads").GetValue(0)
+response.Headers.GetValues("x-ms-ratelimit-remaining-subscription-reads").GetValue(0)
+InPowerShell, retrieve the header value from anInvoke-WebRequestoperation.
+Invoke-WebRequest
+$r = Invoke-WebRequest -Uri https://management.azure.com/subscriptions/{guid}/resourcegroups?api-version=2016-09-01 -Method GET -Headers $authHeaders
+$r.Headers["x-ms-ratelimit-remaining-subscription-reads"]
+$r = Invoke-WebRequest -Uri https://management.azure.com/subscriptions/{guid}/resourcegroups?api-version=2016-09-01 -Method GET -Headers $authHeaders
+$r.Headers["x-ms-ratelimit-remaining-subscription-reads"]
+For a complete PowerShell example, seeCheck ARM Limits for a Given Subscription.
+To see the remaining requests for debugging, provide the-Debugparameter on yourPowerShellcmdlet.
+Get-AzResourceGroup -Debug
+Get-AzResourceGroup -Debug
+The response includes many values, including the following response value:
+DEBUG: ============================ HTTP RESPONSE ============================
+
+Status Code:
+OK
+
+Headers:
+Pragma                        : no-cache
+x-ms-ratelimit-remaining-subscription-reads: 11999
+DEBUG: ============================ HTTP RESPONSE ============================
+
+Status Code:
+OK
+
+Headers:
+Pragma                        : no-cache
+x-ms-ratelimit-remaining-subscription-reads: 11999
+To get write limits, use a write operation:
+New-AzResourceGroup -Name myresourcegroup -Location westus -Debug
+New-AzResourceGroup -Name myresourcegroup -Location westus -Debug
+The response includes many values, including the following values:
+DEBUG: ============================ HTTP RESPONSE ============================
+
+Status Code:
+Created
+
+Headers:
+Pragma                        : no-cache
+x-ms-ratelimit-remaining-subscription-writes: 1199
+DEBUG: ============================ HTTP RESPONSE ============================
+
+Status Code:
+Created
+
+Headers:
+Pragma                        : no-cache
+x-ms-ratelimit-remaining-subscription-writes: 1199
+InAzure CLI, you use the more verbose option to retrieve the header value:
+az group list --verbose --debug
+az group list --verbose --debug
+The command returns many values, including the following values:
+msrest.http_logger : Response status: 200
+msrest.http_logger : Response headers:
+msrest.http_logger :     'Cache-Control': 'no-cache'
+msrest.http_logger :     'Pragma': 'no-cache'
+msrest.http_logger :     'Content-Type': 'application/json; charset=utf-8'
+msrest.http_logger :     'Content-Encoding': 'gzip'
+msrest.http_logger :     'Expires': '-1'
+msrest.http_logger :     'Vary': 'Accept-Encoding'
+msrest.http_logger :     'x-ms-ratelimit-remaining-subscription-reads': '11998'
+msrest.http_logger : Response status: 200
+msrest.http_logger : Response headers:
+msrest.http_logger :     'Cache-Control': 'no-cache'
+msrest.http_logger :     'Pragma': 'no-cache'
+msrest.http_logger :     'Content-Type': 'application/json; charset=utf-8'
+msrest.http_logger :     'Content-Encoding': 'gzip'
+msrest.http_logger :     'Expires': '-1'
+msrest.http_logger :     'Vary': 'Accept-Encoding'
+msrest.http_logger :     'x-ms-ratelimit-remaining-subscription-reads': '11998'
+To get write limits, use a write operation:
+az group create -n myresourcegroup --location westus --verbose --debug
+az group create -n myresourcegroup --location westus --verbose --debug
+The operation returns many values, including the following values:
+msrest.http_logger : Response status: 201
+msrest.http_logger : Response headers:
+msrest.http_logger :     'Cache-Control': 'no-cache'
+msrest.http_logger :     'Pragma': 'no-cache'
+msrest.http_logger :     'Content-Length': '163'
+msrest.http_logger :     'Content-Type': 'application/json; charset=utf-8'
+msrest.http_logger :     'Expires': '-1'
+msrest.http_logger :     'x-ms-ratelimit-remaining-subscription-writes': '1199'
+msrest.http_logger : Response status: 201
+msrest.http_logger : Response headers:
+msrest.http_logger :     'Cache-Control': 'no-cache'
+msrest.http_logger :     'Pragma': 'no-cache'
+msrest.http_logger :     'Content-Length': '163'
+msrest.http_logger :     'Content-Type': 'application/json; charset=utf-8'
+msrest.http_logger :     'Expires': '-1'
+msrest.http_logger :     'x-ms-ratelimit-remaining-subscription-writes': '1199'
+Next steps
+For more information about limits and quotas, seeAzure subscription and service limits, quotas, and constraints.
+To learn about handling asynchronous REST requests, seeTrack asynchronous Azure operations.
+Feedback
+Was this page helpful?
+Additional resources

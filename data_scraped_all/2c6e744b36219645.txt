@@ -1,0 +1,570 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Configure a site-to-site VPN for use with Azure Files
+Article
+2025-04-01
+8 contributors
+In this article
+You can use a site-to-site (S2S) VPN connection to mount your Azure file shares from your on-premises network, without sending data over the open internet. You can set up a S2S VPN usingAzure VPN Gateway, which is an Azure resource offering VPN services. You deploy VPN Gateway in a resource group alongside storage accounts or other Azure resources.
+
+We strongly recommend that you readAzure Files networking overviewbefore continuing with this article for a complete discussion of the networking options available for Azure Files.
+The article details the steps to configure a site-to-site VPN to mount Azure file shares directly on-premises. If you're looking to route sync traffic for Azure File Sync over a S2S VPN, seeconfiguring Azure File Sync proxy and firewall settings.
+Applies to
+Prerequisites
+An Azure file share you would like to mount on-premises. Azure file shares are deployed within storage accounts, which are management constructs that represent a shared pool of storage in which you can deploy multiple file shares, as well as other storage resources, such as blobs or queues. You can learn more about how to deploy Azure file shares and storage accounts inCreate an Azure file share.
+An Azure file share you would like to mount on-premises. Azure file shares are deployed within storage accounts, which are management constructs that represent a shared pool of storage in which you can deploy multiple file shares, as well as other storage resources, such as blobs or queues. You can learn more about how to deploy Azure file shares and storage accounts inCreate an Azure file share.
+A network appliance or server in your on-premises data center that's compatible with Azure VPN Gateway. Azure Files is agnostic of the on-premises network appliance chosen, but Azure VPN Gateway maintains alist of tested devices. Different network appliances offer different features, performance characteristics, and management functionalities, so consider these when selecting a network appliance.
+A network appliance or server in your on-premises data center that's compatible with Azure VPN Gateway. Azure Files is agnostic of the on-premises network appliance chosen, but Azure VPN Gateway maintains alist of tested devices. Different network appliances offer different features, performance characteristics, and management functionalities, so consider these when selecting a network appliance.
+If you don't have an existing network appliance, Windows Server contains a built-in Server Role, Routing and Remote Access (RRAS), which can be used as the on-premises network appliance. To learn more about how to configure Routing and Remote Access in Windows Server, seeRAS Gateway.
+Add virtual network to storage account
+To add a new or existing virtual network to your storage account, follow these steps.
+Portal
+Azure PowerShell
+Azure CLI
+Sign in to the Azure portal and navigate to the storage account containing the Azure file share you would like to mount on-premises.
+Sign in to the Azure portal and navigate to the storage account containing the Azure file share you would like to mount on-premises.
+In the service menu, underSecurity + networking, selectNetworking. Unless you added a virtual network to your storage account when you created it, the resulting pane should have the radio button forEnabled from all networksselected underPublic network access.
+In the service menu, underSecurity + networking, selectNetworking. Unless you added a virtual network to your storage account when you created it, the resulting pane should have the radio button forEnabled from all networksselected underPublic network access.
+To add a virtual network, select theEnabled from selected virtual networks and IP addressesradio button. Under theVirtual networkssubheading, select either+ Add existing virtual networkor+ Add new virtual network. Creating a new virtual network will result in a new Azure resource being created. The new or existing virtual network resource must be in the same region as the storage account, but it doesn't need to be in the same resource group or subscription. However, keep in mind that the resource group, region, and subscription you deploy your virtual network into must match where you deploy your virtual network gateway in the next step.If you add an existing virtual network, you must first create agateway subneton the virtual network. You'll be asked to select one or more subnets of that virtual network. If you create a new virtual network, you'll create a subnet as part of the creation process. You can add more subnets later through the resulting Azure resource for the virtual network.If you haven't enabled public network access to the virtual network previously, theMicrosoft.Storageservice endpoint will need to be added to the virtual network subnet. This can take up to 15 minutes to complete, although in most cases it will complete much faster. Until this operation has completed, you won't be able to access the Azure file shares within that storage account, including via the VPN connection. The service endpoint routes traffic from the virtual network through an optimal path to the Azure Storage service. The identities of the subnet and the virtual network are also transmitted with each request.
+To add a virtual network, select theEnabled from selected virtual networks and IP addressesradio button. Under theVirtual networkssubheading, select either+ Add existing virtual networkor+ Add new virtual network. Creating a new virtual network will result in a new Azure resource being created. The new or existing virtual network resource must be in the same region as the storage account, but it doesn't need to be in the same resource group or subscription. However, keep in mind that the resource group, region, and subscription you deploy your virtual network into must match where you deploy your virtual network gateway in the next step.
+
+If you add an existing virtual network, you must first create agateway subneton the virtual network. You'll be asked to select one or more subnets of that virtual network. If you create a new virtual network, you'll create a subnet as part of the creation process. You can add more subnets later through the resulting Azure resource for the virtual network.
+If you haven't enabled public network access to the virtual network previously, theMicrosoft.Storageservice endpoint will need to be added to the virtual network subnet. This can take up to 15 minutes to complete, although in most cases it will complete much faster. Until this operation has completed, you won't be able to access the Azure file shares within that storage account, including via the VPN connection. The service endpoint routes traffic from the virtual network through an optimal path to the Azure Storage service. The identities of the subnet and the virtual network are also transmitted with each request.
+Microsoft.Storage
+SelectSaveat the top of the page.
+SelectSaveat the top of the page.
+Sign in to Azure.Connect-AzAccount
+Sign in to Azure.
+Connect-AzAccount
+Connect-AzAccount
+If you want to add a new virtual network and gateway subnet, run the following script. If you have an existing virtual network that you want to use, then skip this step and proceed to step 3. Be sure to replace<your-subscription-id>,<resource-group>, and<storage-account-name>with your own values. If desired, provide your own values for$locationand$vnetName. The-AddressPrefixparameter defines the IP address blocks for the virtual network and the subnet, so replace those with your respective values.# Select subscription  
+$subscriptionId = "<your-subscription-id>"
+Select-AzSubscription -SubscriptionId $subscriptionId
+
+# Define parameters
+$storageAccount = "<storage-account-name>"
+$resourceGroup = "<resource-group>"
+$location = "East US" # Change to desired Azure region
+$vnetName = "myVNet"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+$subnetName = "GatewaySubnet"
+$vnetAddressPrefix = "10.0.0.0/16" # Update this address as per your requirements
+$subnetAddressPrefix = "10.0.0.0/24" # Update this address as per your requirements
+
+# Set current storage account
+Set-AzCurrentStorageAccount -ResourceGroupName $resourceGroup -Name $storageAccount
+
+# Define subnet configuration  
+$subnetConfig = New-AzVirtualNetworkSubnetConfig -Name $subnetName -AddressPrefix $subnetAddressPrefix
+
+# Create a virtual network  
+New-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroup -Location $location -AddressPrefix $vnetAddressPrefix -Subnet $subnetConfig
+If you want to add a new virtual network and gateway subnet, run the following script. If you have an existing virtual network that you want to use, then skip this step and proceed to step 3. Be sure to replace<your-subscription-id>,<resource-group>, and<storage-account-name>with your own values. If desired, provide your own values for$locationand$vnetName. The-AddressPrefixparameter defines the IP address blocks for the virtual network and the subnet, so replace those with your respective values.
+<your-subscription-id>
+<resource-group>
+<storage-account-name>
+$location
+$vnetName
+-AddressPrefix
+# Select subscription  
+$subscriptionId = "<your-subscription-id>"
+Select-AzSubscription -SubscriptionId $subscriptionId
+
+# Define parameters
+$storageAccount = "<storage-account-name>"
+$resourceGroup = "<resource-group>"
+$location = "East US" # Change to desired Azure region
+$vnetName = "myVNet"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+$subnetName = "GatewaySubnet"
+$vnetAddressPrefix = "10.0.0.0/16" # Update this address as per your requirements
+$subnetAddressPrefix = "10.0.0.0/24" # Update this address as per your requirements
+
+# Set current storage account
+Set-AzCurrentStorageAccount -ResourceGroupName $resourceGroup -Name $storageAccount
+
+# Define subnet configuration  
+$subnetConfig = New-AzVirtualNetworkSubnetConfig -Name $subnetName -AddressPrefix $subnetAddressPrefix
+
+# Create a virtual network  
+New-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroup -Location $location -AddressPrefix $vnetAddressPrefix -Subnet $subnetConfig
+# Select subscription  
+$subscriptionId = "<your-subscription-id>"
+Select-AzSubscription -SubscriptionId $subscriptionId
+
+# Define parameters
+$storageAccount = "<storage-account-name>"
+$resourceGroup = "<resource-group>"
+$location = "East US" # Change to desired Azure region
+$vnetName = "myVNet"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+$subnetName = "GatewaySubnet"
+$vnetAddressPrefix = "10.0.0.0/16" # Update this address as per your requirements
+$subnetAddressPrefix = "10.0.0.0/24" # Update this address as per your requirements
+
+# Set current storage account
+Set-AzCurrentStorageAccount -ResourceGroupName $resourceGroup -Name $storageAccount
+
+# Define subnet configuration  
+$subnetConfig = New-AzVirtualNetworkSubnetConfig -Name $subnetName -AddressPrefix $subnetAddressPrefix
+
+# Create a virtual network  
+New-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroup -Location $location -AddressPrefix $vnetAddressPrefix -Subnet $subnetConfig
+If you created a new virtual network and subnet in the previous step, then skip this step. If you have an existing virtual network you want to use, you must first create agateway subneton the virtual network before you can deploy a virtual network gateway.To add a gateway subnet to an existing virtual network, run the following script. Be sure to replace<your-subscription-id>,<resource-group>, and<virtual-network-name>with your own values. The$subnetAddressPrefixparameter defines the IP address block for the subnet, so replace the IP address per your requirements.# Select subscription  
+$subscriptionId = "<your-subscription-id>"
+Select-AzSubscription -SubscriptionId $subscriptionId
+
+# Define parameters
+$storageAccount = "<storage-account-name>"
+$resourceGroup = "<resource-group>"
+$vnetName = "<virtual-network-name>"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+$subnetName = "GatewaySubnet"
+$subnetAddressPrefix = "10.0.0.0/24" # Update this address as per your requirements
+
+# Set current storage account
+Set-AzCurrentStorageAccount -ResourceGroupName $resourceGroup -Name $storageAccount
+
+# Get the virtual network
+$vnet = Get-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroup
+
+# Add the gateway subnet
+Add-AzVirtualNetworkSubnetConfig -Name $subnetName -VirtualNetwork $vnet -AddressPrefix $subnetAddressPrefix
+
+# Apply the configuration to the virtual network
+Set-AzVirtualNetwork -VirtualNetwork $vnet
+If you created a new virtual network and subnet in the previous step, then skip this step. If you have an existing virtual network you want to use, you must first create agateway subneton the virtual network before you can deploy a virtual network gateway.
+To add a gateway subnet to an existing virtual network, run the following script. Be sure to replace<your-subscription-id>,<resource-group>, and<virtual-network-name>with your own values. The$subnetAddressPrefixparameter defines the IP address block for the subnet, so replace the IP address per your requirements.
+<your-subscription-id>
+<resource-group>
+<virtual-network-name>
+$subnetAddressPrefix
+# Select subscription  
+$subscriptionId = "<your-subscription-id>"
+Select-AzSubscription -SubscriptionId $subscriptionId
+
+# Define parameters
+$storageAccount = "<storage-account-name>"
+$resourceGroup = "<resource-group>"
+$vnetName = "<virtual-network-name>"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+$subnetName = "GatewaySubnet"
+$subnetAddressPrefix = "10.0.0.0/24" # Update this address as per your requirements
+
+# Set current storage account
+Set-AzCurrentStorageAccount -ResourceGroupName $resourceGroup -Name $storageAccount
+
+# Get the virtual network
+$vnet = Get-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroup
+
+# Add the gateway subnet
+Add-AzVirtualNetworkSubnetConfig -Name $subnetName -VirtualNetwork $vnet -AddressPrefix $subnetAddressPrefix
+
+# Apply the configuration to the virtual network
+Set-AzVirtualNetwork -VirtualNetwork $vnet
+# Select subscription  
+$subscriptionId = "<your-subscription-id>"
+Select-AzSubscription -SubscriptionId $subscriptionId
+
+# Define parameters
+$storageAccount = "<storage-account-name>"
+$resourceGroup = "<resource-group>"
+$vnetName = "<virtual-network-name>"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+$subnetName = "GatewaySubnet"
+$subnetAddressPrefix = "10.0.0.0/24" # Update this address as per your requirements
+
+# Set current storage account
+Set-AzCurrentStorageAccount -ResourceGroupName $resourceGroup -Name $storageAccount
+
+# Get the virtual network
+$vnet = Get-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroup
+
+# Add the gateway subnet
+Add-AzVirtualNetworkSubnetConfig -Name $subnetName -VirtualNetwork $vnet -AddressPrefix $subnetAddressPrefix
+
+# Apply the configuration to the virtual network
+Set-AzVirtualNetwork -VirtualNetwork $vnet
+To allow traffic only from specific virtual networks, use theUpdate-AzStorageAccountNetworkRuleSetcommand and set the-DefaultActionparameter to Deny.Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $resourceGroup -Name $storageAccount -DefaultAction Deny
+To allow traffic only from specific virtual networks, use theUpdate-AzStorageAccountNetworkRuleSetcommand and set the-DefaultActionparameter to Deny.
+Update-AzStorageAccountNetworkRuleSet
+-DefaultAction
+Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $resourceGroup -Name $storageAccount -DefaultAction Deny
+Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $resourceGroup -Name $storageAccount -DefaultAction Deny
+Enable aMicrosoft.Storageservice endpoint on the virtual network and subnet. This can take up to 15 minutes to complete, although in most cases it will complete much faster. Until this operation has completed, you won't be able to access the Azure file shares within that storage account, including via the VPN connection. The service endpoint routes traffic from the virtual network through an optimal path to the Azure Storage service. The identities of the subnet and the virtual network are also transmitted with each request.Get-AzVirtualNetwork -ResourceGroupName $resourceGroup -Name $vnetName | Set-AzVirtualNetworkSubnetConfig -Name $subnetName -AddressPrefix $subnetAddressPrefix -ServiceEndpoint "Microsoft.Storage.Global" | Set-AzVirtualNetwork
+Enable aMicrosoft.Storageservice endpoint on the virtual network and subnet. This can take up to 15 minutes to complete, although in most cases it will complete much faster. Until this operation has completed, you won't be able to access the Azure file shares within that storage account, including via the VPN connection. The service endpoint routes traffic from the virtual network through an optimal path to the Azure Storage service. The identities of the subnet and the virtual network are also transmitted with each request.
+Microsoft.Storage
+Get-AzVirtualNetwork -ResourceGroupName $resourceGroup -Name $vnetName | Set-AzVirtualNetworkSubnetConfig -Name $subnetName -AddressPrefix $subnetAddressPrefix -ServiceEndpoint "Microsoft.Storage.Global" | Set-AzVirtualNetwork
+Get-AzVirtualNetwork -ResourceGroupName $resourceGroup -Name $vnetName | Set-AzVirtualNetworkSubnetConfig -Name $subnetName -AddressPrefix $subnetAddressPrefix -ServiceEndpoint "Microsoft.Storage.Global" | Set-AzVirtualNetwork
+Add a network rule for the virtual network and subnet.$subnet = Get-AzVirtualNetwork -ResourceGroupName $resourceGroup -Name $vnetName | Get-AzVirtualNetworkSubnetConfig -Name $subnetName
+Add-AzStorageAccountNetworkRule -ResourceGroupName $resourceGroup -Name $storageAccount -VirtualNetworkResourceId $subnet.Id
+Add a network rule for the virtual network and subnet.
+$subnet = Get-AzVirtualNetwork -ResourceGroupName $resourceGroup -Name $vnetName | Get-AzVirtualNetworkSubnetConfig -Name $subnetName
+Add-AzStorageAccountNetworkRule -ResourceGroupName $resourceGroup -Name $storageAccount -VirtualNetworkResourceId $subnet.Id
+$subnet = Get-AzVirtualNetwork -ResourceGroupName $resourceGroup -Name $vnetName | Get-AzVirtualNetworkSubnetConfig -Name $subnetName
+Add-AzStorageAccountNetworkRule -ResourceGroupName $resourceGroup -Name $storageAccount -VirtualNetworkResourceId $subnet.Id
+Sign in to Azure.az login
+Sign in to Azure.
+az login
+az login
+If you want to add a new virtual network and gateway subnet, run the following script. If you have an existing virtual network that you want to use, then skip this step and proceed to step 3. Be sure to replace<your-subscription-id>,<storage-account-name>, and<resource-group>with your own values. Replace<virtual-network-name>with the name of the new virtual network you want to create. The--address-prefixand--subnet-prefixesparameters define the IP address blocks for the virtual network and the subnet, so replace those with your respective values. The virtual network will be created in the same region as the resource group.# Set your subscription  
+az account set --subscription "<your-subscription-id>"  
+
+# Define parameters
+storageAccount="<storage-account-name>"
+resourceGroup="<resource-group>"
+vnetName="<virtual-network-name>"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+subnetName="GatewaySubnet"
+vnetAddressPrefix="10.0.0.0/16" # Update this address per your requirements
+subnetAddressPrefix="10.0.0.0/24" # Update this address per your requirements
+
+# Create a virtual network and subnet
+az network vnet create \
+  --resource-group $resourceGroup \
+  --name $vnetName \
+  --address-prefix $vnetAddressPrefix \
+  --subnet-name $subnetName \
+  --subnet-prefixes $subnetAddressPrefix
+If you want to add a new virtual network and gateway subnet, run the following script. If you have an existing virtual network that you want to use, then skip this step and proceed to step 3. Be sure to replace<your-subscription-id>,<storage-account-name>, and<resource-group>with your own values. Replace<virtual-network-name>with the name of the new virtual network you want to create. The--address-prefixand--subnet-prefixesparameters define the IP address blocks for the virtual network and the subnet, so replace those with your respective values. The virtual network will be created in the same region as the resource group.
+<your-subscription-id>
+<storage-account-name>
+<resource-group>
+<virtual-network-name>
+--address-prefix
+--subnet-prefixes
+# Set your subscription  
+az account set --subscription "<your-subscription-id>"  
+
+# Define parameters
+storageAccount="<storage-account-name>"
+resourceGroup="<resource-group>"
+vnetName="<virtual-network-name>"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+subnetName="GatewaySubnet"
+vnetAddressPrefix="10.0.0.0/16" # Update this address per your requirements
+subnetAddressPrefix="10.0.0.0/24" # Update this address per your requirements
+
+# Create a virtual network and subnet
+az network vnet create \
+  --resource-group $resourceGroup \
+  --name $vnetName \
+  --address-prefix $vnetAddressPrefix \
+  --subnet-name $subnetName \
+  --subnet-prefixes $subnetAddressPrefix
+# Set your subscription  
+az account set --subscription "<your-subscription-id>"  
+
+# Define parameters
+storageAccount="<storage-account-name>"
+resourceGroup="<resource-group>"
+vnetName="<virtual-network-name>"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+subnetName="GatewaySubnet"
+vnetAddressPrefix="10.0.0.0/16" # Update this address per your requirements
+subnetAddressPrefix="10.0.0.0/24" # Update this address per your requirements
+
+# Create a virtual network and subnet
+az network vnet create \
+  --resource-group $resourceGroup \
+  --name $vnetName \
+  --address-prefix $vnetAddressPrefix \
+  --subnet-name $subnetName \
+  --subnet-prefixes $subnetAddressPrefix
+If you created a new virtual network and subnet in the previous step, then skip this step. If you have an existing virtual network you want to use, you must first create agateway subneton the virtual network before you can deploy a virtual network gateway.To add a gateway subnet to an existing virtual network, run the following script. Be sure to replace<your-subscription-id>,<resource-group>, and<virtual-network-name>with your own values. The--address-prefixesparameter defines the IP address block for the subnet, so replace the IP address block as needed.# Set your subscription  
+az account set --subscription "<your-subscription-id>"
+
+# Define parameters
+storageAccount="<storage-account-name>"
+resourceGroup="<resource-group>"
+vnetName="<virtual-network-name>"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+subnetName="GatewaySubnet"
+subnetAddressPrefix="10.0.0.0/24" # Update this address per your requirements
+
+# Create the gateway subnet
+az network vnet subnet create \
+  --resource-group $resourceGroup \
+  --vnet-name $vnetName \
+  --name $subnetName \
+  --address-prefixes $subnetAddressPrefix
+If you created a new virtual network and subnet in the previous step, then skip this step. If you have an existing virtual network you want to use, you must first create agateway subneton the virtual network before you can deploy a virtual network gateway.
+To add a gateway subnet to an existing virtual network, run the following script. Be sure to replace<your-subscription-id>,<resource-group>, and<virtual-network-name>with your own values. The--address-prefixesparameter defines the IP address block for the subnet, so replace the IP address block as needed.
+<your-subscription-id>
+<resource-group>
+<virtual-network-name>
+--address-prefixes
+# Set your subscription  
+az account set --subscription "<your-subscription-id>"
+
+# Define parameters
+storageAccount="<storage-account-name>"
+resourceGroup="<resource-group>"
+vnetName="<virtual-network-name>"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+subnetName="GatewaySubnet"
+subnetAddressPrefix="10.0.0.0/24" # Update this address per your requirements
+
+# Create the gateway subnet
+az network vnet subnet create \
+  --resource-group $resourceGroup \
+  --vnet-name $vnetName \
+  --name $subnetName \
+  --address-prefixes $subnetAddressPrefix
+# Set your subscription  
+az account set --subscription "<your-subscription-id>"
+
+# Define parameters
+storageAccount="<storage-account-name>"
+resourceGroup="<resource-group>"
+vnetName="<virtual-network-name>"
+# Virtual network gateway can only be created in subnet with name 'GatewaySubnet'.
+subnetName="GatewaySubnet"
+subnetAddressPrefix="10.0.0.0/24" # Update this address per your requirements
+
+# Create the gateway subnet
+az network vnet subnet create \
+  --resource-group $resourceGroup \
+  --vnet-name $vnetName \
+  --name $subnetName \
+  --address-prefixes $subnetAddressPrefix
+To allow traffic only from specific virtual networks, use theaz storage account updatecommand and set the--default-actionparameter to Deny.az storage account update --resource-group $resourceGroup --name $storageAccount --default-action Deny
+To allow traffic only from specific virtual networks, use theaz storage account updatecommand and set the--default-actionparameter to Deny.
+az storage account update
+--default-action
+az storage account update --resource-group $resourceGroup --name $storageAccount --default-action Deny
+az storage account update --resource-group $resourceGroup --name $storageAccount --default-action Deny
+Enable aMicrosoft.Storageservice endpoint on the virtual network and subnet. This can take up to 15 minutes to complete, although in most cases it will complete much faster. Until this operation has completed, you won't be able to access the Azure file shares within that storage account, including via the VPN connection. The service endpoint routes traffic from the virtual network through an optimal path to the Azure Storage service. The identities of the subnet and the virtual network are also transmitted with each request.az network vnet subnet update --resource-group $resourceGroup --vnet-name $vnetName --name $subnetName --service-endpoints "Microsoft.Storage.Global"
+Enable aMicrosoft.Storageservice endpoint on the virtual network and subnet. This can take up to 15 minutes to complete, although in most cases it will complete much faster. Until this operation has completed, you won't be able to access the Azure file shares within that storage account, including via the VPN connection. The service endpoint routes traffic from the virtual network through an optimal path to the Azure Storage service. The identities of the subnet and the virtual network are also transmitted with each request.
+Microsoft.Storage
+az network vnet subnet update --resource-group $resourceGroup --vnet-name $vnetName --name $subnetName --service-endpoints "Microsoft.Storage.Global"
+az network vnet subnet update --resource-group $resourceGroup --vnet-name $vnetName --name $subnetName --service-endpoints "Microsoft.Storage.Global"
+Add a network rule for the virtual network and subnet.subnetid=$(az network vnet subnet show --resource-group $resourceGroup --vnet-name $vnetName --name $subnetName --query id --output tsv)
+az storage account network-rule add --resource-group $resourceGroup --account-name $storageAccount --subnet $subnetid
+Add a network rule for the virtual network and subnet.
+subnetid=$(az network vnet subnet show --resource-group $resourceGroup --vnet-name $vnetName --name $subnetName --query id --output tsv)
+az storage account network-rule add --resource-group $resourceGroup --account-name $storageAccount --subnet $subnetid
+subnetid=$(az network vnet subnet show --resource-group $resourceGroup --vnet-name $vnetName --name $subnetName --query id --output tsv)
+az storage account network-rule add --resource-group $resourceGroup --account-name $storageAccount --subnet $subnetid
+Deploy a virtual network gateway
+To deploy a virtual network gateway, follow these steps.
+Portal
+Azure PowerShell
+Azure CLI
+In the search box at the top of the Azure portal, search for and then selectVirtual network gateways. TheVirtual network gatewayspage should appear. At the top of the page, select+ Create.
+In the search box at the top of the Azure portal, search for and then selectVirtual network gateways. TheVirtual network gatewayspage should appear. At the top of the page, select+ Create.
+On theBasicstab, fill in the values forProject detailsandInstance details. Your virtual network gateway must be in the same subscription, Azure region, and resource group as the virtual network.Subscription: Select the subscription you want to use from the dropdown.Resource Group: This setting is autofilled when you select your virtual network on this page.Name: Name your virtual network gateway. Naming your gateway isn't the same as naming a gateway subnet. It's the name of the virtual network gateway object you're creating.Region: Select the region in which you want to create this resource. The region for the virtual network gateway must be the same as the virtual network.Gateway type: SelectVPN. VPN gateways use the virtual network gateway typeVPN.SKU: Select the gateway SKU that supports the features you want to use from the dropdown. The SKU controls the number of allowed Site-to-Site tunnels and desired performance of the VPN. SeeGateway SKUs. Don't use the Basic SKU if you want to use IKEv2 authentication (route-based VPN).Generation: Select the generation you want to use. We recommend using a Generation2 SKU. For more information, seeGateway SKUs.Virtual network: From the dropdown, select the virtual network you added to your storage account in the previous step.Subnet: This field should be grayed out and list the name of the gateway subnet you created, along with its IP address range. If you instead see aGateway subnet address rangefield with a text box, then you haven't yet configured a gateway subnet on the virtual network.
+On theBasicstab, fill in the values forProject detailsandInstance details. Your virtual network gateway must be in the same subscription, Azure region, and resource group as the virtual network.
+
+Subscription: Select the subscription you want to use from the dropdown.
+Resource Group: This setting is autofilled when you select your virtual network on this page.
+Name: Name your virtual network gateway. Naming your gateway isn't the same as naming a gateway subnet. It's the name of the virtual network gateway object you're creating.
+Region: Select the region in which you want to create this resource. The region for the virtual network gateway must be the same as the virtual network.
+Gateway type: SelectVPN. VPN gateways use the virtual network gateway typeVPN.
+SKU: Select the gateway SKU that supports the features you want to use from the dropdown. The SKU controls the number of allowed Site-to-Site tunnels and desired performance of the VPN. SeeGateway SKUs. Don't use the Basic SKU if you want to use IKEv2 authentication (route-based VPN).
+Generation: Select the generation you want to use. We recommend using a Generation2 SKU. For more information, seeGateway SKUs.
+Virtual network: From the dropdown, select the virtual network you added to your storage account in the previous step.
+Subnet: This field should be grayed out and list the name of the gateway subnet you created, along with its IP address range. If you instead see aGateway subnet address rangefield with a text box, then you haven't yet configured a gateway subnet on the virtual network.
+Specify the values for thePublic IP addressthat gets associated to the virtual network gateway. The public IP address is assigned to this object when the virtual network gateway is created. The only time the primary public IP address changes is when the gateway is deleted and re-created. It doesn't change across resizing, resetting, or other internal maintenance/upgrades.Public IP address: The IP address of the virtual network gateway that will be exposed to the internet. Likely, you'll need to create a new IP address, however you may also use an existing unused IP address. If you selectCreate new, a new IP address Azure resource will be created in the same resource group as the virtual network gateway, and thePublic IP address namewill be the name of the newly created IP address. If you selectUse existing, you must select the existing unused IP address.Public IP address name: In the text box, type a name for your public IP address instance.Public IP address SKU: Setting is autoselected.Assignment: The assignment is typically autoselected and can be either Dynamic or Static.Enable active-active mode: SelectDisabled. Only enable this setting if you're creating an active-active gateway configuration. To learn more about active-active mode, seeHighly available cross-premises and VNet-to-VNet connectivity.Configure BGP: SelectDisabled, unless your configuration specifically requires Border Gateway Protocol. If you do require this setting, the default ASN is 65515, although this value can be changed. To learn more about this setting, seeAbout BGP with Azure VPN Gateway.
+Specify the values for thePublic IP addressthat gets associated to the virtual network gateway. The public IP address is assigned to this object when the virtual network gateway is created. The only time the primary public IP address changes is when the gateway is deleted and re-created. It doesn't change across resizing, resetting, or other internal maintenance/upgrades.
+
+Public IP address: The IP address of the virtual network gateway that will be exposed to the internet. Likely, you'll need to create a new IP address, however you may also use an existing unused IP address. If you selectCreate new, a new IP address Azure resource will be created in the same resource group as the virtual network gateway, and thePublic IP address namewill be the name of the newly created IP address. If you selectUse existing, you must select the existing unused IP address.
+Public IP address name: In the text box, type a name for your public IP address instance.
+Public IP address SKU: Setting is autoselected.
+Assignment: The assignment is typically autoselected and can be either Dynamic or Static.
+Enable active-active mode: SelectDisabled. Only enable this setting if you're creating an active-active gateway configuration. To learn more about active-active mode, seeHighly available cross-premises and VNet-to-VNet connectivity.
+Configure BGP: SelectDisabled, unless your configuration specifically requires Border Gateway Protocol. If you do require this setting, the default ASN is 65515, although this value can be changed. To learn more about this setting, seeAbout BGP with Azure VPN Gateway.
+SelectReview + createto run validation. Once validation passes, selectCreateto deploy the virtual network gateway. Deployment can take up to 45 minutes to complete.
+SelectReview + createto run validation. Once validation passes, selectCreateto deploy the virtual network gateway. Deployment can take up to 45 minutes to complete.
+First, request a public IP address. If you have an existing unused IP address that you want to use, you can skip this step. Replace<resource-group>with your resource group name, and specify the same Azure region that you used for your virtual network.$gwpip = New-AzPublicIpAddress -Name "mypublicip" -ResourceGroupName "<resource-group>" -Location "East US" -AllocationMethod Static -Sku Standard
+First, request a public IP address. If you have an existing unused IP address that you want to use, you can skip this step. Replace<resource-group>with your resource group name, and specify the same Azure region that you used for your virtual network.
+<resource-group>
+$gwpip = New-AzPublicIpAddress -Name "mypublicip" -ResourceGroupName "<resource-group>" -Location "East US" -AllocationMethod Static -Sku Standard
+$gwpip = New-AzPublicIpAddress -Name "mypublicip" -ResourceGroupName "<resource-group>" -Location "East US" -AllocationMethod Static -Sku Standard
+Next, create the gateway IP address configuration by defining the subnet and the public IP address to use. The public IP address of the VPN gateway will be exposed to the internet. Replace<virtual-network-name>and<resource-group>with your own values.$vnet = Get-AzVirtualNetwork -Name <virtual-network-name> -ResourceGroupName <resource-group>
+$subnet = Get-AzVirtualNetworkSubnetConfig -Name "GatewaySubnet" -VirtualNetwork $vnet
+$gwipconfig = New-AzVirtualNetworkGatewayIpConfig -Name gwipconfig -SubnetId $subnet.Id -PublicIpAddressId $gwpip.Id
+Next, create the gateway IP address configuration by defining the subnet and the public IP address to use. The public IP address of the VPN gateway will be exposed to the internet. Replace<virtual-network-name>and<resource-group>with your own values.
+<virtual-network-name>
+<resource-group>
+$vnet = Get-AzVirtualNetwork -Name <virtual-network-name> -ResourceGroupName <resource-group>
+$subnet = Get-AzVirtualNetworkSubnetConfig -Name "GatewaySubnet" -VirtualNetwork $vnet
+$gwipconfig = New-AzVirtualNetworkGatewayIpConfig -Name gwipconfig -SubnetId $subnet.Id -PublicIpAddressId $gwpip.Id
+$vnet = Get-AzVirtualNetwork -Name <virtual-network-name> -ResourceGroupName <resource-group>
+$subnet = Get-AzVirtualNetworkSubnetConfig -Name "GatewaySubnet" -VirtualNetwork $vnet
+$gwipconfig = New-AzVirtualNetworkGatewayIpConfig -Name gwipconfig -SubnetId $subnet.Id -PublicIpAddressId $gwpip.Id
+Run the following script to create the VPN gateway.Replace<resource-group>with the same resource group as your virtual network. Specify thegateway SKUthat supports the features you want to use. The gateway SKU controls the number of allowed Site-to-Site tunnels and desired performance of the VPN. We recommend using a Generation 2 SKU. Don't use the Basic SKU if you want to use IKEv2 authentication (route-based VPN).New-AzVirtualNetworkGateway -Name MyVnetGateway -ResourceGroupName <resource-group> -Location "East US" -IpConfigurations $gwipconfig -GatewayType "Vpn" -VpnType RouteBased -GatewaySku VpnGw2 -VpnGatewayGeneration Generation2You can also choose to include other features likeBorder Gateway Protocol (BGP)andActive-Active. See the documentation for theNew-AzVirtualNetworkGatewaycmdlet. If you do require BGP, the default ASN is 65515, although this value can be changed.
+Run the following script to create the VPN gateway.
+Replace<resource-group>with the same resource group as your virtual network. Specify thegateway SKUthat supports the features you want to use. The gateway SKU controls the number of allowed Site-to-Site tunnels and desired performance of the VPN. We recommend using a Generation 2 SKU. Don't use the Basic SKU if you want to use IKEv2 authentication (route-based VPN).
+<resource-group>
+New-AzVirtualNetworkGateway -Name MyVnetGateway -ResourceGroupName <resource-group> -Location "East US" -IpConfigurations $gwipconfig -GatewayType "Vpn" -VpnType RouteBased -GatewaySku VpnGw2 -VpnGatewayGeneration Generation2
+New-AzVirtualNetworkGateway -Name MyVnetGateway -ResourceGroupName <resource-group> -Location "East US" -IpConfigurations $gwipconfig -GatewayType "Vpn" -VpnType RouteBased -GatewaySku VpnGw2 -VpnGatewayGeneration Generation2
+You can also choose to include other features likeBorder Gateway Protocol (BGP)andActive-Active. See the documentation for theNew-AzVirtualNetworkGatewaycmdlet. If you do require BGP, the default ASN is 65515, although this value can be changed.
+Creating a gateway can take 45 minutes or more, depending on the gateway SKU you specified. You can view the VPN gateway using theGet-AzVirtualNetworkGatewaycmdlet.Get-AzVirtualNetworkGateway -Name MyVnetGateway -ResourceGroup <resource-group>
+Creating a gateway can take 45 minutes or more, depending on the gateway SKU you specified. You can view the VPN gateway using theGet-AzVirtualNetworkGatewaycmdlet.
+Get-AzVirtualNetworkGateway -Name MyVnetGateway -ResourceGroup <resource-group>
+Get-AzVirtualNetworkGateway -Name MyVnetGateway -ResourceGroup <resource-group>
+First, request a public IP address. If you have an existing unused IP address that you want to use, you can skip this step. Replace<resource-group>with your resource group name.az network public-ip create -n mypublicip -g <resource-group>
+First, request a public IP address. If you have an existing unused IP address that you want to use, you can skip this step. Replace<resource-group>with your resource group name.
+<resource-group>
+az network public-ip create -n mypublicip -g <resource-group>
+az network public-ip create -n mypublicip -g <resource-group>
+Run the following script to create the VPN gateway. Creating a gateway can take 45 minutes or more, depending on the gateway SKU you specify.Replace<resource-group>with the same resource group as your virtual network. Specify thegateway SKUthat supports the features you want to use. The gateway SKU controls the number of allowed Site-to-Site tunnels and desired performance of the VPN. We recommend using a Generation 2 SKU. Don't use the Basic SKU if you want to use IKEv2 authentication (route-based VPN).az network vnet-gateway create -n MyVnetGateway -l eastus --public-ip-address mypublicip -g <resource-group> --vnet <virtual-network-name> --gateway-type Vpn --sku VpnGw2 --vpn-gateway-generation Generation2 --no-waitThe--no-waitparameter allows the gateway to be created in the background. It doesn't mean that the VPN gateway is created immediately.
+Run the following script to create the VPN gateway. Creating a gateway can take 45 minutes or more, depending on the gateway SKU you specify.
+Replace<resource-group>with the same resource group as your virtual network. Specify thegateway SKUthat supports the features you want to use. The gateway SKU controls the number of allowed Site-to-Site tunnels and desired performance of the VPN. We recommend using a Generation 2 SKU. Don't use the Basic SKU if you want to use IKEv2 authentication (route-based VPN).
+<resource-group>
+az network vnet-gateway create -n MyVnetGateway -l eastus --public-ip-address mypublicip -g <resource-group> --vnet <virtual-network-name> --gateway-type Vpn --sku VpnGw2 --vpn-gateway-generation Generation2 --no-wait
+az network vnet-gateway create -n MyVnetGateway -l eastus --public-ip-address mypublicip -g <resource-group> --vnet <virtual-network-name> --gateway-type Vpn --sku VpnGw2 --vpn-gateway-generation Generation2 --no-wait
+The--no-waitparameter allows the gateway to be created in the background. It doesn't mean that the VPN gateway is created immediately.
+--no-wait
+You can view the VPN gateway using the following command. If the VPN gateway isn't fully deployed, you'll receive an error message.az network vnet-gateway show -n MyVnetGateway -g <resource-group>
+You can view the VPN gateway using the following command. If the VPN gateway isn't fully deployed, you'll receive an error message.
+az network vnet-gateway show -n MyVnetGateway -g <resource-group>
+az network vnet-gateway show -n MyVnetGateway -g <resource-group>
+Create a local network gateway for your on-premises gateway
+A local network gateway is an Azure resource that represents your on-premises network appliance. It's deployed alongside your storage account, virtual network, and virtual network gateway, but doesn't need to be in the same resource group or subscription as the storage account. To create a local network gateway, follow these steps.
+Portal
+Azure PowerShell
+Azure CLI
+In the search box at the top of the Azure portal, search for and selectlocal network gateways.  TheLocal network gatewayspage should appear. At the top of the page, select+ Create.
+In the search box at the top of the Azure portal, search for and selectlocal network gateways.  TheLocal network gatewayspage should appear. At the top of the page, select+ Create.
+On theBasicstab, fill in the values forProject detailsandInstance details.Subscription: The desired Azure subscription. This doesn't need to match the subscription used for the virtual network gateway or the storage account.Resource group: The desired resource group. This doesn't need to match the resource group used for the virtual network gateway or the storage account.Region: The Azure region the local network gateway resource should be created in. This should match the region you selected for the virtual network gateway and the storage account.Name: The name of the Azure resource for the local network gateway. This name may be any name you find useful for your management.Endpoint: LeaveIP addressselected.IP address: The public IP address of your local gateway on-premises.Address space: The address range or ranges for the network this local network gateway represents. For example: 192.168.0.0/16. If you add multiple address space ranges, make sure that the ranges you specify don't overlap with ranges of other networks that you want to connect to. If you plan to use this local network gateway in a BGP-enabled connection, then the minimum prefix you need to declare is the host address of your BGP Peer IP address on your VPN device.
+On theBasicstab, fill in the values forProject detailsandInstance details.
+
+Subscription: The desired Azure subscription. This doesn't need to match the subscription used for the virtual network gateway or the storage account.
+Resource group: The desired resource group. This doesn't need to match the resource group used for the virtual network gateway or the storage account.
+Region: The Azure region the local network gateway resource should be created in. This should match the region you selected for the virtual network gateway and the storage account.
+Name: The name of the Azure resource for the local network gateway. This name may be any name you find useful for your management.
+Endpoint: LeaveIP addressselected.
+IP address: The public IP address of your local gateway on-premises.
+Address space: The address range or ranges for the network this local network gateway represents. For example: 192.168.0.0/16. If you add multiple address space ranges, make sure that the ranges you specify don't overlap with ranges of other networks that you want to connect to. If you plan to use this local network gateway in a BGP-enabled connection, then the minimum prefix you need to declare is the host address of your BGP Peer IP address on your VPN device.
+If your organization requires BGP, select theAdvancedtab to configure BGP settings. To learn more, seeAbout BGP with Azure VPN Gateway.
+If your organization requires BGP, select theAdvancedtab to configure BGP settings. To learn more, seeAbout BGP with Azure VPN Gateway.
+SelectReview + createto run validation. Once validation passes, selectCreateto create the local network gateway.
+SelectReview + createto run validation. Once validation passes, selectCreateto create the local network gateway.
+Run the following command to create a new local network gateway. Replace<resource-group>with your own value.
+<resource-group>
+The-AddressPrefixparameter specifies the address range or ranges for the network this local network gateway represents. If you add multiple address space ranges, make sure that the ranges you specify don't overlap with ranges of other networks that you want to connect to.
+-AddressPrefix
+New-AzLocalNetworkGateway -Name MyLocalGateway -Location "East US" -AddressPrefix @('10.101.0.0/24','10.101.1.0/24') -GatewayIpAddress "5.4.3.2" -ResourceGroupName <resource-group>
+New-AzLocalNetworkGateway -Name MyLocalGateway -Location "East US" -AddressPrefix @('10.101.0.0/24','10.101.1.0/24') -GatewayIpAddress "5.4.3.2" -ResourceGroupName <resource-group>
+Run the following command to create a new local network gateway. Replace<resource-group>with your own value.
+<resource-group>
+The--local-address-prefixesparameter specifies the address range or ranges for the network this local network gateway represents. If you add multiple address space ranges, make sure that the ranges you specify don't overlap with ranges of other networks that you want to connect to.
+--local-address-prefixes
+az network local-gateway create --gateway-ip-address 5.4.3.2 --name MyLocalGateway -g <resource-group> --local-address-prefixes 10.101.0.0/24 10.101.1.0/24
+az network local-gateway create --gateway-ip-address 5.4.3.2 --name MyLocalGateway -g <resource-group> --local-address-prefixes 10.101.0.0/24 10.101.1.0/24
+Configure on-premises network appliance
+The specific steps to configure your on-premises network appliance depend on the network appliance your organization has selected.
+When configuring your network appliance, you'll need the following items:
+A shared key.This is the same shared key that you specify when creating your site-to-site VPN connection. In our examples, we use a basic shared key such as 'abc123'. We recommend that you generate a more complex key to use that complies with your organization's security requirements.
+A shared key.This is the same shared key that you specify when creating your site-to-site VPN connection. In our examples, we use a basic shared key such as 'abc123'. We recommend that you generate a more complex key to use that complies with your organization's security requirements.
+The public IP address of your virtual network gateway.To find the public IP address of your virtual network gateway using PowerShell, run the following command. In this example,mypublicipis the name of the public IP address resource that you created in an earlier step.Get-AzPublicIpAddress -Name mypublicip -ResourceGroupName <resource-group>
+The public IP address of your virtual network gateway.To find the public IP address of your virtual network gateway using PowerShell, run the following command. In this example,mypublicipis the name of the public IP address resource that you created in an earlier step.
+mypublicip
+Get-AzPublicIpAddress -Name mypublicip -ResourceGroupName <resource-group>
+Get-AzPublicIpAddress -Name mypublicip -ResourceGroupName <resource-group>
+Depending on the VPN device that you have, you might be able to download a VPN device configuration script. For more information, seeDownload VPN device configuration scripts.
+The following links provide more configuration information:
+For information about compatible VPN devices, seeAbout VPN devices.
+For information about compatible VPN devices, seeAbout VPN devices.
+For links to device configuration settings, seeValidated VPN devices. We provide the device configuration links on a best-effort basis, but it's always best to check with your device manufacturer for the latest configuration information.The list shows the versions that we tested. If the OS version for your VPN device isn't on the list, it still might be compatible. Check with your device manufacturer.
+For links to device configuration settings, seeValidated VPN devices. We provide the device configuration links on a best-effort basis, but it's always best to check with your device manufacturer for the latest configuration information.
+The list shows the versions that we tested. If the OS version for your VPN device isn't on the list, it still might be compatible. Check with your device manufacturer.
+For basic information about VPN device configuration, seeOverview of partner VPN device configurations.
+For basic information about VPN device configuration, seeOverview of partner VPN device configurations.
+For information about editing device configuration samples, seeEditing samples.
+For information about editing device configuration samples, seeEditing samples.
+For cryptographic requirements, seeAbout cryptographic requirements and Azure VPN gateways.
+For cryptographic requirements, seeAbout cryptographic requirements and Azure VPN gateways.
+For information about parameters that you need to complete your configuration, seeDefault IPsec/IKE parameters. The information includes IKE version, Diffie-Hellman (DH) group, authentication method, encryption and hashing algorithms, security association (SA) lifetime, perfect forward secrecy (PFS), and Dead Peer Detection (DPD).
+For information about parameters that you need to complete your configuration, seeDefault IPsec/IKE parameters. The information includes IKE version, Diffie-Hellman (DH) group, authentication method, encryption and hashing algorithms, security association (SA) lifetime, perfect forward secrecy (PFS), and Dead Peer Detection (DPD).
+For IPsec/IKE policy configuration steps, seeConfigure custom IPsec/IKE connection policies for S2S VPN and VNet-to-VNet.
+For IPsec/IKE policy configuration steps, seeConfigure custom IPsec/IKE connection policies for S2S VPN and VNet-to-VNet.
+To connect multiple policy-based VPN devices, seeConnect a VPN gateway to multiple on-premises policy-based VPN devices.
+To connect multiple policy-based VPN devices, seeConnect a VPN gateway to multiple on-premises policy-based VPN devices.
+Create the site-to-site connection
+To complete the deployment of a S2S VPN, you must create a connection between your on-premises network appliance (represented by the local network gateway resource) and the Azure virtual network gateway. To do this, follow these steps.
+Portal
+Azure PowerShell
+Azure CLI
+Navigate to the virtual network gateway you created. In the table of contents for the virtual network gateway, selectSettings > Connections, and then select+ Add.
+Navigate to the virtual network gateway you created. In the table of contents for the virtual network gateway, selectSettings > Connections, and then select+ Add.
+On theBasicstab, fill in the values forProject detailsandInstance details.Subscription: The desired Azure subscription.Resource group: The desired resource group.Connection type: Because this a S2S connection, selectSite-to-site (IPsec)from the drop-down list.Name: The name of the connection. A virtual network gateway can host multiple connections, so choose a name that's helpful for your management and that will distinguish this particular connection.Region: The region you selected for the virtual network gateway and the storage account.
+On theBasicstab, fill in the values forProject detailsandInstance details.
+
+Subscription: The desired Azure subscription.
+Resource group: The desired resource group.
+Connection type: Because this a S2S connection, selectSite-to-site (IPsec)from the drop-down list.
+Name: The name of the connection. A virtual network gateway can host multiple connections, so choose a name that's helpful for your management and that will distinguish this particular connection.
+Region: The region you selected for the virtual network gateway and the storage account.
+On theSettingstab, supply the following information.Virtual network gateway: Select the virtual network gateway you created.Local network gateway: Select the local network gateway you created.Shared key (PSK): A mixture of letters and numbers used to establish encryption for the connection. The same shared key must be used in both the virtual network and local network gateways. If your gateway device doesn't provide one, you can make one up here and provide it to your device.IKE protocol: Depending on your VPN device, select IKEv1 for policy-based VPN or IKEv2 for route-based VPN. To learn more about the two types of VPN gateways, seeAbout policy-based and route-based VPN gateways.Use Azure Private IP Address: Checking this option allows you to use Azure private IPs to establish an IPsec VPN connection. Support for private IPs must be set on the VPN gateway for this option to work. It's only supported on AZ Gateway SKUs.Enable BGP: Leave unchecked unless your organization specifically requires this setting.Enable Custom BGP Addresses: Leave unchecked unless your organization specifically requires this setting.FastPath: FastPath is designed to improve the datapath performance between your on-premises network and your virtual network.Learn more.IPsec / IKE policy: The IPsec / IKE policy that will be negotiated for the connection. LeaveDefaultselected unless your organization requires a custom policy.Learn more.Use policy based traffic selector: Leave disabled unless you need to configure the Azure VPN gateway to connect to a policy-based VPN firewall on premises. If you enable this field, you must ensure your VPN device has the matching traffic selectors defined with all combinations of your on-premises network (local network gateway) prefixes to/from the Azure virtual network prefixes, instead of any-to-any. For example, if your on-premises network prefixes are 10.1.0.0/16 and 10.2.0.0/16, and your virtual network prefixes are 192.168.0.0/16 and 172.16.0.0/16, you would need to specify the following traffic selectors:10.1.0.0/16 <====> 192.168.0.0/1610.1.0.0/16 <====> 172.16.0.0/1610.2.0.0/16 <====> 192.168.0.0/1610.2.0.0/16 <====> 172.16.0.0/16DPD timeout in seconds: Dead Peer Detection Timeout of the connection in seconds. The recommended and default value for this property is 45 seconds.Connection mode: Connection mode is used to decide which gateway can initiate the connection. When this value is set to:Default: Both Azure and the on-premises VPN gateway can initiate the connection.ResponderOnly: Azure VPN gateway will never initiate the connection. The on-premises VPN gateway must initiate the connection.InitiatorOnly: Azure VPN gateway will initiate the connection and reject any connection attempts from the on-premises VPN gateway.
+On theSettingstab, supply the following information.
+
+Virtual network gateway: Select the virtual network gateway you created.
+Local network gateway: Select the local network gateway you created.
+Shared key (PSK): A mixture of letters and numbers used to establish encryption for the connection. The same shared key must be used in both the virtual network and local network gateways. If your gateway device doesn't provide one, you can make one up here and provide it to your device.
+IKE protocol: Depending on your VPN device, select IKEv1 for policy-based VPN or IKEv2 for route-based VPN. To learn more about the two types of VPN gateways, seeAbout policy-based and route-based VPN gateways.
+Use Azure Private IP Address: Checking this option allows you to use Azure private IPs to establish an IPsec VPN connection. Support for private IPs must be set on the VPN gateway for this option to work. It's only supported on AZ Gateway SKUs.
+Enable BGP: Leave unchecked unless your organization specifically requires this setting.
+Enable Custom BGP Addresses: Leave unchecked unless your organization specifically requires this setting.
+FastPath: FastPath is designed to improve the datapath performance between your on-premises network and your virtual network.Learn more.
+IPsec / IKE policy: The IPsec / IKE policy that will be negotiated for the connection. LeaveDefaultselected unless your organization requires a custom policy.Learn more.
+Use policy based traffic selector: Leave disabled unless you need to configure the Azure VPN gateway to connect to a policy-based VPN firewall on premises. If you enable this field, you must ensure your VPN device has the matching traffic selectors defined with all combinations of your on-premises network (local network gateway) prefixes to/from the Azure virtual network prefixes, instead of any-to-any. For example, if your on-premises network prefixes are 10.1.0.0/16 and 10.2.0.0/16, and your virtual network prefixes are 192.168.0.0/16 and 172.16.0.0/16, you would need to specify the following traffic selectors:10.1.0.0/16 <====> 192.168.0.0/1610.1.0.0/16 <====> 172.16.0.0/1610.2.0.0/16 <====> 192.168.0.0/1610.2.0.0/16 <====> 172.16.0.0/16
+10.1.0.0/16 <====> 192.168.0.0/16
+10.1.0.0/16 <====> 172.16.0.0/16
+10.2.0.0/16 <====> 192.168.0.0/16
+10.2.0.0/16 <====> 172.16.0.0/16
+DPD timeout in seconds: Dead Peer Detection Timeout of the connection in seconds. The recommended and default value for this property is 45 seconds.
+Connection mode: Connection mode is used to decide which gateway can initiate the connection. When this value is set to:Default: Both Azure and the on-premises VPN gateway can initiate the connection.ResponderOnly: Azure VPN gateway will never initiate the connection. The on-premises VPN gateway must initiate the connection.InitiatorOnly: Azure VPN gateway will initiate the connection and reject any connection attempts from the on-premises VPN gateway.
+Default: Both Azure and the on-premises VPN gateway can initiate the connection.
+ResponderOnly: Azure VPN gateway will never initiate the connection. The on-premises VPN gateway must initiate the connection.
+InitiatorOnly: Azure VPN gateway will initiate the connection and reject any connection attempts from the on-premises VPN gateway.
+SelectReview + createto run validation. Once validation passes, selectCreateto create the connection. You can verify the connection has been made successfully through the virtual network gateway'sConnectionspage.
+SelectReview + createto run validation. Once validation passes, selectCreateto create the connection. You can verify the connection has been made successfully through the virtual network gateway'sConnectionspage.
+Run the following commands to create the site-to-site VPN connection between your virtual network gateway and your on-premises device. Be sure to replace the values with your own. The shared key must match the value you used for your VPN device configuration. The-ConnectionTypefor site-to-site VPN isIPsec.
+-ConnectionType
+For more options, see the documentation for theNew-AzVirtualNetworkGatewayConnectioncmdlet.
+Set the variables.$gateway1 = Get-AzVirtualNetworkGateway -Name MyVnetGateway -ResourceGroupName <resource-group>
+$local = Get-AzLocalNetworkGateway -Name MyLocalGateway -ResourceGroupName <resource-group>
+Set the variables.
+$gateway1 = Get-AzVirtualNetworkGateway -Name MyVnetGateway -ResourceGroupName <resource-group>
+$local = Get-AzLocalNetworkGateway -Name MyLocalGateway -ResourceGroupName <resource-group>
+$gateway1 = Get-AzVirtualNetworkGateway -Name MyVnetGateway -ResourceGroupName <resource-group>
+$local = Get-AzLocalNetworkGateway -Name MyLocalGateway -ResourceGroupName <resource-group>
+Create the VPN connection.New-AzVirtualNetworkGatewayConnection -Name VNet1toSite1 -ResourceGroupName <resource-group> `
+-Location 'East US' -VirtualNetworkGateway1 $gateway1 -LocalNetworkGateway2 $local `
+-ConnectionType IPsec -SharedKey 'abc123'
+Create the VPN connection.
+New-AzVirtualNetworkGatewayConnection -Name VNet1toSite1 -ResourceGroupName <resource-group> `
+-Location 'East US' -VirtualNetworkGateway1 $gateway1 -LocalNetworkGateway2 $local `
+-ConnectionType IPsec -SharedKey 'abc123'
+New-AzVirtualNetworkGatewayConnection -Name VNet1toSite1 -ResourceGroupName <resource-group> `
+-Location 'East US' -VirtualNetworkGateway1 $gateway1 -LocalNetworkGateway2 $local `
+-ConnectionType IPsec -SharedKey 'abc123'
+After a short while, the connection will be established. You can verify your VPN connection by running the following command. If prompted, select 'A' in order to run 'All'.Get-AzVirtualNetworkGatewayConnection -Name VNet1toSite1 -ResourceGroupName <resource-group>The connection status should show as "Connected."
+After a short while, the connection will be established. You can verify your VPN connection by running the following command. If prompted, select 'A' in order to run 'All'.
+Get-AzVirtualNetworkGatewayConnection -Name VNet1toSite1 -ResourceGroupName <resource-group>
+Get-AzVirtualNetworkGatewayConnection -Name VNet1toSite1 -ResourceGroupName <resource-group>
+The connection status should show as "Connected."
+Run the following commands to create the site-to-site VPN connection between your virtual network gateway and your on-premises device. Be sure to replace the values with your own. The shared key must match the value you used for your VPN device configuration.
+For more options, see the documentation for theaz network vnet createcommand.
+az network vpn-connection create --name VNet1toSite1 --resource-group <resource-group> --vnet-gateway1 MyVnetGateway -l eastus --shared-key abc123 --local-gateway MyLocalGateway
+az network vpn-connection create --name VNet1toSite1 --resource-group <resource-group> --vnet-gateway1 MyVnetGateway -l eastus --shared-key abc123 --local-gateway MyLocalGateway
+After a short while, the connection will be established. You can verify your VPN connection by running the following command. When the connection is in the process of being established, its connection status shows 'Connecting'. Once the connection is established, the status changes to 'Connected'.
+az network vpn-connection show --name VNet1toSite1 --resource-group <resource-group>
+az network vpn-connection show --name VNet1toSite1 --resource-group <resource-group>
+Mount Azure file share
+The final step in configuring a S2S VPN is verifying that it works for Azure Files. You can do this by mounting your Azure file share on-premises. See the instructions to mount by OS here:
+Windows
+macOS
+Linux (NFS)
+Linux (SMB)
+See also
+Azure Files networking overview
+Configure a Point-to-Site (P2S) VPN on Windows for use with Azure Files
+Configure a Point-to-Site (P2S) VPN on Linux for use with Azure Files
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,859 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Deployment jobs
+Article
+2025-01-24
+32 contributors
+In this article
+Azure DevOps Services | Azure DevOps Server 2022 | Azure DevOps Server 2020
+Important
+Job and stage names can't contain keywords (example:deployment).
+deployment
+Each job in a stage must have a unique name.
+In YAML pipelines, we recommend that you put your deployment steps in a special type ofjobcalled a deployment job. A deployment job is a collection of steps that are run sequentially against the environment. A deployment job and atraditional jobcan exist in the same stage. Azure DevOps supports therunOnce,rolling, and thecanarystrategies.
+Deployment jobs provide the following benefits:
+Deployment history: You get the deployment history across pipelines, down to a specific resource and status of the deployments for auditing.
+Apply deployment strategy: You define how your application is rolled out.
+A deployment job doesn't automatically clone the source repo. You can check out the source repo within your job withcheckout: self.
+checkout: self
+Note
+This article focuses on deployment with deployment jobs. To learn how to deploy to Azure with pipelines, seeDeploy to Azure overview.
+Schema
+Go to the YAML Schema to see thejobs.deploymentandjobs.deployment.environmentdefinitions.
+For virtual machines, you don't need to define a pool. Any steps that you define in a deployment job with a virtual machine resource runs against that virtual machine and not against the agent in the pool. For other resource types such as Kubernetes, you do need to define a pool so that tasks can run on that machine.
+Deployment strategies
+When you're deploying application updates, it's important that the technique you use to deliver the update will:
+Enable initialization.
+Deploy the update.
+Route traffic to the updated version.
+Test the updated version after routing traffic.
+In case of failure, run steps to restore to the last known good version.
+We achieve this by using lifecycle hooks that can run steps during deployment. Each of the lifecycle hooks resolves into an agent job or aserver job(or a container or validation job in the future), depending on thepoolattribute. By default, the lifecycle hooks inherit thepoolspecified by thedeploymentjob.
+pool
+pool
+deployment
+Deployment jobs use the$(Pipeline.Workspace)system variable.
+$(Pipeline.Workspace)
+Descriptions of lifecycle hooks
+preDeploy: Used to run steps that initialize resources before application deployment starts.
+preDeploy
+deploy: Used to run steps that deploy your application. Download artifact task is auto injected only in thedeployhook for deployment jobs. To stop downloading artifacts, use- download: noneor choose specific artifacts to download by specifyingDownload Pipeline Artifact task.
+deploy
+deploy
+- download: none
+routeTraffic: Used to run steps that serve the traffic to the updated version.
+routeTraffic
+postRouteTraffic: Used to run the steps after the traffic is routed. Typically, these tasks monitor the health of the updated version for defined interval.
+postRouteTraffic
+on: failureoron: success: Used to run steps for rollback actions or clean-up.
+on: failure
+on: success
+RunOnce deployment strategy
+runOnceis the simplest deployment strategy wherein all the lifecycle hooks, namelypreDeploydeploy,routeTraffic, andpostRouteTraffic, are executed once. Then,  eitheron:successoron:failureis executed.
+preDeploy
+deploy
+routeTraffic
+postRouteTraffic
+on:
+success
+on:
+failure
+strategy: 
+    runOnce:
+      preDeploy:        
+        pool: [ server | pool ] # See pool schema.        
+        steps:
+        - script: [ script | bash | pwsh | powershell | checkout | task | templateReference ]
+      deploy:          
+        pool: [ server | pool ] # See pool schema.        
+        steps:
+        ...
+      routeTraffic:         
+        pool: [ server | pool ]         
+        steps:
+        ...        
+      postRouteTraffic:          
+        pool: [ server | pool ]        
+        steps:
+        ...
+      on:
+        failure:         
+          pool: [ server | pool ]           
+          steps:
+          ...
+        success:          
+          pool: [ server | pool ]           
+          steps:
+          ...
+strategy: 
+    runOnce:
+      preDeploy:        
+        pool: [ server | pool ] # See pool schema.        
+        steps:
+        - script: [ script | bash | pwsh | powershell | checkout | task | templateReference ]
+      deploy:          
+        pool: [ server | pool ] # See pool schema.        
+        steps:
+        ...
+      routeTraffic:         
+        pool: [ server | pool ]         
+        steps:
+        ...        
+      postRouteTraffic:          
+        pool: [ server | pool ]        
+        steps:
+        ...
+      on:
+        failure:         
+          pool: [ server | pool ]           
+          steps:
+          ...
+        success:          
+          pool: [ server | pool ]           
+          steps:
+          ...
+If you're using self-hosted agents, you can use the workspace clean options to clean your deployment workspace.
+jobs:
+  - deployment: MyDeploy
+    pool:
+      vmImage: 'ubuntu-latest'
+    workspace:
+      clean: all
+    environment: staging
+jobs:
+  - deployment: MyDeploy
+    pool:
+      vmImage: 'ubuntu-latest'
+    workspace:
+      clean: all
+    environment: staging
+Rolling deployment strategy
+Arolling deploymentreplaces instances of the previous version of an application with instances of the new version of the application on a fixed set of virtual machines (rolling set) in each iteration.
+We currently only support the rolling strategy to VM resources.
+For example, a rolling deployment typically waits for deployments on each set of virtual machines to complete before proceeding to the next set of deployments. You could do a health check after each iteration and if a significant issue occurs, the rolling deployment can be stopped.
+Rolling deployments can be configured by specifying the keywordrolling:under thestrategy:node.
+Thestrategy.namevariable is available in this strategy block, which takes the name of the strategy. In this case, rolling.
+rolling:
+strategy:
+strategy.name
+strategy:
+  rolling:
+    maxParallel: [ number or percentage as x% ]
+    preDeploy:        
+      steps:
+      - script: [ script | bash | pwsh | powershell | checkout | task | templateReference ]
+    deploy:          
+      steps:
+      ...
+    routeTraffic:         
+      steps:
+      ...        
+    postRouteTraffic:          
+      steps:
+      ...
+    on:
+      failure:         
+        steps:
+        ...
+      success:          
+        steps:
+        ...
+strategy:
+  rolling:
+    maxParallel: [ number or percentage as x% ]
+    preDeploy:        
+      steps:
+      - script: [ script | bash | pwsh | powershell | checkout | task | templateReference ]
+    deploy:          
+      steps:
+      ...
+    routeTraffic:         
+      steps:
+      ...        
+    postRouteTraffic:          
+      steps:
+      ...
+    on:
+      failure:         
+        steps:
+        ...
+      success:          
+        steps:
+        ...
+All the lifecycle hooks are supported and lifecycle hook jobs are created to run on each VM.
+preDeploy,deploy,routeTraffic, andpostRouteTrafficare executed once per batch size defined bymaxParallel.
+Then, eitheron: successoron: failureis executed.
+preDeploy
+deploy
+routeTraffic
+postRouteTraffic
+maxParallel
+on: success
+on: failure
+WithmaxParallel: <# or % of VMs>, you can control the number/percentage of virtual machine targets to deploy to in parallel. This ensures that the app is running on these machines and is capable of handling requests while the deployment is taking place on the rest of the machines, which reduces overall downtime.
+maxParallel: <# or % of VMs>
+Note
+There are a few known gaps in this feature. For example, when you retry a stage, it re-runs the deployment on all VMs not just failed targets.
+Canary deployment strategy
+TheCanary deployment strategyis an advanced deployment strategy that helps mitigate the risk involved in rolling out new versions of applications. By using this strategy, you can roll out the changes to a small subset of servers first. As you gain more confidence in the new version, you can release it to more servers in your infrastructure and route more traffic to it.
+strategy: 
+    canary:
+      increments: [ number ]
+      preDeploy:        
+        pool: [ server | pool ] # See pool schema.        
+        steps:
+        - script: [ script | bash | pwsh | powershell | checkout | task | templateReference ]
+      deploy:          
+        pool: [ server | pool ] # See pool schema.        
+        steps:
+        ...
+      routeTraffic:         
+        pool: [ server | pool ]         
+        steps:
+        ...        
+      postRouteTraffic:          
+        pool: [ server | pool ]        
+        steps:
+        ...
+      on:
+        failure:         
+          pool: [ server | pool ]           
+          steps:
+          ...
+        success:          
+          pool: [ server | pool ]           
+          steps:
+          ...
+strategy: 
+    canary:
+      increments: [ number ]
+      preDeploy:        
+        pool: [ server | pool ] # See pool schema.        
+        steps:
+        - script: [ script | bash | pwsh | powershell | checkout | task | templateReference ]
+      deploy:          
+        pool: [ server | pool ] # See pool schema.        
+        steps:
+        ...
+      routeTraffic:         
+        pool: [ server | pool ]         
+        steps:
+        ...        
+      postRouteTraffic:          
+        pool: [ server | pool ]        
+        steps:
+        ...
+      on:
+        failure:         
+          pool: [ server | pool ]           
+          steps:
+          ...
+        success:          
+          pool: [ server | pool ]           
+          steps:
+          ...
+Canary deployment strategy supports thepreDeploylifecycle hook (executed once) and iterates with thedeploy,routeTraffic, andpostRouteTrafficlifecycle hooks. It then exits with either thesuccessorfailurehook.
+preDeploy
+deploy
+routeTraffic
+postRouteTraffic
+success
+failure
+The following variables are available in this strategy:
+strategy.name: Name of the strategy. For example, canary.strategy.action: The action to be performed on the Kubernetes cluster. For example, deploy, promote, or reject.strategy.increment: The increment value used in the current interaction. This variable is available only indeploy,routeTraffic, andpostRouteTrafficlifecycle hooks.
+strategy.name
+strategy.action
+strategy.increment
+deploy
+routeTraffic
+postRouteTraffic
+Examples
+RunOnce deployment strategy
+The following example YAML snippet showcases a simple use of a deploy job by using therunOncedeployment strategy. The example includes a checkout step.
+runOnce
+jobs:
+  # Track deployments on the environment.
+- deployment: DeployWeb
+  displayName: deploy Web App
+  pool:
+    vmImage: 'ubuntu-latest'
+  # Creates an environment if it doesn't exist.
+  environment: 'smarthotel-dev'
+  strategy:
+    # Default deployment strategy, more coming...
+    runOnce:
+      deploy:
+        steps:
+        - checkout: self 
+        - script: echo my first deployment
+jobs:
+  # Track deployments on the environment.
+- deployment: DeployWeb
+  displayName: deploy Web App
+  pool:
+    vmImage: 'ubuntu-latest'
+  # Creates an environment if it doesn't exist.
+  environment: 'smarthotel-dev'
+  strategy:
+    # Default deployment strategy, more coming...
+    runOnce:
+      deploy:
+        steps:
+        - checkout: self 
+        - script: echo my first deployment
+With each run of this job, deployment history is recorded against thesmarthotel-devenvironment.
+smarthotel-dev
+Note
+It's also possible to create an environment with empty resources and use that as an abstract shell to record deployment history, as shown in the previous example.
+The next example demonstrates how a pipeline can refer both an environment and a resource to be used as the target for a deployment job.
+jobs:
+- deployment: DeployWeb
+  displayName: deploy Web App
+  pool:
+    vmImage: 'ubuntu-latest'
+  # Records deployment against bookings resource - Kubernetes namespace.
+  environment: 'smarthotel-dev.bookings'
+  strategy: 
+    runOnce:
+      deploy:
+        steps:
+          # No need to explicitly pass the connection details.
+        - task: KubernetesManifest@0
+          displayName: Deploy to Kubernetes cluster
+          inputs:
+            action: deploy
+            namespace: $(k8sNamespace)
+            manifests: |
+              $(System.ArtifactsDirectory)/manifests/*
+            imagePullSecrets: |
+              $(imagePullSecret)
+            containers: |
+              $(containerRegistry)/$(imageRepository):$(tag)
+jobs:
+- deployment: DeployWeb
+  displayName: deploy Web App
+  pool:
+    vmImage: 'ubuntu-latest'
+  # Records deployment against bookings resource - Kubernetes namespace.
+  environment: 'smarthotel-dev.bookings'
+  strategy: 
+    runOnce:
+      deploy:
+        steps:
+          # No need to explicitly pass the connection details.
+        - task: KubernetesManifest@0
+          displayName: Deploy to Kubernetes cluster
+          inputs:
+            action: deploy
+            namespace: $(k8sNamespace)
+            manifests: |
+              $(System.ArtifactsDirectory)/manifests/*
+            imagePullSecrets: |
+              $(imagePullSecret)
+            containers: |
+              $(containerRegistry)/$(imageRepository):$(tag)
+This approach has the following benefits:
+Records deployment history on a specific resource within the environment, as opposed to recording the history on all resources within the environment.
+Steps in the deployment jobautomatically inheritthe connection details of the resource (in this case, a Kubernetes namespace,smarthotel-dev.bookings), because the deployment job is linked to the environment.
+This is useful in the cases where the same connection detail is set for multiple steps of the job.
+smarthotel-dev.bookings
+Note
+If you're using a private AKS cluster, make sure you're connected to the cluster's virtual network as the API server endpoint isn't exposed through a public IP address.
+Azure Pipelines recommends setting up a self-hosted agent within a VNET that has access to the cluster's virtual network. SeeOptions for connecting to the private clusterfor details.
+Rolling deployment strategy
+The rolling strategy for VMs updates up to five targets in each iteration.maxParalleldetermines the number of targets that can be deployed to, in parallel. The selection accounts for absolute number or percentage of targets that must remain available at any time excluding the targets that are being deployed to. It's also used to determine the success and failure conditions during deployment.
+maxParallel
+jobs: 
+- deployment: VMDeploy
+  displayName: web
+  environment:
+    name: smarthotel-dev
+    resourceType: VirtualMachine
+  strategy:
+    rolling:
+      maxParallel: 5  #for percentages, mention as x%
+      preDeploy:
+        steps:
+        - download: current
+          artifact: drop
+        - script: echo initialize, cleanup, backup, install certs
+      deploy:
+        steps:
+        - task: IISWebAppDeploymentOnMachineGroup@0
+          displayName: 'Deploy application to Website'
+          inputs:
+            WebSiteName: 'Default Web Site'
+            Package: '$(Pipeline.Workspace)/drop/**/*.zip'
+      routeTraffic:
+        steps:
+        - script: echo routing traffic
+      postRouteTraffic:
+        steps:
+        - script: echo health check post-route traffic
+      on:
+        failure:
+          steps:
+          - script: echo Restore from backup! This is on failure
+        success:
+          steps:
+          - script: echo Notify! This is on success
+jobs: 
+- deployment: VMDeploy
+  displayName: web
+  environment:
+    name: smarthotel-dev
+    resourceType: VirtualMachine
+  strategy:
+    rolling:
+      maxParallel: 5  #for percentages, mention as x%
+      preDeploy:
+        steps:
+        - download: current
+          artifact: drop
+        - script: echo initialize, cleanup, backup, install certs
+      deploy:
+        steps:
+        - task: IISWebAppDeploymentOnMachineGroup@0
+          displayName: 'Deploy application to Website'
+          inputs:
+            WebSiteName: 'Default Web Site'
+            Package: '$(Pipeline.Workspace)/drop/**/*.zip'
+      routeTraffic:
+        steps:
+        - script: echo routing traffic
+      postRouteTraffic:
+        steps:
+        - script: echo health check post-route traffic
+      on:
+        failure:
+          steps:
+          - script: echo Restore from backup! This is on failure
+        success:
+          steps:
+          - script: echo Notify! This is on success
+Canary deployment strategy
+In the next example, the canary strategy for AKS will first deploy the changes with 10-percent pods, followed by 20 percent, while monitoring the health duringpostRouteTraffic. If all goes well, it will promote to 100 percent.
+postRouteTraffic
+jobs: 
+- deployment: 
+  environment: smarthotel-dev.bookings
+  pool: 
+    name: smarthotel-devPool
+  strategy:                  
+    canary:      
+      increments: [10,20]  
+      preDeploy:                                     
+        steps:           
+        - script: initialize, cleanup....   
+      deploy:             
+        steps: 
+        - script: echo deploy updates... 
+â¯â¯â¯â¯â¯â¯â¯â¯-â¯task:â¯KubernetesManifest@0 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯inputs: 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯action:â¯$(strategy.action)â¯â¯â¯â¯â¯â¯ 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯namespace:â¯'default' 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯strategy:â¯$(strategy.name) 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯percentage:â¯$(strategy.increment) 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯manifests:â¯'manifest.yml' 
+      postRouteTraffic: 
+        pool: server 
+        steps:           
+        - script: echo monitor application health...   
+      on: 
+        failure: 
+          steps: 
+          - script: echo clean-up, rollback...   
+        success: 
+          steps: 
+          - script: echo checks passed, notify...
+jobs: 
+- deployment: 
+  environment: smarthotel-dev.bookings
+  pool: 
+    name: smarthotel-devPool
+  strategy:                  
+    canary:      
+      increments: [10,20]  
+      preDeploy:                                     
+        steps:           
+        - script: initialize, cleanup....   
+      deploy:             
+        steps: 
+        - script: echo deploy updates... 
+â¯â¯â¯â¯â¯â¯â¯â¯-â¯task:â¯KubernetesManifest@0 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯inputs: 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯action:â¯$(strategy.action)â¯â¯â¯â¯â¯â¯ 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯namespace:â¯'default' 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯strategy:â¯$(strategy.name) 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯percentage:â¯$(strategy.increment) 
+â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯â¯manifests:â¯'manifest.yml' 
+      postRouteTraffic: 
+        pool: server 
+        steps:           
+        - script: echo monitor application health...   
+      on: 
+        failure: 
+          steps: 
+          - script: echo clean-up, rollback...   
+        success: 
+          steps: 
+          - script: echo checks passed, notify...
+Use pipeline decorators to inject steps automatically
+Pipeline decoratorscan be used in deployment jobs to autoinject any custom step (for example, vulnerability scanner) to everylifecycle hookexecution of every deployment job. Since pipeline decorators can be applied to all pipelines in an organization, this can be applied as part of enforcing safe deployment practices.
+In addition, deployment jobs can be run as acontainer jobalong withservices side-carif defined.
+Support for output variables
+Define output variables in a deployment job'slifecycle hooksand consume them in other downstream steps and jobs within the same stage.
+To share variables between stages, output anartifactin one stage and then consume it in a subsequent stage, or use thestageDependenciessyntax described invariables.
+stageDependencies
+While executing deployment strategies, you can access output variables across jobs using the following syntax.
+ForrunOncestrategy:$[dependencies.<job-name>.outputs['<job-name>.<step-name>.<variable-name>']](for example,$[dependencies.JobA.outputs['JobA.StepA.VariableA']])
+$[dependencies.<job-name>.outputs['<job-name>.<step-name>.<variable-name>']]
+$[dependencies.JobA.outputs['JobA.StepA.VariableA']]
+ForrunOncestrategy plus a resourceType:$[dependencies.<job-name>.outputs['Deploy_<resource-name>.<step-name>.<variable-name>']]. (for example,$[dependencies.JobA.outputs['Deploy_VM1.StepA.VariableA']])
+$[dependencies.<job-name>.outputs['Deploy_<resource-name>.<step-name>.<variable-name>']]
+$[dependencies.JobA.outputs['Deploy_VM1.StepA.VariableA']]
+Forcanarystrategy:$[dependencies.<job-name>.outputs['<lifecycle-hookname>_<increment-value>.<step-name>.<variable-name>']]
+$[dependencies.<job-name>.outputs['<lifecycle-hookname>_<increment-value>.<step-name>.<variable-name>']]
+Forrollingstrategy:$[dependencies.<job-name>.outputs['<lifecycle-hookname>_<resource-name>.<step-name>.<variable-name>']]
+$[dependencies.<job-name>.outputs['<lifecycle-hookname>_<resource-name>.<step-name>.<variable-name>']]
+# Set an output variable in a lifecycle hook of a deployment job executing canary strategy.
+- deployment: A
+  pool:
+    vmImage: 'ubuntu-latest'
+  environment: staging
+  strategy:                  
+    canary:      
+      increments: [10,20]  # Creates multiple jobs, one for each increment. Output variable can be referenced with this.
+      deploy:
+        steps:
+        - bash: echo "##vso[task.setvariable variable=myOutputVar;isOutput=true]this is the deployment variable value"
+          name: setvarStep
+        - bash: echo $(setvarStep.myOutputVar)
+          name: echovar
+
+# Map the variable from the job.
+- job: B
+  dependsOn: A
+  pool:
+    vmImage: 'ubuntu-latest'
+  variables:
+    myVarFromDeploymentJob: $[ dependencies.A.outputs['deploy_10.setvarStep.myOutputVar'] ]
+  steps:
+  - script: "echo $(myVarFromDeploymentJob)"
+    name: echovar
+# Set an output variable in a lifecycle hook of a deployment job executing canary strategy.
+- deployment: A
+  pool:
+    vmImage: 'ubuntu-latest'
+  environment: staging
+  strategy:                  
+    canary:      
+      increments: [10,20]  # Creates multiple jobs, one for each increment. Output variable can be referenced with this.
+      deploy:
+        steps:
+        - bash: echo "##vso[task.setvariable variable=myOutputVar;isOutput=true]this is the deployment variable value"
+          name: setvarStep
+        - bash: echo $(setvarStep.myOutputVar)
+          name: echovar
+
+# Map the variable from the job.
+- job: B
+  dependsOn: A
+  pool:
+    vmImage: 'ubuntu-latest'
+  variables:
+    myVarFromDeploymentJob: $[ dependencies.A.outputs['deploy_10.setvarStep.myOutputVar'] ]
+  steps:
+  - script: "echo $(myVarFromDeploymentJob)"
+    name: echovar
+For arunOncejob, specify the name of the job instead of the lifecycle hook:
+runOnce
+# Set an output variable in a lifecycle hook of a deployment job executing runOnce strategy.
+- deployment: A
+  pool:
+    vmImage: 'ubuntu-latest'
+  environment: staging
+  strategy:                  
+    runOnce:
+      deploy:
+        steps:
+        - bash: echo "##vso[task.setvariable variable=myOutputVar;isOutput=true]this is the deployment variable value"
+          name: setvarStep
+        - bash: echo $(setvarStep.myOutputVar)
+          name: echovar
+
+# Map the variable from the job.
+- job: B
+  dependsOn: A
+  pool:
+    vmImage: 'ubuntu-latest'
+  variables:
+    myVarFromDeploymentJob: $[ dependencies.A.outputs['A.setvarStep.myOutputVar'] ]
+  steps:
+  - script: "echo $(myVarFromDeploymentJob)"
+    name: echovar
+# Set an output variable in a lifecycle hook of a deployment job executing runOnce strategy.
+- deployment: A
+  pool:
+    vmImage: 'ubuntu-latest'
+  environment: staging
+  strategy:                  
+    runOnce:
+      deploy:
+        steps:
+        - bash: echo "##vso[task.setvariable variable=myOutputVar;isOutput=true]this is the deployment variable value"
+          name: setvarStep
+        - bash: echo $(setvarStep.myOutputVar)
+          name: echovar
+
+# Map the variable from the job.
+- job: B
+  dependsOn: A
+  pool:
+    vmImage: 'ubuntu-latest'
+  variables:
+    myVarFromDeploymentJob: $[ dependencies.A.outputs['A.setvarStep.myOutputVar'] ]
+  steps:
+  - script: "echo $(myVarFromDeploymentJob)"
+    name: echovar
+When you define an environment in a deployment job, the syntax of the output variable varies depending on how the environment gets defined. In this example,env1uses shorthand notation andenv2includes the full syntax with a defined resource type.
+env1
+env2
+stages:
+- stage: StageA
+  jobs:
+  - deployment: A1
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: env1
+    strategy:                  
+      runOnce:
+        deploy:
+          steps:
+          - bash: echo "##vso[task.setvariable variable=myOutputVar;isOutput=true]this is the deployment variable value"
+            name: setvarStep
+          - bash: echo $(System.JobName)
+  - deployment: A2
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: 
+      name: env2
+      resourceName: vmsfortesting
+      resourceType: virtualmachine
+    strategy:                  
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "##vso[task.setvariable variable=myOutputVarTwo;isOutput=true]this is the second deployment variable value"
+            name: setvarStepTwo
+  
+  - job: B1
+    dependsOn: A1
+    pool:
+      vmImage: 'ubuntu-latest'
+    variables:
+      myVarFromDeploymentJob: $[ dependencies.A1.outputs['A1.setvarStep.myOutputVar'] ]
+      
+    steps:
+    - script: "echo $(myVarFromDeploymentJob)"
+      name: echovar
+ 
+  - job: B2
+    dependsOn: A2
+    pool:
+      vmImage: 'ubuntu-latest'
+    variables:
+      myVarFromDeploymentJob: $[ dependencies.A2.outputs['A2.setvarStepTwo.myOutputVarTwo'] ]
+      myOutputVarTwo: $[ dependencies.A2.outputs['Deploy_vmsfortesting.setvarStepTwo.myOutputVarTwo'] ]
+    
+    steps:
+    - script: "echo $(myOutputVarTwo)"
+      name: echovartwo
+stages:
+- stage: StageA
+  jobs:
+  - deployment: A1
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: env1
+    strategy:                  
+      runOnce:
+        deploy:
+          steps:
+          - bash: echo "##vso[task.setvariable variable=myOutputVar;isOutput=true]this is the deployment variable value"
+            name: setvarStep
+          - bash: echo $(System.JobName)
+  - deployment: A2
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: 
+      name: env2
+      resourceName: vmsfortesting
+      resourceType: virtualmachine
+    strategy:                  
+      runOnce:
+        deploy:
+          steps:
+          - script: echo "##vso[task.setvariable variable=myOutputVarTwo;isOutput=true]this is the second deployment variable value"
+            name: setvarStepTwo
+  
+  - job: B1
+    dependsOn: A1
+    pool:
+      vmImage: 'ubuntu-latest'
+    variables:
+      myVarFromDeploymentJob: $[ dependencies.A1.outputs['A1.setvarStep.myOutputVar'] ]
+      
+    steps:
+    - script: "echo $(myVarFromDeploymentJob)"
+      name: echovar
+ 
+  - job: B2
+    dependsOn: A2
+    pool:
+      vmImage: 'ubuntu-latest'
+    variables:
+      myVarFromDeploymentJob: $[ dependencies.A2.outputs['A2.setvarStepTwo.myOutputVarTwo'] ]
+      myOutputVarTwo: $[ dependencies.A2.outputs['Deploy_vmsfortesting.setvarStepTwo.myOutputVarTwo'] ]
+    
+    steps:
+    - script: "echo $(myOutputVarTwo)"
+      name: echovartwo
+When you output a variable from a job in stage one, referencing it from a deployment job in next stage uses different syntax depending on if you want to set a variable or use it as a condition for the stage.
+stages:
+- stage: StageA
+  jobs:
+  - job: A1
+    steps:
+      - pwsh: echo "##vso[task.setvariable variable=RunStageB;isOutput=true]true"
+        name: setvarStep
+      - bash: echo $(System.JobName)
+
+- stage: StageB
+  dependsOn: 
+    - StageA
+ 
+  # when referring to another stage, stage name is included in variable path
+  condition: eq(dependencies.StageA.outputs['A1.setvarStep.RunStageB'], 'true')
+  
+  # Variables reference syntax differs slightly from inter-stage condition syntax
+  variables:
+    myOutputVar: $[stageDependencies.StageA.A1.outputs['setvarStep.RunStageB']]
+  jobs:
+  - deployment: B1
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: envB
+    strategy:                  
+      runOnce:
+        deploy:
+          steps:
+          - bash: echo $(myOutputVar)
+stages:
+- stage: StageA
+  jobs:
+  - job: A1
+    steps:
+      - pwsh: echo "##vso[task.setvariable variable=RunStageB;isOutput=true]true"
+        name: setvarStep
+      - bash: echo $(System.JobName)
+
+- stage: StageB
+  dependsOn: 
+    - StageA
+ 
+  # when referring to another stage, stage name is included in variable path
+  condition: eq(dependencies.StageA.outputs['A1.setvarStep.RunStageB'], 'true')
+  
+  # Variables reference syntax differs slightly from inter-stage condition syntax
+  variables:
+    myOutputVar: $[stageDependencies.StageA.A1.outputs['setvarStep.RunStageB']]
+  jobs:
+  - deployment: B1
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: envB
+    strategy:                  
+      runOnce:
+        deploy:
+          steps:
+          - bash: echo $(myOutputVar)
+When you output a variable from a deployment job, use stageDependencies syntax to reference it from next stage
+(for example,$[stageDependencies.<stage-name>.<job-name>.outputs[Deploy_<resource-name>.<step-name>.<variable-name>]]).
+$[stageDependencies.<stage-name>.<job-name>.outputs[Deploy_<resource-name>.<step-name>.<variable-name>]]
+stages:
+- stage: StageA
+  jobs:
+    - deployment: A1
+      environment: 
+        name:  env1
+        resourceName: DevEnvironmentV
+        resourceType: virtualMachine
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - script: echo "##vso[task.setvariable variable=myVar;isOutput=true]true"
+                name: setvarStep
+              - script: |
+                  echo "Value of myVar in the same Job : $(setVarStep.myVar)"
+                displayName: 'Verify variable in StageA'
+- stage: StageB
+  dependsOn: StageA
+
+  # Full Variables syntax for inter-stage jobs
+  variables:
+    myOutputVar: $[stageDependencies.StageA.A1.outputs['Deploy_DevEnvironmentV.setvarStep.myVar']]
+  jobs:
+  - deployment: B1
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: envB
+    strategy:                  
+      runOnce:
+        deploy:
+          steps:
+          - bash: echo $(myOutputVar)
+stages:
+- stage: StageA
+  jobs:
+    - deployment: A1
+      environment: 
+        name:  env1
+        resourceName: DevEnvironmentV
+        resourceType: virtualMachine
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - script: echo "##vso[task.setvariable variable=myVar;isOutput=true]true"
+                name: setvarStep
+              - script: |
+                  echo "Value of myVar in the same Job : $(setVarStep.myVar)"
+                displayName: 'Verify variable in StageA'
+- stage: StageB
+  dependsOn: StageA
+
+  # Full Variables syntax for inter-stage jobs
+  variables:
+    myOutputVar: $[stageDependencies.StageA.A1.outputs['Deploy_DevEnvironmentV.setvarStep.myVar']]
+  jobs:
+  - deployment: B1
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: envB
+    strategy:                  
+      runOnce:
+        deploy:
+          steps:
+          - bash: echo $(myOutputVar)
+Learn more about how toset a multi-job output variable
+FAQ
+My pipeline is stuck with the message "Job is pending...". How can I fix this?
+This can happen when there's a name conflict between two jobs. Verify that any deployment jobs in the same stage have a unique name and that job and stage names don't contain keywords. If renaming doesn't fix the problem, reviewtroubleshooting pipeline runs.
+Are decorators supported in deployment groups?
+No. You can't use decorators in deployment groups.
+Feedback
+Was this page helpful?
+Additional resources

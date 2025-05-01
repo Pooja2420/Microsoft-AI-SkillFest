@@ -1,0 +1,126 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Troubleshoot Azure VPN Gateway using diagnostic logs
+Article
+2024-08-14
+5 contributors
+In this article
+This article helps understand the different logs available for VPN Gateway diagnostics and how to use them to effectively troubleshoot VPN gateway issues.
+If your Azure issue is not addressed in this article, visit the Azure forums onMicrosoft Q & A and Stack Overflow. You can post your issue in these forums, or post to@AzureSupport on Twitter. You also can submit an Azure support request. To submit a support request, on theAzure supportpage, selectGet support.
+The following logs are available in Azure:
+GatewayDiagnosticLog
+TunnelDiagnosticLog
+RouteDiagnosticLog
+IKEDiagnosticLog
+P2SDiagnosticLog
+For policy based gateways, onlyGatewayDiagnosticLogandRouteDiagnosticLogare available.
+For all VPN Gateway logs, seeAzure VPN Gateway monitoring data reference
+
+To set up diagnostic log events from Azure VPN Gateway using Azure Log Analytics, seeCreate diagnostic settings in Azure Monitor.
+GatewayDiagnosticLog
+Configuration changes are audited in theGatewayDiagnosticLogtable. It could take some minutes before changes you execute are reflected in the logs.
+Here you have a sample query as reference.
+AzureDiagnostics  
+| where Category == "GatewayDiagnosticLog"  
+| project TimeGenerated, OperationName, Message, Resource, ResourceGroup  
+| sort by TimeGenerated asc
+AzureDiagnostics  
+| where Category == "GatewayDiagnosticLog"  
+| project TimeGenerated, OperationName, Message, Resource, ResourceGroup  
+| sort by TimeGenerated asc
+This query onGatewayDiagnosticLogshows you multiple columns.
+The following example shows the activity logged when a new configuration was applied:
+
+Notice that aSetGatewayConfigurationgets logged every time a configuration is modified both on a VPN Gateway or a Local Network Gateway.
+Comparing the results from theGatewayDiagnosticLogtable with the results of theTunnelDiagnosticLogtable can help determine if a tunnel connectivity failure happened during a configuration change or maintenance activity. If so, it provides a significant indication towards the potential root cause.
+TunnelDiagnosticLog
+TheTunnelDiagnosticLogtable is useful to inspect the historical connectivity statuses of the tunnel.
+Here you have a sample query as reference.
+AzureDiagnostics
+| where Category == "TunnelDiagnosticLog"
+//| where remoteIP_s == "<REMOTE IP OF TUNNEL>"
+| project TimeGenerated, OperationName, remoteIP_s, instance_s, Resource, ResourceGroup
+| sort by TimeGenerated asc
+AzureDiagnostics
+| where Category == "TunnelDiagnosticLog"
+//| where remoteIP_s == "<REMOTE IP OF TUNNEL>"
+| project TimeGenerated, OperationName, remoteIP_s, instance_s, Resource, ResourceGroup
+| sort by TimeGenerated asc
+This query onTunnelDiagnosticLogshows you multiple columns.
+Example output:
+
+TheTunnelDiagnosticLogis useful to troubleshoot past events about unexpected VPN disconnections. Its lightweight nature offers the possibility to analyze large time ranges over several days with little effort.
+Only after you identify the timestamp of a disconnection, you can switch to the more detailed analysis of theIKEdiagnosticLogtable to dig deeper into the reasoning of the disconnections shall those be IPsec related.
+Some troubleshooting tips:
+If you observe a disconnection event on one gateway instance, followed by a connection event on a different gateway instance within a few seconds, it indicates a gateway failover. Such an event typically arises due to maintenance on a gateway instance. To learn more about this behavior, seeAbout Azure VPN gateway redundancy.
+The same behavior is observed if you intentionally run aGateway Reseton the Azure side - which causes a reboot of the active gateway instance. To learn more about this behavior, seeReset a VPN Gateway.
+If you see a disconnection event on one gateway instance, followed by a connection event on thesamegateway instance in a few seconds, you might be looking at a network glitch causing a DPD timeout, or a disconnection erroneously sent by the on-premises device.
+RouteDiagnosticLog
+TheRouteDiagnosticLogtable traces the activity for statically modified routes or routes received via BGP.
+Here you have a sample query as reference.
+AzureDiagnostics
+| where Category == "RouteDiagnosticLog"
+| project TimeGenerated, OperationName, Message, Resource, ResourceGroup
+AzureDiagnostics
+| where Category == "RouteDiagnosticLog"
+| project TimeGenerated, OperationName, Message, Resource, ResourceGroup
+This query onRouteDiagnosticLogshows you multiple columns.
+The output shows useful information about BGP peers connected/disconnected and routes exchanged.
+Example:
+
+IKEDiagnosticLog
+TheIKEDiagnosticLogtable offers verbose debug logging for IKE/IPsec. This is useful to review when troubleshooting disconnections, or failure to connect VPN scenarios.
+Here you have a sample query as reference.
+AzureDiagnostics  
+| where Category == "IKEDiagnosticLog" 
+| extend Message1=Message
+| parse Message with * "Remote " RemoteIP ":" * "500: Local " LocalIP ":" * "500: " Message2
+| extend Event = iif(Message has "SESSION_ID",Message2,Message1)
+| project TimeGenerated, RemoteIP, LocalIP, Event, Level 
+| sort by TimeGenerated asc
+AzureDiagnostics  
+| where Category == "IKEDiagnosticLog" 
+| extend Message1=Message
+| parse Message with * "Remote " RemoteIP ":" * "500: Local " LocalIP ":" * "500: " Message2
+| extend Event = iif(Message has "SESSION_ID",Message2,Message1)
+| project TimeGenerated, RemoteIP, LocalIP, Event, Level 
+| sort by TimeGenerated asc
+This query onIKEDiagnosticLogshows you multiple columns.
+Notice how RemoteIP, LocalIP, and Event columns aren't present in the original column list on AzureDiagnostics database, but are added to the query by parsing the output of the "Message" column to simplify its analysis.
+Troubleshooting tips:
+In order to identify the start of an IPsec negotiation, you need to find the initial SA_INIT message. Such message could be sent by either side of the tunnel. Whoever sends the first packet is called "initiator" in IPsec terminology, while the other side becomes the "responder". The first SA_INIT message is always the one where rCookie = 0.
+In order to identify the start of an IPsec negotiation, you need to find the initial SA_INIT message. Such message could be sent by either side of the tunnel. Whoever sends the first packet is called "initiator" in IPsec terminology, while the other side becomes the "responder". The first SA_INIT message is always the one where rCookie = 0.
+If the IPsec tunnel fails to establish, Azure keeps retrying every few seconds. For this reason, troubleshooting "VPN down" issues is convenient on IKEdiagnosticLog because you don't have to wait for a specific time to reproduce the issue. Also, the failure will in theory always be the same every time we try so you could just zoom into one "sample" failing negotiation at any time.
+If the IPsec tunnel fails to establish, Azure keeps retrying every few seconds. For this reason, troubleshooting "VPN down" issues is convenient on IKEdiagnosticLog because you don't have to wait for a specific time to reproduce the issue. Also, the failure will in theory always be the same every time we try so you could just zoom into one "sample" failing negotiation at any time.
+The SA_INIT contains the IPsec parameters that the peer wants to use for this IPsec negotiation.
+The official documentDefault IPsec/IKE parameterslists the IPsec parameters supported by the Azure Gateway with default settings.
+The SA_INIT contains the IPsec parameters that the peer wants to use for this IPsec negotiation.
+The official documentDefault IPsec/IKE parameterslists the IPsec parameters supported by the Azure Gateway with default settings.
+P2SDiagnosticLog
+The last available table for VPN diagnostics isP2SDiagnosticLog. This table traces the activity for Point to Site (only IKEv2 and OpenVPN protocols).
+Here you have a sample query as reference.
+AzureDiagnostics  
+| where Category == "P2SDiagnosticLog"  
+| project TimeGenerated, OperationName, Message, Resource, ResourceGroup
+AzureDiagnostics  
+| where Category == "P2SDiagnosticLog"  
+| project TimeGenerated, OperationName, Message, Resource, ResourceGroup
+This query onP2SDiagnosticLogwill show you multiple columns.
+The output shows all of the Point to Site settings that the gateway has applied, and the IPsec policies in place.
+
+Additionally, when a client establishes a connection using OpenVPN and Microsoft Entra ID authentication for point-to-site, the table records packet activity as follows:
+[MSG] [default] [OVPN_XXXXXXXXXXXXXXXXXXXXXXXXXXX] Connect request received. IP=0.X.X.X:XXX
+[MSG] [default] [OVPN_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] AAD authentication succeeded. Username=***tosouser@contoso.com
+[MSG] [default] [OVPN_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] Connection successful. Username=***tosouser@contoso.com IP=10.0.0.1
+[MSG] [default] [OVPN_XXXXXXXXXXXXXXXXXXXXXXXXXXX] Connect request received. IP=0.X.X.X:XXX
+[MSG] [default] [OVPN_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] AAD authentication succeeded. Username=***tosouser@contoso.com
+[MSG] [default] [OVPN_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] Connection successful. Username=***tosouser@contoso.com IP=10.0.0.1
+Note
+In the point-to-site log, the username is partially obscured. The first octet of the client user IP is substituted with a0.
+0
+Next Steps
+To configure alerts on tunnel resource logs, seeSet up alerts on VPN Gateway resource logs.
+Feedback
+Was this page helpful?
+Additional resources

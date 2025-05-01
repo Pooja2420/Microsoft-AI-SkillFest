@@ -1,0 +1,657 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Migrate Azure Firewall Standard to Premium using Terraform
+Article
+2023-10-27
+2 contributors
+In this article
+Terraformenables the definition, preview, and deployment of cloud infrastructure. Using Terraform, you create configuration files usingHCL syntax. The HCL syntax allows you to specify the cloud provider - such as Azure - and the elements that make up your cloud infrastructure. After you create your configuration files, you create anexecution planthat allows you to preview your infrastructure changes before they're deployed. Once you verify the changes, you apply the execution plan to deploy the infrastructure.
+If you use Terraform to deploy standard Azure Firewall with classic rules, you can modify your Terraform configuration file to migrate your firewall to Azure Firewall Premium using a Premium firewall policy.
+In this article, you learn how to:
+Deploy a standard Azure Firewall with classic rules using Terraform
+Import the firewall rules into a premium firewall policy
+Edit the Terraform configuration file to migrate the firewall
+1. Configure your environment
+Azure subscription: If you don't have an Azure subscription, create afree accountbefore you begin.
+Configure Terraform: If you haven't already done so, configure Terraform using one of the following options:Configure Terraform in Azure Cloud Shell with BashConfigure Terraform in Azure Cloud Shell with PowerShellConfigure Terraform in Windows with BashConfigure Terraform in Windows with PowerShell
+Configure Terraform: If you haven't already done so, configure Terraform using one of the following options:
+Configure Terraform in Azure Cloud Shell with Bash
+Configure Terraform in Azure Cloud Shell with PowerShell
+Configure Terraform in Windows with Bash
+Configure Terraform in Windows with PowerShell
+2. Implement the Terraform code
+Create a directory in which to test the sample Terraform code and make it the current directory.
+Create a directory in which to test the sample Terraform code and make it the current directory.
+Create a file namedmain.tfand insert the following code:resource "random_pet" "prefix" {
+  prefix = var.prefix
+  length = 1
+}
+resource "azurerm_resource_group" "rg" {
+  name     = "${random_pet.prefix.id}-rg"
+  location = var.resource_group_location
+}
+
+resource "azurerm_virtual_network" "vnet" {
+  name                = "${random_pet.prefix.id}-vnet"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+resource "azurerm_subnet" "subnet" {
+  name                 = "AzureFirewallSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+resource "azurerm_public_ip" "pip" {
+  name                = "${random_pet.prefix.id}-pip"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_firewall" "main" {
+  name                = "${random_pet.prefix.id}-fw"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku_name            = "AZFW_VNet"
+  sku_tier            = "Standard"
+
+  ip_configuration {
+    name                 = "configuration"
+    subnet_id            = azurerm_subnet.subnet.id
+    public_ip_address_id = azurerm_public_ip.pip.id
+  }
+}
+
+resource "azurerm_firewall_application_rule_collection" "app-rc" {
+  name                = "${random_pet.prefix.id}-app-rc"
+  azure_firewall_name = azurerm_firewall.main.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "testrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    target_fqdns = [
+      "*.google.com",
+    ]
+
+    protocol {
+      port = "443"
+      type = "Https"
+    }
+  }
+}
+
+resource "azurerm_firewall_network_rule_collection" "net-rc" {
+  name                = "${random_pet.prefix.id}-net-rc"
+  azure_firewall_name = azurerm_firewall.main.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "dnsrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    destination_ports = [
+      "53",
+    ]
+
+    destination_addresses = [
+      "8.8.8.8",
+      "8.8.4.4",
+    ]
+
+    protocols = [
+      "TCP",
+      "UDP",
+    ]
+  }
+}
+Create a file namedmain.tfand insert the following code:
+main.tf
+resource "random_pet" "prefix" {
+  prefix = var.prefix
+  length = 1
+}
+resource "azurerm_resource_group" "rg" {
+  name     = "${random_pet.prefix.id}-rg"
+  location = var.resource_group_location
+}
+
+resource "azurerm_virtual_network" "vnet" {
+  name                = "${random_pet.prefix.id}-vnet"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+resource "azurerm_subnet" "subnet" {
+  name                 = "AzureFirewallSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+resource "azurerm_public_ip" "pip" {
+  name                = "${random_pet.prefix.id}-pip"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_firewall" "main" {
+  name                = "${random_pet.prefix.id}-fw"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku_name            = "AZFW_VNet"
+  sku_tier            = "Standard"
+
+  ip_configuration {
+    name                 = "configuration"
+    subnet_id            = azurerm_subnet.subnet.id
+    public_ip_address_id = azurerm_public_ip.pip.id
+  }
+}
+
+resource "azurerm_firewall_application_rule_collection" "app-rc" {
+  name                = "${random_pet.prefix.id}-app-rc"
+  azure_firewall_name = azurerm_firewall.main.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "testrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    target_fqdns = [
+      "*.google.com",
+    ]
+
+    protocol {
+      port = "443"
+      type = "Https"
+    }
+  }
+}
+
+resource "azurerm_firewall_network_rule_collection" "net-rc" {
+  name                = "${random_pet.prefix.id}-net-rc"
+  azure_firewall_name = azurerm_firewall.main.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "dnsrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    destination_ports = [
+      "53",
+    ]
+
+    destination_addresses = [
+      "8.8.8.8",
+      "8.8.4.4",
+    ]
+
+    protocols = [
+      "TCP",
+      "UDP",
+    ]
+  }
+}
+resource "random_pet" "prefix" {
+  prefix = var.prefix
+  length = 1
+}
+resource "azurerm_resource_group" "rg" {
+  name     = "${random_pet.prefix.id}-rg"
+  location = var.resource_group_location
+}
+
+resource "azurerm_virtual_network" "vnet" {
+  name                = "${random_pet.prefix.id}-vnet"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+resource "azurerm_subnet" "subnet" {
+  name                 = "AzureFirewallSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+resource "azurerm_public_ip" "pip" {
+  name                = "${random_pet.prefix.id}-pip"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_firewall" "main" {
+  name                = "${random_pet.prefix.id}-fw"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku_name            = "AZFW_VNet"
+  sku_tier            = "Standard"
+
+  ip_configuration {
+    name                 = "configuration"
+    subnet_id            = azurerm_subnet.subnet.id
+    public_ip_address_id = azurerm_public_ip.pip.id
+  }
+}
+
+resource "azurerm_firewall_application_rule_collection" "app-rc" {
+  name                = "${random_pet.prefix.id}-app-rc"
+  azure_firewall_name = azurerm_firewall.main.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "testrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    target_fqdns = [
+      "*.google.com",
+    ]
+
+    protocol {
+      port = "443"
+      type = "Https"
+    }
+  }
+}
+
+resource "azurerm_firewall_network_rule_collection" "net-rc" {
+  name                = "${random_pet.prefix.id}-net-rc"
+  azure_firewall_name = azurerm_firewall.main.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "dnsrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    destination_ports = [
+      "53",
+    ]
+
+    destination_addresses = [
+      "8.8.8.8",
+      "8.8.4.4",
+    ]
+
+    protocols = [
+      "TCP",
+      "UDP",
+    ]
+  }
+}
+Create a file namedvariables.tfand insert the following code:variable "resource_group_location" {
+  type        = string
+  default     = "eastus"
+  description = "Location of the resource group."
+}
+
+variable "prefix" {
+  type        = string
+  default     = "firewall-standard"
+  description = "Prefix of the resource name"
+}
+Create a file namedvariables.tfand insert the following code:
+variables.tf
+variable "resource_group_location" {
+  type        = string
+  default     = "eastus"
+  description = "Location of the resource group."
+}
+
+variable "prefix" {
+  type        = string
+  default     = "firewall-standard"
+  description = "Prefix of the resource name"
+}
+variable "resource_group_location" {
+  type        = string
+  default     = "eastus"
+  description = "Location of the resource group."
+}
+
+variable "prefix" {
+  type        = string
+  default     = "firewall-standard"
+  description = "Prefix of the resource name"
+}
+3. Initialize Terraform
+Runterraform initto initialize the Terraform deployment. This command downloads the Azure provider required to manage your Azure resources.
+terraform init -upgrade
+terraform init -upgrade
+Key points:
+The-upgradeparameter upgrades the necessary provider plugins to the newest version that complies with the configuration's version constraints.
+-upgrade
+4. Create a Terraform execution plan
+Runterraform planto create an execution plan.
+terraform plan -out main.tfplan
+terraform plan -out main.tfplan
+Key points:
+Theterraform plancommand creates an execution plan, but doesn't execute it. Instead, it determines what actions are necessary to create the configuration specified in your configuration files. This pattern allows you to verify whether the execution plan matches your expectations before making any changes to actual resources.
+terraform plan
+The optional-outparameter allows you to specify an output file for the plan. Using the-outparameter ensures that the plan you reviewed is exactly what is applied.
+-out
+-out
+5. Apply a Terraform execution plan
+Runterraform applyto apply the execution plan to your cloud infrastructure.
+terraform apply main.tfplan
+terraform apply main.tfplan
+Key points:
+The exampleterraform applycommand assumes you previously ranterraform plan -out main.tfplan.
+terraform apply
+terraform plan -out main.tfplan
+If you specified a different filename for the-outparameter, use that same filename in the call toterraform apply.
+-out
+terraform apply
+If you didn't use the-outparameter, callterraform applywithout any parameters.
+-out
+terraform apply
+6. Import the firewall rules into a premium policy
+Now you have a standard firewall with classic rules. Next, create a premium Firewall Policy and import the rules from the firewall.
+On the Azure portal, selectCreate a resource.
+Search forfirewall policyand select it.
+SelectCreate.
+For Resource group selecttest-resources.
+For Name, typeprem-pol.
+For Region, selectEast US.
+For Policy tier, selectPremium.
+SelectNext: DNS Settings, and continue until you reach the Rules page.
+On the Rules page, selectImport rules from an Azure Firewall.
+Selecttestfirewall, and then selectImport.
+SelectReview + create.
+SelectCreate.
+7. Edit the Terraform configuration file to migrate the firewall
+Open themain.tffile, and make the following changes:
+main.tf
+Add the following 'data' section:data "azurerm_firewall_policy" "prem-pol" {
+  name                 = "prem-pol"
+  resource_group_name  = azurerm_resource_group.rg.name
+}
+Add the following 'data' section:
+data "azurerm_firewall_policy" "prem-pol" {
+  name                 = "prem-pol"
+  resource_group_name  = azurerm_resource_group.rg.name
+}
+data "azurerm_firewall_policy" "prem-pol" {
+  name                 = "prem-pol"
+  resource_group_name  = azurerm_resource_group.rg.name
+}
+Modify the firewall resource:resource "azurerm_firewall" "fw" {
+     name                = "testfirewall"
+     location            = azurerm_resource_group.rg.location
+     resource_group_name = azurerm_resource_group.rg.name
+     firewall_policy_id  = data.azurerm_firewall_policy.prem-pol.id
+     sku_tier            = "Premium"
+
+ ip_configuration {
+     name                 = "configuration"
+     subnet_id            = azurerm_subnet.subnet.id
+     public_ip_address_id = azurerm_public_ip.pip.id
+ }
+}
+Modify the firewall resource:
+resource "azurerm_firewall" "fw" {
+     name                = "testfirewall"
+     location            = azurerm_resource_group.rg.location
+     resource_group_name = azurerm_resource_group.rg.name
+     firewall_policy_id  = data.azurerm_firewall_policy.prem-pol.id
+     sku_tier            = "Premium"
+
+ ip_configuration {
+     name                 = "configuration"
+     subnet_id            = azurerm_subnet.subnet.id
+     public_ip_address_id = azurerm_public_ip.pip.id
+ }
+}
+resource "azurerm_firewall" "fw" {
+     name                = "testfirewall"
+     location            = azurerm_resource_group.rg.location
+     resource_group_name = azurerm_resource_group.rg.name
+     firewall_policy_id  = data.azurerm_firewall_policy.prem-pol.id
+     sku_tier            = "Premium"
+
+ ip_configuration {
+     name                 = "configuration"
+     subnet_id            = azurerm_subnet.subnet.id
+     public_ip_address_id = azurerm_public_ip.pip.id
+ }
+}
+Delete the classic rule collections:resource "azurerm_firewall_application_rule_collection" "app-rc" {
+  name                = "apptestcollection"
+  azure_firewall_name = azurerm_firewall.fw.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "testrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    target_fqdns = [
+      "*.google.com",
+    ]
+
+    protocol {
+      port = "443"
+      type = "Https"
+    }
+  }
+}
+
+resource "azurerm_firewall_network_rule_collection" "net-rc" {
+  name                = "nettestcollection"
+  azure_firewall_name = azurerm_firewall.fw.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "dnsrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    destination_ports = [
+      "53",
+    ]
+
+    destination_addresses = [
+      "8.8.8.8",
+      "8.8.4.4",
+    ]
+
+    protocols = [
+      "TCP",
+      "UDP",
+    ]
+  }
+}
+Delete the classic rule collections:
+resource "azurerm_firewall_application_rule_collection" "app-rc" {
+  name                = "apptestcollection"
+  azure_firewall_name = azurerm_firewall.fw.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "testrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    target_fqdns = [
+      "*.google.com",
+    ]
+
+    protocol {
+      port = "443"
+      type = "Https"
+    }
+  }
+}
+
+resource "azurerm_firewall_network_rule_collection" "net-rc" {
+  name                = "nettestcollection"
+  azure_firewall_name = azurerm_firewall.fw.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "dnsrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    destination_ports = [
+      "53",
+    ]
+
+    destination_addresses = [
+      "8.8.8.8",
+      "8.8.4.4",
+    ]
+
+    protocols = [
+      "TCP",
+      "UDP",
+    ]
+  }
+}
+resource "azurerm_firewall_application_rule_collection" "app-rc" {
+  name                = "apptestcollection"
+  azure_firewall_name = azurerm_firewall.fw.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "testrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    target_fqdns = [
+      "*.google.com",
+    ]
+
+    protocol {
+      port = "443"
+      type = "Https"
+    }
+  }
+}
+
+resource "azurerm_firewall_network_rule_collection" "net-rc" {
+  name                = "nettestcollection"
+  azure_firewall_name = azurerm_firewall.fw.name
+  resource_group_name = azurerm_resource_group.rg.name
+  priority            = 100
+  action              = "Allow"
+
+  rule {
+    name = "dnsrule"
+
+    source_addresses = [
+      "10.0.0.0/16",
+    ]
+
+    destination_ports = [
+      "53",
+    ]
+
+    destination_addresses = [
+      "8.8.8.8",
+      "8.8.4.4",
+    ]
+
+    protocols = [
+      "TCP",
+      "UDP",
+    ]
+  }
+}
+8. Apply the modified Terraform execution plan
+terraform plan -out main.tfplan
+terraform plan -out main.tfplan
+terraform apply main.tfplan
+terraform apply main.tfplan
+9. Verify the results
+Select thetest-resourcesresource group.
+Select thetestfirewallresource.
+Verify the Firewall sku isPremium.
+Verify the firewall is using theprem-polfirewall policy.
+10. Clean up resources
+When you no longer need the resources created via Terraform, do the following steps:
+Runterraform planand specify thedestroyflag.terraform plan -destroy -out main.destroy.tfplanKey points:Theterraform plancommand creates an execution plan, but doesn't execute it. Instead, it determines what actions are necessary to create the configuration specified in your configuration files. This pattern allows you to verify whether the execution plan matches your expectations before making any changes to actual resources.The optional-outparameter allows you to specify an output file for the plan. Using the-outparameter ensures that the plan you reviewed is exactly what is applied.
+Runterraform planand specify thedestroyflag.
+destroy
+terraform plan -destroy -out main.destroy.tfplan
+terraform plan -destroy -out main.destroy.tfplan
+Key points:
+Theterraform plancommand creates an execution plan, but doesn't execute it. Instead, it determines what actions are necessary to create the configuration specified in your configuration files. This pattern allows you to verify whether the execution plan matches your expectations before making any changes to actual resources.
+terraform plan
+The optional-outparameter allows you to specify an output file for the plan. Using the-outparameter ensures that the plan you reviewed is exactly what is applied.
+-out
+-out
+Runterraform applyto apply the execution plan.terraform apply main.destroy.tfplan
+Runterraform applyto apply the execution plan.
+terraform apply main.destroy.tfplan
+terraform apply main.destroy.tfplan
+Troubleshoot Terraform on Azure
+Troubleshoot common problems when using Terraform on Azure
+Next steps
+Learn more about using Terraform in Azure
+Feedback
+Was this page helpful?
+Additional resources

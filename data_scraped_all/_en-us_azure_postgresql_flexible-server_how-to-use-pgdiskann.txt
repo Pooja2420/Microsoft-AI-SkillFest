@@ -1,0 +1,283 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Enable and use DiskANN extension (Preview)
+Article
+2025-04-17
+3 contributors
+In this article
+DiskANN is a scalable approximate nearest neighbor search algorithm for efficient vector search at any scale. It offers high recall, high queries per second, and low query latency, even for billion-point datasets. Those characteristics make it a powerful tool for handling large volumes of data.
+To learn more about DiskANN, seeDiskANN: Vector Search for Web Scale Search and Recommendation.
+Thepg_diskannextension adds support for using DiskANN for efficient vector indexing and searching.
+pg_diskann
+Enable pg_diskann
+To use thepg_diskannextension on your Azure Database for PostgreSQL flexible server instance, you need toallow the extensionat the instance level. Then you need tocreate the extensionon each database in which you want to use the functionality provided by the extension.
+pg_diskann
+Important
+This preview feature is only available for newly deployed Azure Database for PostgreSQL flexible server instances.
+Becausepg_diskannhas a dependency on thevectorextension, either youallowandcreatethevectorextension in the same database, and the run the following command:
+pg_diskann
+vector
+vector
+CREATE EXTENSION IF NOT EXISTS pg_diskann;
+CREATE EXTENSION IF NOT EXISTS pg_diskann;
+Or you can skip explicitly allowing and creating thevectorextension, and run instead the previous command appending theCASCADEclause. That clause PostgreSQL to implicitly run CREATE EXTENSION on the extension that it depends. To do so, run the following command:
+vector
+CASCADE
+CREATE EXTENSION IF NOT EXISTS pg_diskann CASCADE;
+CREATE EXTENSION IF NOT EXISTS pg_diskann CASCADE;
+To drop the extension from the database to which you're currently connected, run the following command:
+DROP EXTENSION IF EXISTS pg_diskann;
+DROP EXTENSION IF EXISTS pg_diskann;
+Use the diskann index access method
+Once the extension is installed, you can create adiskannindex on a table column that contains vector data. For example, to create an index on theembeddingcolumn of thedemotable, use the following command:
+diskann
+embedding
+demo
+CREATE TABLE demo (
+ id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ embedding public.vector(3)
+ -- other columns
+);
+
+-- insert dummy data
+INSERT INTO demo (embedding) VALUES
+('[1.0, 2.0, 3.0]'),
+('[4.0, 5.0, 6.0]'),
+('[7.0, 8.0, 9.0]');
+
+-- create a diskann index by using Cosine distance operator
+CREATE INDEX demo_embedding_diskann_idx ON demo USING diskann (embedding vector_cosine_ops)
+CREATE TABLE demo (
+ id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ embedding public.vector(3)
+ -- other columns
+);
+
+-- insert dummy data
+INSERT INTO demo (embedding) VALUES
+('[1.0, 2.0, 3.0]'),
+('[4.0, 5.0, 6.0]'),
+('[7.0, 8.0, 9.0]');
+
+-- create a diskann index by using Cosine distance operator
+CREATE INDEX demo_embedding_diskann_idx ON demo USING diskann (embedding vector_cosine_ops)
+Once the index is created, you can run queries to find the nearest neighbors.
+Following query finds the 5 nearest neighbors to the vector[2.0, 3.0, 4.0]:
+[2.0, 3.0, 4.0]
+SELECT id, embedding
+FROM demo
+ORDER BY embedding <=> '[2.0, 3.0, 4.0]'
+LIMIT 5;
+SELECT id, embedding
+FROM demo
+ORDER BY embedding <=> '[2.0, 3.0, 4.0]'
+LIMIT 5;
+Postgres automatically decides when to use the DiskANN index. If it chooses not to use the index in a scenario in which you want it to use it, execute the following command:
+-- Explicit Transcation block to force use for DiskANN index.
+
+BEGIN;
+SET LOCAL enable_seqscan TO OFF;
+-- Similarity search queries
+COMMIT;
+-- Explicit Transcation block to force use for DiskANN index.
+
+BEGIN;
+SET LOCAL enable_seqscan TO OFF;
+-- Similarity search queries
+COMMIT;
+Important
+Settingenable_seqscanto off, it discourages the planner from using the query planner's use of sequential scan plan if there are other methods available. Because it's disable using theSET LOCALcommand, the setting takes effect for only the current transaction. After a COMMIT or ROLLBACK, the session level setting takes effect again. Notice that if the query involves other tables, the setting also discourages the use of sequential scans in all of them.
+enable_seqscan
+SET LOCAL
+Speed up index build
+There are a few ways we recommend to improve your index build times.
+Using more memory
+To speed up the creation of the index, you can increase the memory allocated on your Postgres instance for the index build. The memory usage can be specified through themaintenance_work_memparameter.
+maintenance_work_mem
+-- Set the parameters
+SET maintenance_work_mem = '8GB'; -- Depending on your resources
+-- Set the parameters
+SET maintenance_work_mem = '8GB'; -- Depending on your resources
+Then,CREATE INDEXcommand uses the specified work memory, depending on the available resources, to build the index.
+CREATE INDEX
+CREATE INDEX demo_embedding_diskann_idx ON demo USING diskann (embedding vector_cosine_ops)
+CREATE INDEX demo_embedding_diskann_idx ON demo USING diskann (embedding vector_cosine_ops)
+Tip
+You can scale up your memory resources during index build to improve indexing speed, then scale back down when indexing is complete.
+Using parallelization
+To speed up the creation of the index, you can use parallel workers. The number of workers can be specified through theparallel_workersstorage parameter of theCREATE TABLEstatement, when creating the table. And it can be adjusted later using theSETclause of theALTER TABLEstatement.
+parallel_workers
+CREATE TABLE
+SET
+ALTER TABLE
+CREATE TABLE demo (
+	id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	embedding public.vector(3)
+) WITH (parallel_workers = 4);
+ALTER TABLE demo SET (parallel_workers = 8);
+CREATE TABLE demo (
+	id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+	embedding public.vector(3)
+) WITH (parallel_workers = 4);
+ALTER TABLE demo SET (parallel_workers = 8);
+Then,CREATE INDEXcommand uses the specified number of parallel workers, depending on the available resources, to build the index.
+CREATE INDEX
+CREATE INDEX demo_embedding_diskann_idx ON demo USING diskann (embedding vector_cosine_ops)
+CREATE INDEX demo_embedding_diskann_idx ON demo USING diskann (embedding vector_cosine_ops)
+Important
+The leader process cannot participate in parallel index builds.
+If you want to create the index by using parallel workers, you also need to setmax_parallel_workers,max_worker_processes, andmax_parallel_maintenance_workersparameters accordingly. For more information about these parameters, seeparameters that control resource usages and asynchronous behavior.
+max_parallel_workers
+max_worker_processes
+max_parallel_maintenance_workers
+You can set these parameters at different granularity levels. For example, to set them at session level, you can run the following statements:
+-- Set the parameters
+SET max_parallel_workers = 8;
+SET max_worker_processes = 8; -- Note: Requires server restart
+SET max_parallel_maintenance_workers = 4;
+-- Set the parameters
+SET max_parallel_workers = 8;
+SET max_worker_processes = 8; -- Note: Requires server restart
+SET max_parallel_maintenance_workers = 4;
+To learn about other options to configure these parameters in Azure Database for PostgreSQL flexible server, seeConfigure server parameters.
+Note
+The max_worker_processes parameter requires a server restart to take effect.
+If the configuration of those parameters and the available resources on the server don't permit launching the parallel workers, PostgreSQL automatically falls back to create the index in the nonparallel mode.
+Configuration parameters
+When creating adiskannindex, you can specify various parameters to control its behavior.
+diskann
+Index parameters
+max_neighbors: Maximum number of edges per node in the graph (Defaults to 32). A higher value can improve the recall up to a certain point.
+max_neighbors
+l_value_ib: Size of the search list during index build (Defaults to 100). A higher value makes the build slower, but the index would be of higher quality.
+l_value_ib
+CREATE INDEX demo_embedding_diskann_custom_idx ON demo USING diskann (embedding vector_cosine_ops)
+WITH (
+ max_neighbors = 48,
+ l_value_ib = 100
+ );
+CREATE INDEX demo_embedding_diskann_custom_idx ON demo USING diskann (embedding vector_cosine_ops)
+WITH (
+ max_neighbors = 48,
+ l_value_ib = 100
+ );
+Extension parameters
+diskann.iterative_search: Controls the search behavior.Configurations fordiskann.iterative_search:relaxed_order(default): Lets diskann iteratively search the graph in batches ofdiskann.l_value_is, until the desired number of tuples, possibly limited byLIMITclause, are yielded. Might cause the results to be out of order.strict_order: Similar torelaxed_order, lets diskann iteratively search the graph, until the desired number of tuples are yielded. However, it ensures that the results are returned in strict order sorted by distance.off: Uses noniterative search functionality, which means that it attempts to fetchdiskann.l_value_istuples in one step. Noniterative search can only return a maximum ofdiskann.l_value_isvectors for a query, regardless of theLIMITclause or the number of tuples that match the query.To change the search behavior tostrict_order, for all queries executed in the current session, run the following statement:SET diskann.iterative_search TO 'strict_order';To change it so that it only affects all queries executed in the current transaction, run the following statement:BEGIN;
+SET LOCAL diskann.iterative_search TO 'strict_order';
+-- All your queries
+COMMIT;
+diskann.iterative_search: Controls the search behavior.
+diskann.iterative_search
+Configurations fordiskann.iterative_search:
+diskann.iterative_search
+relaxed_order(default): Lets diskann iteratively search the graph in batches ofdiskann.l_value_is, until the desired number of tuples, possibly limited byLIMITclause, are yielded. Might cause the results to be out of order.
+relaxed_order(default): Lets diskann iteratively search the graph in batches ofdiskann.l_value_is, until the desired number of tuples, possibly limited byLIMITclause, are yielded. Might cause the results to be out of order.
+relaxed_order
+diskann.l_value_is
+LIMIT
+strict_order: Similar torelaxed_order, lets diskann iteratively search the graph, until the desired number of tuples are yielded. However, it ensures that the results are returned in strict order sorted by distance.
+strict_order: Similar torelaxed_order, lets diskann iteratively search the graph, until the desired number of tuples are yielded. However, it ensures that the results are returned in strict order sorted by distance.
+strict_order
+relaxed_order
+off: Uses noniterative search functionality, which means that it attempts to fetchdiskann.l_value_istuples in one step. Noniterative search can only return a maximum ofdiskann.l_value_isvectors for a query, regardless of theLIMITclause or the number of tuples that match the query.
+off: Uses noniterative search functionality, which means that it attempts to fetchdiskann.l_value_istuples in one step. Noniterative search can only return a maximum ofdiskann.l_value_isvectors for a query, regardless of theLIMITclause or the number of tuples that match the query.
+off
+diskann.l_value_is
+diskann.l_value_is
+LIMIT
+To change the search behavior tostrict_order, for all queries executed in the current session, run the following statement:
+strict_order
+SET diskann.iterative_search TO 'strict_order';
+SET diskann.iterative_search TO 'strict_order';
+To change it so that it only affects all queries executed in the current transaction, run the following statement:
+BEGIN;
+SET LOCAL diskann.iterative_search TO 'strict_order';
+-- All your queries
+COMMIT;
+BEGIN;
+SET LOCAL diskann.iterative_search TO 'strict_order';
+-- All your queries
+COMMIT;
+diskann.l_value_is: L value for index scanning (Defaults to 100). Increasing the value improves recall but might slow down queries.To change the L value for index scanning to 20, for all queries executed in the current session, run the following statement:SET diskann.l_value_is TO 20;To change it so that it only affects all queries executed in the current transaction, run the following statement:BEGIN;
+SET LOCAL diskann.l_value_is TO 20;
+-- All your queries
+COMMIT;
+diskann.l_value_is: L value for index scanning (Defaults to 100). Increasing the value improves recall but might slow down queries.
+diskann.l_value_is
+To change the L value for index scanning to 20, for all queries executed in the current session, run the following statement:
+SET diskann.l_value_is TO 20;
+SET diskann.l_value_is TO 20;
+To change it so that it only affects all queries executed in the current transaction, run the following statement:
+BEGIN;
+SET LOCAL diskann.l_value_is TO 20;
+-- All your queries
+COMMIT;
+BEGIN;
+SET LOCAL diskann.l_value_is TO 20;
+-- All your queries
+COMMIT;
+Recommended configuration of parameters
+l_value_ib
+max_neighbors
+diskann.l_value_is
+l_value_ib
+max_neighbors
+diskann.l_value_is
+l_value_ib
+max_neighbors
+diskann.l_value_is
+Note
+These parameters might vary depending on the specific dataset and use case. Users might have to experiment with different parameter values, to find the optimal settings for their particular scenario.
+CREATE INDEX and REINDEX progress
+With PostgreSQL 12 and newer, you can usepg_stat_progress_create_indexto check the progress of the CREATE INDEX or REINDEX operations.
+pg_stat_progress_create_index
+SELECT phase, round(100.0 * blocks_done / nullif(blocks_total, 0), 1) AS "%" FROM pg_stat_progress_create_index;
+SELECT phase, round(100.0 * blocks_done / nullif(blocks_total, 0), 1) AS "%" FROM pg_stat_progress_create_index;
+To learn more about the possible phases through which a CREATE INDEX or REINDEX operation goes through, seeCREATE INDEX phases.
+Selecting the index access function
+The vector type allows you to perform three types of searches on the stored vectors. You need to select the correct access function for your index, so that the database can consider your index when executing your queries.
+pg_diskannsupports following distance operators
+pg_diskann
+vector_l2_ops:<->Euclidean distance
+vector_l2_ops
+<->
+vector_cosine_ops:<=>Cosine distance
+vector_cosine_ops
+<=>
+vector_ip_ops:<#>Inner Product
+vector_ip_ops
+<#>
+Troubleshooting
+Error:diskann index needs to be upgraded to version 2...:
+diskann index needs to be upgraded to version 2...
+When you encounter this error, you can resolve by:
+ExecutingREINDEXorREDINDEX CONCURRENTLYstatement on the index.
+ExecutingREINDEXorREDINDEX CONCURRENTLYstatement on the index.
+REINDEX
+REDINDEX CONCURRENTLY
+BecauseREINDEXmight take a long time, the extension also provides a user-defined function calledupgrade_diskann_index(), which upgrades your index faster, when possible.To upgrade your index, run the following statement:SELECT upgrade_diskann_index('demo_embedding_diskann_custom_idx');To upgrade all diskann indexes in the database to the current version, run the following statement:SELECT upgrade_diskann_index(pg_class.oid)
+FROM pg_class
+JOIN pg_am ON (pg_class.relam = pg_am.oid)
+WHERE pg_am.amname = 'diskann';
+BecauseREINDEXmight take a long time, the extension also provides a user-defined function calledupgrade_diskann_index(), which upgrades your index faster, when possible.
+REINDEX
+upgrade_diskann_index()
+To upgrade your index, run the following statement:
+SELECT upgrade_diskann_index('demo_embedding_diskann_custom_idx');
+SELECT upgrade_diskann_index('demo_embedding_diskann_custom_idx');
+To upgrade all diskann indexes in the database to the current version, run the following statement:
+SELECT upgrade_diskann_index(pg_class.oid)
+FROM pg_class
+JOIN pg_am ON (pg_class.relam = pg_am.oid)
+WHERE pg_am.amname = 'diskann';
+SELECT upgrade_diskann_index(pg_class.oid)
+FROM pg_class
+JOIN pg_am ON (pg_class.relam = pg_am.oid)
+WHERE pg_am.amname = 'diskann';
+Related content
+Enable and use pgvector in Azure Database for PostgreSQL flexible server.
+Manage PostgreSQL extensions.
+Feedback
+Was this page helpful?
+Additional resources

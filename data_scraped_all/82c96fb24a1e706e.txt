@@ -1,0 +1,236 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Performance tips for Azure Cosmos DB and .NET SDK v2
+Article
+2024-08-14
+3 contributors
+In this article
+APPLIES TO:NoSQL
+.NET SDK v3
+.NET SDK v2
+Java SDK v4
+Async Java SDK v2
+Sync Java SDK v2
+Python SDK
+Azure Cosmos DB is a fast and flexible distributed database that scales seamlessly with guaranteed latency and throughput. You don't have to make major architecture changes or write complex code to scale your database with Azure Cosmos DB. Scaling up and down is as easy as making a single API call. To learn more, seehow to provision container throughputorhow to provision database throughput. But because Azure Cosmos DB is accessed via network calls, there are client-side optimizations you can make to achieve peak performance when you use theSQL .NET SDK.
+So, if you're trying to improve your database performance, consider these options:
+Upgrade to the .NET V3 SDK
+The.NET v3 SDKis released. If you use the .NET v3 SDK, see the.NET v3 performance guidefor the following information:
+Defaults to Direct TCP mode
+Stream API support
+Support custom serializer to allow System.Text.JSON usage
+Integrated batch and bulk support
+Hosting recommendations
+Turn on server-side garbage collection (GC)
+Reducing the frequency of garbage collection can help in some cases. In .NET, setgcServertotrue.
+true
+Scale out your client workload
+If you're testing at high throughput levels (more than 50,000 RU/s), the client application could become the bottleneck due to the machine capping out on CPU or network utilization. If you reach this point, you can continue to push the Azure Cosmos DB account further by scaling out your client applications across multiple servers.
+Note
+High CPU usage can cause increased latency and request timeout exceptions.
+Metadata operations
+Do not verify a Database and/or Collection exists by callingCreate...IfNotExistsAsyncand/orRead...Asyncin the hot path and/or before doing an item operation. The validation should only be done on application startup when it is necessary, if you expect them to be deleted (otherwise it's not needed). These metadata operations will generate extra end-to-end latency, have no SLA, and their own separatelimitationsthat do not scale like data operations.
+Create...IfNotExistsAsync
+Read...Async
+Logging and tracing
+Some environments have the.NET DefaultTraceListenerenabled. The DefaultTraceListener poses performance issues on production environments causing high CPU and I/O bottlenecks. Check and make sure that the DefaultTraceListener is disabled for your application by removing it from theTraceListenerson production environments.
+Latest SDK versions (greater than 2.16.2) automatically remove it when they detect it, with older versions, you can remove it by:
+.NET 6 / .NET Core
+.NET Framework
+if (!Debugger.IsAttached)
+{
+    Type defaultTrace = Type.GetType("Microsoft.Azure.Documents.DefaultTrace,Microsoft.Azure.DocumentDB.Core");
+    TraceSource traceSource = (TraceSource)defaultTrace.GetProperty("TraceSource").GetValue(null);
+    traceSource.Listeners.Remove("Default");
+    // Add your own trace listeners
+}
+if (!Debugger.IsAttached)
+{
+    Type defaultTrace = Type.GetType("Microsoft.Azure.Documents.DefaultTrace,Microsoft.Azure.DocumentDB.Core");
+    TraceSource traceSource = (TraceSource)defaultTrace.GetProperty("TraceSource").GetValue(null);
+    traceSource.Listeners.Remove("Default");
+    // Add your own trace listeners
+}
+Edit yourapp.configorweb.configfiles:
+app.config
+web.config
+<configuration>
+  <system.diagnostics>
+    <sources>
+      <source name="DocDBTrace" switchName="SourceSwitch" switchType="System.Diagnostics.SourceSwitch" >
+        <listeners>
+          <remove name="Default" />
+          <!--Add your own trace listeners-->
+          <add name="myListener" ... />
+        </listeners>
+      </source>
+    </sources>
+  </system.diagnostics>
+<configuration>
+<configuration>
+  <system.diagnostics>
+    <sources>
+      <source name="DocDBTrace" switchName="SourceSwitch" switchType="System.Diagnostics.SourceSwitch" >
+        <listeners>
+          <remove name="Default" />
+          <!--Add your own trace listeners-->
+          <add name="myListener" ... />
+        </listeners>
+      </source>
+    </sources>
+  </system.diagnostics>
+<configuration>
+Networking
+Connection policy: Use direct connection mode
+.NET V2 SDK default connection mode is gateway. You configure the connection mode during the construction of theDocumentClientinstance by using theConnectionPolicyparameter. If you use direct mode, you need to also set theProtocolby using theConnectionPolicyparameter. To learn more about different connectivity options, see theconnectivity modesarticle.
+DocumentClient
+ConnectionPolicy
+Protocol
+ConnectionPolicy
+Uri serviceEndpoint = new Uri("https://contoso.documents.net");
+string authKey = "your authKey from the Azure portal";
+DocumentClient client = new DocumentClient(serviceEndpoint, authKey,
+new ConnectionPolicy
+{
+   ConnectionMode = ConnectionMode.Direct, // ConnectionMode.Gateway is the default
+   ConnectionProtocol = Protocol.Tcp
+});
+Uri serviceEndpoint = new Uri("https://contoso.documents.net");
+string authKey = "your authKey from the Azure portal";
+DocumentClient client = new DocumentClient(serviceEndpoint, authKey,
+new ConnectionPolicy
+{
+   ConnectionMode = ConnectionMode.Direct, // ConnectionMode.Gateway is the default
+   ConnectionProtocol = Protocol.Tcp
+});
+Ephemeral port exhaustion
+If you see a high connection volume or high port usage on your instances, first verify that your client instances are singletons. In other words, the client instances should be unique for the lifetime of the application.
+When running on the TCP protocol, the client optimizes for latency by using the long-lived connections as opposed to the HTTPS protocol, which terminates the connections after 2 minutes of inactivity.
+In scenarios where you have sparse access and if you notice a higher connection count when compared to the gateway mode access, you can:
+Configure theConnectionPolicy.PortReuseModeproperty toPrivatePortPool(effective with framework version>= 4.6.1 and .NET core version >= 2.0): This property allows the SDK to use a small pool of ephemeral ports for different Azure Cosmos DB destination endpoints.
+PrivatePortPool
+Configure theConnectionPolicy.IdleConnectionTimeoutproperty must be greater than or equal to 10 minutes. The recommended values are between 20 minutes and 24 hours.
+Call OpenAsync to avoid startup latency on first request
+By default, the first request has higher latency because it needs to fetch the address routing table. When you useSDK V2, callOpenAsync()once during initialization to avoid this startup latency on the first request. The call looks like:await client.OpenAsync();
+OpenAsync()
+await client.OpenAsync();
+Note
+OpenAsyncwill generate requests to obtain the address routing table for all the containers in the account. For accounts that have many containers but whose application accesses a subset of them,OpenAsyncwould generate an unnecessary amount of traffic, which would make the initialization slow. So usingOpenAsyncmight not be useful in this scenario because it slows down application startup.
+OpenAsync
+OpenAsync
+OpenAsync
+For performance, collocate clients in same Azure region
+When possible, place any applications that call Azure Cosmos DB in the same region as the Azure Cosmos DB database. Here's an approximate comparison: calls to Azure Cosmos DB within the same region complete within 1 ms to 2 ms, but the latency between the West and East coast of the US is more than 50 ms. This latency can vary from request to request, depending on the route taken by the request as it passes from the client to the Azure datacenter boundary. You can get the lowest possible latency by ensuring the calling application is located within the same Azure region as the provisioned Azure Cosmos DB endpoint. For a list of available regions, seeAzure regions.
+
+Increase the number of threads/tasks
+Because calls to Azure Cosmos DB are made over the network, you might need to vary the degree of parallelism of your requests so that the client application spends minimal time waiting between requests. For example, if you're using the .NETTask Parallel Library, create on the order of hundreds of tasks that read from or write to Azure Cosmos DB.
+Enable accelerated networking
+To reduce latency and CPU jitter, we recommend that you enable accelerated networking on client virtual machines. SeeCreate a Windows virtual machine with accelerated networkingorCreate a Linux virtual machine with accelerated networking.
+SDK usage
+Install the most recent SDK
+The Azure Cosmos DB SDKs are constantly being improved to provide the best performance. See theAzure Cosmos DB SDKpages to determine the most recent SDK and review improvements.
+Use a singleton Azure Cosmos DB client for the lifetime of your application
+EachDocumentClientinstance is thread-safe and performs efficient connection management and address caching when operating in direct mode. To allow efficient connection management and better SDK client performance, we recommend that you use a single instance perAppDomainfor the lifetime of the application.
+DocumentClient
+AppDomain
+Avoid blocking calls
+Azure Cosmos DB SDK should be designed to process many requests simultaneously. Asynchronous APIs allow a small pool of threads to handle thousands of concurrent requests by not waiting on blocking calls. Rather than waiting on a long-running synchronous task to complete, the thread can work on another request.
+A common performance problem in apps using the Azure Cosmos DB SDK is blocking calls that could be asynchronous. Many synchronous blocking calls lead toThread Pool starvationand degraded response times.
+Do not:
+Block asynchronous execution by callingTask.WaitorTask.Result.
+UseTask.Runto make a synchronous API asynchronous.
+Acquire locks in common code paths. Azure Cosmos DB .NET SDK is most performant when architected to run code in parallel.
+CallTask.Runand immediately await it. ASP.NET Core already runs app code on normal Thread Pool threads, so calling Task.Run only results in extra unnecessary Thread Pool scheduling. Even if the scheduled code would block a thread, Task.Run does not prevent that.
+Use ToList() onDocumentClient.CreateDocumentQuery(...)which uses blocking calls to synchronously drain the query. UseAsDocumentQuery()to drain the query asynchronously.
+DocumentClient.CreateDocumentQuery(...)
+Do:
+Call the Azure Cosmos DB .NET APIs asynchronously.
+The entire call stack is asynchronous in order to benefit fromasync/awaitpatterns.
+A profiler, such asPerfView, can be used to find threads frequently added to theThread Pool. TheMicrosoft-Windows-DotNETRuntime/ThreadPoolWorkerThread/Startevent indicates a thread added to the thread pool.
+Microsoft-Windows-DotNETRuntime/ThreadPoolWorkerThread/Start
+Increase System.Net MaxConnections per host when using gateway mode
+Azure Cosmos DB requests are made over HTTPS/REST when you use gateway mode. They're subjected to the default connection limit per hostname or IP address. You might need to setMaxConnectionsto a higher value (100 to 1,000) so the client library can use multiple simultaneous connections to Azure Cosmos DB. In .NET SDK 1.8.0 and later, the default value forServicePointManager.DefaultConnectionLimitis 50. To change the value, you can setDocuments.Client.ConnectionPolicy.MaxConnectionLimitto a higher value.
+MaxConnections
+Implement backoff at RetryAfter intervals
+During performance testing, you should increase load until a small rate of requests are throttled. If requests are throttled, the client application should back off on throttle for the server-specified retry interval. Respecting the backoff ensures you spend a minimal amount of time waiting between retries.
+Retry policy support is included in these SDKs:
+Version 1.8.0 and later of the.NET SDK for SQLand theJava SDK for SQL
+Version 1.9.0 and later of theNode.js SDK for SQLand thePython SDK for SQL
+All supported versions of the.NET CoreSDKs
+For more information, seeRetryAfter.
+In version 1.19 and later of the .NET SDK, there's a mechanism for logging additional diagnostic information and troubleshooting latency issues, as shown in the following sample. You can log the diagnostic string for requests that have a higher read latency. The captured diagnostic string will help you understand how many times you received 429 errors for a given request.
+ResourceResponse<Document> readDocument = await this.readClient.ReadDocumentAsync(oldDocuments[i].SelfLink);
+readDocument.RequestDiagnosticsString
+ResourceResponse<Document> readDocument = await this.readClient.ReadDocumentAsync(oldDocuments[i].SelfLink);
+readDocument.RequestDiagnosticsString
+Cache document URIs for lower read latency
+Cache document URIs whenever possible for the best read performance. You need to define logic to cache the resource ID when you create a resource. Lookups based on resource IDs are faster than name-based lookups, so caching these values improves performance.
+Increase the number of threads/tasks
+SeeIncrease the number of threads/tasksin the networking section of this article.
+Query operations
+For query operations see theperformance tips for queries.
+Indexing policy
+Exclude unused paths from indexing for faster writes
+The Azure Cosmos DB indexing policy also allows you to specify which document paths to include in or exclude from indexing by using indexing paths (IndexingPolicy.IncludedPaths and IndexingPolicy.ExcludedPaths). Indexing paths can improve write performance and reduce index storage for scenarios in which the query patterns are known beforehand. This is because indexing costs correlate directly to the number of unique paths indexed. For example, this code shows how to exclude an entire section of the documents (a subtree) from indexing by using the "*" wildcard:
+var collection = new DocumentCollection { Id = "excludedPathCollection" };
+collection.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/*" });
+collection.IndexingPolicy.ExcludedPaths.Add(new ExcludedPath { Path = "/nonIndexedContent/*");
+collection = await client.CreateDocumentCollectionAsync(UriFactory.CreateDatabaseUri("db"), collection);
+var collection = new DocumentCollection { Id = "excludedPathCollection" };
+collection.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/*" });
+collection.IndexingPolicy.ExcludedPaths.Add(new ExcludedPath { Path = "/nonIndexedContent/*");
+collection = await client.CreateDocumentCollectionAsync(UriFactory.CreateDatabaseUri("db"), collection);
+For more information, seeAzure Cosmos DB indexing policies.
+Throughput
+Measure and tune for lower Request Units/second usage
+Azure Cosmos DB offers a rich set of database operations. These operations include relational and hierarchical queries with UDFs, stored procedures, and triggers, all operating on the documents within a database collection. The cost associated with each of these operations varies depending on the CPU, IO, and memory required to complete the operation. Instead of thinking about and managing hardware resources, you can think of a Request Unit (RU) as a single measure for the resources required to perform various database operations and service an application request.
+Throughput is provisioned based on the number ofRequest Unitsset for each container. Request Unit consumption is evaluated as a rate per second. Applications that exceed the provisioned Request Unit rate for their container are limited until the rate drops below the provisioned level for the container. If your application requires a higher level of throughput, you can increase your throughput by provisioning additional Request Units.
+The complexity of a query affects how many Request Units are consumed for an operation. The number of predicates, the nature of the predicates, the number of UDFs, and the size of the source dataset all influence the cost of query operations.
+To measure the overhead of any operation (create, update, or delete), inspect thex-ms-request-chargeheader (or the equivalentRequestChargeproperty inResourceResponse\<T>orFeedResponse\<T>in the .NET SDK) to measure the number of Request Units consumed by the operations:
+RequestCharge
+ResourceResponse\<T>
+FeedResponse\<T>
+// Measure the performance (Request Units) of writes
+ResourceResponse<Document> response = await client.CreateDocumentAsync(collectionSelfLink, myDocument);
+Console.WriteLine("Insert of document consumed {0} request units", response.RequestCharge);
+// Measure the performance (Request Units) of queries
+IDocumentQuery<dynamic> queryable = client.CreateDocumentQuery(collectionSelfLink, queryString).AsDocumentQuery();
+while (queryable.HasMoreResults)
+    {
+        FeedResponse<dynamic> queryResponse = await queryable.ExecuteNextAsync<dynamic>();
+        Console.WriteLine("Query batch consumed {0} request units", queryResponse.RequestCharge);
+    }
+// Measure the performance (Request Units) of writes
+ResourceResponse<Document> response = await client.CreateDocumentAsync(collectionSelfLink, myDocument);
+Console.WriteLine("Insert of document consumed {0} request units", response.RequestCharge);
+// Measure the performance (Request Units) of queries
+IDocumentQuery<dynamic> queryable = client.CreateDocumentQuery(collectionSelfLink, queryString).AsDocumentQuery();
+while (queryable.HasMoreResults)
+    {
+        FeedResponse<dynamic> queryResponse = await queryable.ExecuteNextAsync<dynamic>();
+        Console.WriteLine("Query batch consumed {0} request units", queryResponse.RequestCharge);
+    }
+The request charge returned in this header is a fraction of your provisioned throughput (that is, 2,000 RUs / second). For example, if the preceding query returns 1,000 1-KB documents, the cost of the operation is 1,000. So, within one second, the server honors only two such requests before rate limiting later requests. For more information, seeRequest Unitsand theRequest Unit calculator.
+Handle rate limiting/request rate too large
+When a client attempts to exceed the reserved throughput for an account, there's no performance degradation at the server and no use of throughput capacity beyond the reserved level. The server will preemptively end the request with RequestRateTooLarge (HTTP status code 429). It will return anx-ms-retry-after-msheader that indicates the amount of time, in milliseconds, that the user must wait before attempting the request again.
+HTTP Status 429,
+Status Line: RequestRateTooLarge
+x-ms-retry-after-ms :100
+HTTP Status 429,
+Status Line: RequestRateTooLarge
+x-ms-retry-after-ms :100
+The SDKs all implicitly catch this response, respect the server-specified retry-after header, and retry the request. Unless your account is being accessed concurrently by multiple clients, the next retry will succeed.
+If you have more than one client cumulatively operating consistently above the request rate, the default retry count currently set to 9 internally by the client might not suffice. In this case, the client throws a DocumentClientException with status code 429 to the application.
+You can change the default retry count by setting theRetryOptionson theConnectionPolicyinstance. By default, the DocumentClientException with status code 429 is returned after a cumulative wait time of 30 seconds if the request continues to operate above the request rate. This error returns even when the current retry count is less than the maximum retry count, whether the current value is the default of 9 or a user-defined value.
+RetryOptions
+ConnectionPolicy
+The automated retry behavior helps improve resiliency and usability for most applications. But it might not be the best behavior when you're doing performance benchmarks, especially when you're measuring latency. The client-observed latency will spike if the experiment hits the server throttle and causes the client SDK to silently retry. To avoid latency spikes during performance experiments, measure the charge returned by each operation and ensure that requests are operating below the reserved request rate. For more information, seeRequest Units.
+For higher throughput, design for smaller documents
+The request charge (that is, the request-processing cost) of a given operation correlates directly to the size of the document. Operations on large documents cost more than operations on small documents.
+Next steps
+For a sample application that's used to evaluate Azure Cosmos DB for high-performance scenarios on a few client machines, seePerformance and scale testing with Azure Cosmos DB.
+To learn more about designing your application for scale and high performance, seePartitioning and scaling in Azure Cosmos DB.
+Feedback
+Was this page helpful?
+Additional resources

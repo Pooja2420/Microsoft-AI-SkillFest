@@ -1,0 +1,1853 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+High-availability SAP NetWeaver with simple mount and NFS on SLES for SAP Applications VMs
+Article
+2024-11-19
+8 contributors
+In this article
+This article describes how to deploy and configure Azure virtual machines (VMs), install the cluster framework, and install a high-availability (HA) SAP NetWeaver system with a simple mount structure. You can implement the presented architecture by using one of the following Azure native Network File System (NFS) services:
+NFS on Azure Files.
+Azure NetApp Files.
+The simple mount configuration is expected to be the default for new implementations on SLES for SAP Applications 15.
+Prerequisites
+The following guides contain all the required information to set up a NetWeaver HA system:
+SAP S/4 HANA - Enqueue Replication 2 High Availability Cluster With Simple Mount
+Use of Filesystem resource for ABAP SAP Central Services (ASCS)/ERS HA setup not possible
+SAP Note1928533, which has:A list of Azure VM sizes that are supported for the deployment of SAP softwareImportant capacity information for Azure VM sizesSupported SAP software, operating systems (OSs), and combinationsThe required SAP kernel version for Windows and Linux on Microsoft Azure
+A list of Azure VM sizes that are supported for the deployment of SAP software
+Important capacity information for Azure VM sizes
+Supported SAP software, operating systems (OSs), and combinations
+The required SAP kernel version for Windows and Linux on Microsoft Azure
+SAP Note2015553, which lists prerequisites for SAP-supported SAP software deployments in Azure.
+SAP Note2205917, which has recommended OS settings for SUSE Linux Enterprise Server (SLES) for SAP Applications
+SAP Note2178632, which has detailed information about all monitoring metrics reported for SAP in Azure
+SAP Note2191498, which has the required SAP Host Agent version for Linux in Azure
+SAP Note2243692, which has information about SAP licensing on Linux in Azure
+SAP Note2578899, which has general information about SUSE Linux Enterprise Server 15
+SAP Note1275776, which has information about preparing SUSE Linux Enterprise Server for SAP environments
+SAP Note1999351, which has additional troubleshooting information for the Azure Enhanced Monitoring Extension for SAP
+SAP community wiki, which has all required SAP Notes for Linux
+Azure Virtual Machines planning and implementation for SAP on Linux
+Azure Virtual Machines deployment for SAP on Linux
+Azure Virtual Machines DBMS deployment for SAP on Linux
+SUSE SAP HA best practice guides
+SUSE High Availability Extension release notes
+Azure Files documentation
+NetApp NFS best practices
+Overview
+This article describes a high-availability configuration for ASCS with a simple mount structure. To deploy the SAP application layer, you need shared directories like/sapmnt/SID,/usr/sap/SID, and/usr/sap/trans, which are highly available. You can deploy these file systems onNFS on Azure FilesorAzure NetApp Files.
+/sapmnt/SID
+/usr/sap/SID
+/usr/sap/trans
+You still need a Pacemaker cluster to help protect single-point-of-failure components like SAP Central Services (SCS) and ASCS.
+Compared to the classic Pacemaker cluster configuration, with the simple mount deployment, the cluster doesn't manage the file systems. This configuration is supported only on SLES for SAP Applications 15 and later. This article doesn't cover the database layer in detail.
+The example configurations and installation commands use the following instance numbers.
+Important
+The configuration with simple mount structure is supported only on SLES for SAP Applications 15 and later releases.
+
+This diagram shows a typical SAP NetWeaver HA architecture with a simple mount. The "sapmnt" and "saptrans" file systems are deployed on Azure native NFS: NFS shares on Azure Files or NFS volumes on Azure NetApp Files. A Pacemaker cluster protects the SAP central services. The clustered VMs are behind an Azure load balancer. The Pacemaker cluster doesn't manage the file systems, in contrast to the classic Pacemaker configuration.
+
+Prepare the infrastructure
+The resource agent for SAP Instance is included in SUSE Linux Enterprise Server for SAP Applications. An image for SUSE Linux Enterprise Server for SAP Applications 12 or 15 is available in Azure Marketplace. You can use the image to deploy new VMs.
+Deploy Linux VMs manually via Azure portal
+This document assumes that you've already deployed a resource group,Azure Virtual Network, and subnet.
+Deploy virtual machines with SLES for SAP Applications image. Choose a suitable version of SLES image that is supported for SAP system. You can deploy VM in any one of the availability options - virtual machine scale set, availability zone, or availability set.
+Configure Azure load balancer
+During VM configuration, you have an option to create or select exiting load balancer in networking section. Follow the steps below to configure a standard load balancer for the high-availability setup of SAP ASCS and SAP ERS.
+Azure portal
+Azure CLI
+PowerShell
+Followcreate load balancerguide to set up a standard load balancer for a high availability SAP system using the Azure portal. During the setup of load balancer, consider following points.
+Frontend IP Configuration:Create two frontend IP, one for ASCS and another for ERS. Select the same virtual network and subnet as your ASCS/ERS virtual machines.
+Backend Pool:Create backend pool and add ASCS and ERS VMs.
+Inbound rules:Create two load balancing rule, one for ASCS and another for ERS. Follow the same steps for both load balancing rules.Frontend IP address: Select frontend IPBackend pool: Select backend poolCheck "High availability ports"Protocol: TCPHealth Probe: Create health probe with below details (applies for both ASCS or ERS)Protocol: TCPPort: [for example: 620<Instance-no.> for ASCS, 621<Instance-no.> for ERS]Interval: 5Probe Threshold: 2Idle timeout (minutes): 30Check "Enable Floating IP"
+Frontend IP address: Select frontend IP
+Backend pool: Select backend pool
+Check "High availability ports"
+Protocol: TCP
+Health Probe: Create health probe with below details (applies for both ASCS or ERS)Protocol: TCPPort: [for example: 620<Instance-no.> for ASCS, 621<Instance-no.> for ERS]Interval: 5Probe Threshold: 2
+Protocol: TCP
+Port: [for example: 620<Instance-no.> for ASCS, 621<Instance-no.> for ERS]
+Interval: 5
+Probe Threshold: 2
+Idle timeout (minutes): 30
+Check "Enable Floating IP"
+Note
+Health probe configuration property numberOfProbes, otherwise known as "Unhealthy threshold" in Portal, isn't respected. So to control the number of successful or failed consecutive probes, set the property "probeThreshold" to 2. It is currently not possible to set this property using Azure portal, so use either theAzure CLIorPowerShellcommand.
+To create Azure standard load balancer for high availability setup of SAP system using Azure CLI, follow below steps.
+# Create the load balancer resource and another frontend IP resource for ERS. Allocation of private IP address is dynamic using below command. If you want to pass static IP address, include parameter --private-ip-address.
+az network lb create -g MyResourceGroup -n MyLB --sku Standard --vnet-name MyVMsVirtualNetwork --subnet MyVMsSubnet --backend-pool-name MyBackendPool --frontend-ip-name MyASCSFrontendIpName
+az network lb frontend-ip create -g MyResourceGroup --lb-name MyLB -n MyERSFrontendIpName --vnet-name MyVMsVirtualNetwork --subnet MyVMsSubnet
+
+# Create the health probe for ASCS and ERS
+az network lb probe create -g MyResourceGroup --lb-name MyLB -n MyASCSHealthProbe --protocol tcp --port MyASCSHealthProbePort --interval 5 --probe-threshold 2
+az network lb probe create -g MyResourceGroup --lb-name MyLB -n MyERSHealthProbe --protocol tcp --port MyERSHealthProbePort --interval 5 --probe-threshold 2
+ 
+# Create load balancing rule for ASCS and ERS
+az network lb rule create -g MyResourceGroup --lb-name MyLB -n MyASCSRuleName --protocol All --frontend-ip-name MyASCSFrontendIpName --frontend-port 0 --backend-pool-name MyBackendPool --backend-port 0 --probe-name MyASCSHealthProbe --idle-timeout-in-minutes 30 --enable-floating-ip 
+az network lb rule create -g MyResourceGroup --lb-name MyLB -n MyERSRuleName --protocol All --frontend-ip-name MyERSFrontendIpName --frontend-port 0 --backend-pool-name MyBackendPool --backend-port 0 --probe-name MyERSHealthProbe --idle-timeout-in-minutes 30 --enable-floating-ip  
+
+# Add ASCS and ERS VMs in backend pool
+az network nic ip-config address-pool add --address-pool MyBackendPool --ip-config-name ASCSVmIpConfigName --nic-name ASCSVmNicName -g MyResourceGroup --lb-name MyLB
+az network nic ip-config address-pool add --address-pool MyBackendPool --ip-config-name ERSVmIpConfigName --nic-name ERSVmNicName -g MyResourceGroup --lb-name MyLB
+# Create the load balancer resource and another frontend IP resource for ERS. Allocation of private IP address is dynamic using below command. If you want to pass static IP address, include parameter --private-ip-address.
+az network lb create -g MyResourceGroup -n MyLB --sku Standard --vnet-name MyVMsVirtualNetwork --subnet MyVMsSubnet --backend-pool-name MyBackendPool --frontend-ip-name MyASCSFrontendIpName
+az network lb frontend-ip create -g MyResourceGroup --lb-name MyLB -n MyERSFrontendIpName --vnet-name MyVMsVirtualNetwork --subnet MyVMsSubnet
+
+# Create the health probe for ASCS and ERS
+az network lb probe create -g MyResourceGroup --lb-name MyLB -n MyASCSHealthProbe --protocol tcp --port MyASCSHealthProbePort --interval 5 --probe-threshold 2
+az network lb probe create -g MyResourceGroup --lb-name MyLB -n MyERSHealthProbe --protocol tcp --port MyERSHealthProbePort --interval 5 --probe-threshold 2
+ 
+# Create load balancing rule for ASCS and ERS
+az network lb rule create -g MyResourceGroup --lb-name MyLB -n MyASCSRuleName --protocol All --frontend-ip-name MyASCSFrontendIpName --frontend-port 0 --backend-pool-name MyBackendPool --backend-port 0 --probe-name MyASCSHealthProbe --idle-timeout-in-minutes 30 --enable-floating-ip 
+az network lb rule create -g MyResourceGroup --lb-name MyLB -n MyERSRuleName --protocol All --frontend-ip-name MyERSFrontendIpName --frontend-port 0 --backend-pool-name MyBackendPool --backend-port 0 --probe-name MyERSHealthProbe --idle-timeout-in-minutes 30 --enable-floating-ip  
+
+# Add ASCS and ERS VMs in backend pool
+az network nic ip-config address-pool add --address-pool MyBackendPool --ip-config-name ASCSVmIpConfigName --nic-name ASCSVmNicName -g MyResourceGroup --lb-name MyLB
+az network nic ip-config address-pool add --address-pool MyBackendPool --ip-config-name ERSVmIpConfigName --nic-name ERSVmNicName -g MyResourceGroup --lb-name MyLB
+# Define variables for Resource Group, ASCS/ERS VMs.
+
+rg_name="resourcegroup-name"
+vm1_name="ascs-vm-name"
+vm2_name="ers-vm-name"
+
+# Define variables for the load balancer that will be use in the creation of the load balancer resource.
+
+lb_name="sap-ci-sid-ilb"
+bkp_name="ascs-ers-backendpool"
+ascs_fip_name="ascs-frontendip"
+ers_fip_name="ers-frontendip"
+
+ascs_hp_name="ascs-healthprobe"
+ascs_hp_port="62000"
+ers_hp_name="ers-healthprobe"
+ers_hp_port="62101"
+
+ascs_rule_name="ascs-lb-rule"
+ers_rule_name="ers-lb-rule"
+ 
+# Command to get VMs network information like primary NIC name, primary IP configuration name, virtual network name, and subnet name.
+ 
+vm1_primary_nic=$(az vm nic list -g $rg_name --vm-name $vm1_name --query "[?primary == \`true\`].{id:id} || [?primary == \`null\`].{id:id}" -o tsv)
+vm1_nic_name=$(basename $vm1_primary_nic)
+vm1_ipconfig=$(az network nic ip-config list -g $rg_name --nic-name $vm1_nic_name --query "[?primary == \`true\`].name" -o tsv)
+ 
+vm2_primary_nic=$(az vm nic list -g $rg_name --vm-name $vm2_name --query "[?primary == \`true\`].{id:id} || [?primary == \`null\`].{id:id}" -o tsv)
+vm2_nic_name=$(basename $vm2_primary_nic)
+vm2_ipconfig=$(az network nic ip-config list -g $rg_name --nic-name $vm2_nic_name --query "[?primary == \`true\`].name" -o tsv)
+ 
+vnet_subnet_id=$(az network nic show -g $rg_name -n $vm1_nic_name --query ipConfigurations[0].subnet.id -o tsv)
+vnet_name=$(basename $(dirname $(dirname $vnet_subnet_id)))
+subnet_name=$(basename $vnet_subnet_id)
+ 
+# Create the load balancer resource and another frontend IP resource for ERS.
+# Allocation of private IP address is dynamic using below command. If you want to pass static IP address, include parameter --private-ip-address. 
+  
+az network lb create -g $rg_name -n $lb_name --sku Standard --vnet-name $vnet_name --subnet $subnet_name --backend-pool-name $bkp_name --frontend-ip-name $ascs_fip_name
+az network lb frontend-ip create -g $rg_name --lb-name $lb_name -n $ers_fip_name --vnet-name $vnet_name --subnet $subnet_name
+ 
+# Create the health probe for ASCS and ERS
+ 
+az network lb probe create -g $rg_name --lb-name $lb_name -n $ascs_hp_name --protocol tcp --port $ascs_hp_port --interval 5 --probe-threshold 2
+az network lb probe create -g $rg_name --lb-name $lb_name -n $ers_hp_name --protocol tcp --port $ers_hp_port --interval 5 --probe-threshold 2
+ 
+# Create load balancing rule for ASCS and ERS
+  
+az network lb rule create -g $rg_name --lb-name $lb_name -n  $ascs_rule_name --protocol All --frontend-ip-name $ascs_fip_name --frontend-port 0 --backend-pool-name $bkp_name --backend-port 0 --probe-name $ascs_hp_name --idle-timeout-in-minutes 30 --enable-floating-ip 
+az network lb rule create -g $rg_name --lb-name $lb_name -n  $ers_rule_name --protocol All --frontend-ip-name $ers_fip_name --frontend-port 0 --backend-pool-name $bkp_name --backend-port 0 --probe-name $ers_hp_name --idle-timeout-in-minutes 30 --enable-floating-ip 
+ 
+# Add ASCS and ERS VMs in backend pool
+ 
+az network nic ip-config address-pool add --address-pool $bkp_name --ip-config-name $vm1_ipconfig --nic-name $vm1_nic_name -g $rg_name --lb-name $lb_name
+az network nic ip-config address-pool add --address-pool $bkp_name --ip-config-name $vm2_ipconfig --nic-name $vm2_nic_name -g $rg_name --lb-name $lb_name
+
+# [OPTIONAL] Change the assignment of frontend IP address from dynamic to static
+afip=$(az network lb frontend-ip show --lb-name $lb_name -g $rg_name -n $ascs_fip_name --query "{privateIPAddress:privateIPAddress}" -o tsv)
+az network lb frontend-ip update --lb-name $lb_name -g $rg_name -n $ascs_fip_name --private-ip-address $afip
+
+efip=$(az network lb frontend-ip show --lb-name $lb_name -g $rg_name -n $ers_fip_name --query "{privateIPAddress:privateIPAddress}" -o tsv)
+az network lb frontend-ip update --lb-name $lb_name -g $rg_name -n $ers_fip_name --private-ip-address $efip
+# Define variables for Resource Group, ASCS/ERS VMs.
+
+rg_name="resourcegroup-name"
+vm1_name="ascs-vm-name"
+vm2_name="ers-vm-name"
+
+# Define variables for the load balancer that will be use in the creation of the load balancer resource.
+
+lb_name="sap-ci-sid-ilb"
+bkp_name="ascs-ers-backendpool"
+ascs_fip_name="ascs-frontendip"
+ers_fip_name="ers-frontendip"
+
+ascs_hp_name="ascs-healthprobe"
+ascs_hp_port="62000"
+ers_hp_name="ers-healthprobe"
+ers_hp_port="62101"
+
+ascs_rule_name="ascs-lb-rule"
+ers_rule_name="ers-lb-rule"
+ 
+# Command to get VMs network information like primary NIC name, primary IP configuration name, virtual network name, and subnet name.
+ 
+vm1_primary_nic=$(az vm nic list -g $rg_name --vm-name $vm1_name --query "[?primary == \`true\`].{id:id} || [?primary == \`null\`].{id:id}" -o tsv)
+vm1_nic_name=$(basename $vm1_primary_nic)
+vm1_ipconfig=$(az network nic ip-config list -g $rg_name --nic-name $vm1_nic_name --query "[?primary == \`true\`].name" -o tsv)
+ 
+vm2_primary_nic=$(az vm nic list -g $rg_name --vm-name $vm2_name --query "[?primary == \`true\`].{id:id} || [?primary == \`null\`].{id:id}" -o tsv)
+vm2_nic_name=$(basename $vm2_primary_nic)
+vm2_ipconfig=$(az network nic ip-config list -g $rg_name --nic-name $vm2_nic_name --query "[?primary == \`true\`].name" -o tsv)
+ 
+vnet_subnet_id=$(az network nic show -g $rg_name -n $vm1_nic_name --query ipConfigurations[0].subnet.id -o tsv)
+vnet_name=$(basename $(dirname $(dirname $vnet_subnet_id)))
+subnet_name=$(basename $vnet_subnet_id)
+ 
+# Create the load balancer resource and another frontend IP resource for ERS.
+# Allocation of private IP address is dynamic using below command. If you want to pass static IP address, include parameter --private-ip-address. 
+  
+az network lb create -g $rg_name -n $lb_name --sku Standard --vnet-name $vnet_name --subnet $subnet_name --backend-pool-name $bkp_name --frontend-ip-name $ascs_fip_name
+az network lb frontend-ip create -g $rg_name --lb-name $lb_name -n $ers_fip_name --vnet-name $vnet_name --subnet $subnet_name
+ 
+# Create the health probe for ASCS and ERS
+ 
+az network lb probe create -g $rg_name --lb-name $lb_name -n $ascs_hp_name --protocol tcp --port $ascs_hp_port --interval 5 --probe-threshold 2
+az network lb probe create -g $rg_name --lb-name $lb_name -n $ers_hp_name --protocol tcp --port $ers_hp_port --interval 5 --probe-threshold 2
+ 
+# Create load balancing rule for ASCS and ERS
+  
+az network lb rule create -g $rg_name --lb-name $lb_name -n  $ascs_rule_name --protocol All --frontend-ip-name $ascs_fip_name --frontend-port 0 --backend-pool-name $bkp_name --backend-port 0 --probe-name $ascs_hp_name --idle-timeout-in-minutes 30 --enable-floating-ip 
+az network lb rule create -g $rg_name --lb-name $lb_name -n  $ers_rule_name --protocol All --frontend-ip-name $ers_fip_name --frontend-port 0 --backend-pool-name $bkp_name --backend-port 0 --probe-name $ers_hp_name --idle-timeout-in-minutes 30 --enable-floating-ip 
+ 
+# Add ASCS and ERS VMs in backend pool
+ 
+az network nic ip-config address-pool add --address-pool $bkp_name --ip-config-name $vm1_ipconfig --nic-name $vm1_nic_name -g $rg_name --lb-name $lb_name
+az network nic ip-config address-pool add --address-pool $bkp_name --ip-config-name $vm2_ipconfig --nic-name $vm2_nic_name -g $rg_name --lb-name $lb_name
+
+# [OPTIONAL] Change the assignment of frontend IP address from dynamic to static
+afip=$(az network lb frontend-ip show --lb-name $lb_name -g $rg_name -n $ascs_fip_name --query "{privateIPAddress:privateIPAddress}" -o tsv)
+az network lb frontend-ip update --lb-name $lb_name -g $rg_name -n $ascs_fip_name --private-ip-address $afip
+
+efip=$(az network lb frontend-ip show --lb-name $lb_name -g $rg_name -n $ers_fip_name --query "{privateIPAddress:privateIPAddress}" -o tsv)
+az network lb frontend-ip update --lb-name $lb_name -g $rg_name -n $ers_fip_name --private-ip-address $efip
+To create Azure standard load balancer for high availability setup of SAP system using Azure PowerShell, follow below steps.
+# Create frontend IP configurations
+$ascs_fip = New-AzLoadBalancerFrontendIpConfig -Name MyASCSFrontendIpName -SubnetId MyASCSSubnetName
+$ers_fip = New-AzLoadBalancerFrontendIpConfig -Name MyERSFrontendIpName -SubnetId MyERSSubnetName
+
+# Create backend pool
+$bePool = New-AzLoadBalancerBackendAddressPoolConfig -Name MyBackendPool
+
+# Create health probes for ASCS and ERS
+$ascs_healthprobe = New-AzLoadBalancerProbeConfig -Name MyASCSHealthProbe -Protocol 'tcp' -Port MyASCSHealthProbePort -IntervalInSeconds 5 -ProbeThreshold 2 -ProbeCount 1
+$ers_healthprobe = New-AzLoadBalancerProbeConfig -Name $ers_hp_name -Protocol 'tcp' -Port MyASCSHealthProbePort -IntervalInSeconds 5 -ProbeThreshold 2 -ProbeCount 1
+
+# Create load balancing rules for ASCS and ERS
+$ascs_rule = New-AzLoadBalancerRuleConfig -Name MyASCSRuleName -Probe $ascs_healthprobe -Protocol 'All' -IdleTimeoutInMinutes 30 -FrontendIpConfiguration $ascs_fip -BackendAddressPool $bePool -EnableFloatingIP
+$ers_rule = New-AzLoadBalancerRuleConfig -Name MyERSRuleName -Probe $ers_healthprobe -Protocol 'All' -IdleTimeoutInMinutes 30 -FrontendIpConfiguration $ers_fip -BackendAddressPool $bePool -EnableFloatingIP
+
+# Create the load balancer resource
+$lb = New-AzLoadBalancer -ResourceGroupName MyResourceGroup -Name MyLB -Location MyRegion -Sku 'Standard' -FrontendIpConfiguration $ascs_fip, $ers_fip -BackendAddressPool $bePool -LoadBalancingRule $ascs_rule, $ers_rule -Probe $ascs_healthprobe, $ers_healthprobe
+# Create frontend IP configurations
+$ascs_fip = New-AzLoadBalancerFrontendIpConfig -Name MyASCSFrontendIpName -SubnetId MyASCSSubnetName
+$ers_fip = New-AzLoadBalancerFrontendIpConfig -Name MyERSFrontendIpName -SubnetId MyERSSubnetName
+
+# Create backend pool
+$bePool = New-AzLoadBalancerBackendAddressPoolConfig -Name MyBackendPool
+
+# Create health probes for ASCS and ERS
+$ascs_healthprobe = New-AzLoadBalancerProbeConfig -Name MyASCSHealthProbe -Protocol 'tcp' -Port MyASCSHealthProbePort -IntervalInSeconds 5 -ProbeThreshold 2 -ProbeCount 1
+$ers_healthprobe = New-AzLoadBalancerProbeConfig -Name $ers_hp_name -Protocol 'tcp' -Port MyASCSHealthProbePort -IntervalInSeconds 5 -ProbeThreshold 2 -ProbeCount 1
+
+# Create load balancing rules for ASCS and ERS
+$ascs_rule = New-AzLoadBalancerRuleConfig -Name MyASCSRuleName -Probe $ascs_healthprobe -Protocol 'All' -IdleTimeoutInMinutes 30 -FrontendIpConfiguration $ascs_fip -BackendAddressPool $bePool -EnableFloatingIP
+$ers_rule = New-AzLoadBalancerRuleConfig -Name MyERSRuleName -Probe $ers_healthprobe -Protocol 'All' -IdleTimeoutInMinutes 30 -FrontendIpConfiguration $ers_fip -BackendAddressPool $bePool -EnableFloatingIP
+
+# Create the load balancer resource
+$lb = New-AzLoadBalancer -ResourceGroupName MyResourceGroup -Name MyLB -Location MyRegion -Sku 'Standard' -FrontendIpConfiguration $ascs_fip, $ers_fip -BackendAddressPool $bePool -LoadBalancingRule $ascs_rule, $ers_rule -Probe $ascs_healthprobe, $ers_healthprobe
+# Define variables for Resource Group, and Database VMs.
+
+$rg_name = 'resourcegroup-name'
+$vm1_name = 'ascs-vm-name'
+$vm2_name = 'ers-vm-name'
+
+# Define variables for the load balancer that will be utilized in the creation of the load balancer resource.
+
+$lb_name = 'sap-ci-sid-ilb'
+$bkp_name = 'ascs-ers-backendpool'
+$ascs_fip_name = 'ascs-frontendip'
+$ers_fip_name = 'ers-frontendip'
+ 
+$ascs_hp_name = 'ascs-healthprobe'
+$ascs_hp_port = '62000'
+$ers_hp_name = 'ers-healthprobe'
+$ers_hp_port = '62101'
+ 
+$ascs_rule_name = 'ascs-lb-rule'
+$ers_rule_name = 'ers-lb-rule'
+ 
+# Command to get VMs network information like NIC name, IP configuration name, Virtual Network name, and Subnet 
+ 
+$vm1 = Get-AzVM -ResourceGroupName $rg_name -Name $vm1_name
+$vm1_primarynic = $vm1.NetworkProfile.NetworkInterfaces | Where-Object {($_.Primary -eq "True") -or ($_.Primary -eq $null)}
+$vm1_nic_name = $vm1_primarynic.Id.Split('/')[-1]
+ 
+$vm1_nic_info = Get-AzNetworkInterface -Name $vm1_nic_name -ResourceGroupName $rg_name
+$vm1_primaryip = $vm1_nic_info.IpConfigurations | Where-Object -Property Primary -EQ -Value "True"
+$vm1_ipconfig_name = ($vm1_primaryip).Name
+ 
+$vm2 = Get-AzVM -ResourceGroupName $rg_name -Name $vm2_name
+$vm2_primarynic = $vm2.NetworkProfile.NetworkInterfaces | Where-Object {($_.Primary -eq "True") -or ($_.Primary -eq $null)}
+$vm2_nic_name = $vm2_primarynic.Id.Split('/')[-1]
+ 
+$vm2_nic_info = Get-AzNetworkInterface -Name $vm2_nic_name -ResourceGroupName $rg_name
+$vm2_primaryip = $vm2_nic_info.IpConfigurations | Where-Object -Property Primary -EQ -Value "True"
+$vm2_ipconfig_name = ($vm2_primaryip).Name
+ 
+$vnet_name = $vm1_primaryip.Subnet.Id.Split('/')[-3]
+$subnet_name = $vm1_primaryip.Subnet.Id.Split('/')[-1]
+$location = $vm1.Location
+ 
+# Create frontend IP resource for ASCS and ERS.
+# Allocation of private IP address is dynamic using below command. If you want to pass static IP address, include parameter -PrivateIpAddress
+ 
+$ascs_lb_fip = @{
+    Name = $ascs_fip_name
+    SubnetId = $vm1_primaryip.Subnet.Id
+}
+$ascs_fip = New-AzLoadBalancerFrontendIpConfig @ascs_lb_fip
+ 
+$ers_lb_fip = @{
+    Name = $ers_fip_name
+    SubnetId = $vm2_primaryip.Subnet.Id
+}
+$ers_fip = New-AzLoadBalancerFrontendIpConfig @ers_lb_fip
+
+# Create backend pool
+ 
+$bepool = New-AzLoadBalancerBackendAddressPoolConfig -Name $bkp_name
+
+# Create the health probe for ASCS and ERS
+ 
+$ascs_probe = @{
+    Name = $ascs_hp_name
+    Protocol = 'tcp'
+    Port = $ascs_hp_port
+    IntervalInSeconds = '5'
+    ProbeThreshold = '2'
+    ProbeCount = '1'
+}
+$ascs_healthprobe = New-AzLoadBalancerProbeConfig @ascs_probe
+    
+$ers_probe = @{
+    Name = $ers_hp_name
+    Protocol = 'tcp'
+    Port = $ers_hp_port
+    IntervalInSeconds = '5'
+    ProbeThreshold = '2'
+    ProbeCount = '1'
+}
+$ers_healthprobe = New-AzLoadBalancerProbeConfig @ers_probe
+
+# Create load balancing rule for ASCS and ERS
+ 
+$ascs_lbrule = @{
+    Name = $ascs_rule_name
+    Probe = $ascs_healthprobe
+    Protocol = 'All'
+    IdleTimeoutInMinutes = '30'
+    FrontendIpConfiguration = $ascs_fip
+    BackendAddressPool = $bePool 
+} 
+$ascs_rule = New-AzLoadBalancerRuleConfig @ascs_lbrule -EnableFloatingIP 
+ 
+$ers_lbrule = @{
+    Name = $ers_rule_name
+    Probe = $ers_healthprobe
+    Protocol = 'All'
+    IdleTimeoutInMinutes = '30'
+    FrontendIpConfiguration = $ers_fip
+    BackendAddressPool = $bePool 
+} 
+$ers_rule = New-AzLoadBalancerRuleConfig @ers_lbrule -EnableFloatingIP
+
+# Create the load balancer resource
+ 
+$loadbalancer = @{
+    ResourceGroupName = $rg_name
+    Name = $lb_name
+    Location = $location
+    Sku = 'Standard'
+    FrontendIpConfiguration = $ascs_fip,$ers_fip
+    BackendAddressPool = $bePool 
+    LoadBalancingRule = $ascs_rule,$ers_rule
+    Probe = $ascs_healthprobe,$ers_healthprobe 
+} 
+$lb = New-AzLoadBalancer @loadbalancer
+
+# Add ASCS and ERS VMs in backend pool of load balancer
+ 
+$vm1_primaryip.LoadBalancerBackendAddressPools.Add($lb.BackendAddressPools[0])
+$vm2_primaryip.LoadBalancerBackendAddressPools.Add($lb.BackendAddressPools[0])
+$vm1_nic_info | Set-AzNetworkInterface
+$vm2_nic_info | Set-AzNetworkInterface
+# Define variables for Resource Group, and Database VMs.
+
+$rg_name = 'resourcegroup-name'
+$vm1_name = 'ascs-vm-name'
+$vm2_name = 'ers-vm-name'
+
+# Define variables for the load balancer that will be utilized in the creation of the load balancer resource.
+
+$lb_name = 'sap-ci-sid-ilb'
+$bkp_name = 'ascs-ers-backendpool'
+$ascs_fip_name = 'ascs-frontendip'
+$ers_fip_name = 'ers-frontendip'
+ 
+$ascs_hp_name = 'ascs-healthprobe'
+$ascs_hp_port = '62000'
+$ers_hp_name = 'ers-healthprobe'
+$ers_hp_port = '62101'
+ 
+$ascs_rule_name = 'ascs-lb-rule'
+$ers_rule_name = 'ers-lb-rule'
+ 
+# Command to get VMs network information like NIC name, IP configuration name, Virtual Network name, and Subnet 
+ 
+$vm1 = Get-AzVM -ResourceGroupName $rg_name -Name $vm1_name
+$vm1_primarynic = $vm1.NetworkProfile.NetworkInterfaces | Where-Object {($_.Primary -eq "True") -or ($_.Primary -eq $null)}
+$vm1_nic_name = $vm1_primarynic.Id.Split('/')[-1]
+ 
+$vm1_nic_info = Get-AzNetworkInterface -Name $vm1_nic_name -ResourceGroupName $rg_name
+$vm1_primaryip = $vm1_nic_info.IpConfigurations | Where-Object -Property Primary -EQ -Value "True"
+$vm1_ipconfig_name = ($vm1_primaryip).Name
+ 
+$vm2 = Get-AzVM -ResourceGroupName $rg_name -Name $vm2_name
+$vm2_primarynic = $vm2.NetworkProfile.NetworkInterfaces | Where-Object {($_.Primary -eq "True") -or ($_.Primary -eq $null)}
+$vm2_nic_name = $vm2_primarynic.Id.Split('/')[-1]
+ 
+$vm2_nic_info = Get-AzNetworkInterface -Name $vm2_nic_name -ResourceGroupName $rg_name
+$vm2_primaryip = $vm2_nic_info.IpConfigurations | Where-Object -Property Primary -EQ -Value "True"
+$vm2_ipconfig_name = ($vm2_primaryip).Name
+ 
+$vnet_name = $vm1_primaryip.Subnet.Id.Split('/')[-3]
+$subnet_name = $vm1_primaryip.Subnet.Id.Split('/')[-1]
+$location = $vm1.Location
+ 
+# Create frontend IP resource for ASCS and ERS.
+# Allocation of private IP address is dynamic using below command. If you want to pass static IP address, include parameter -PrivateIpAddress
+ 
+$ascs_lb_fip = @{
+    Name = $ascs_fip_name
+    SubnetId = $vm1_primaryip.Subnet.Id
+}
+$ascs_fip = New-AzLoadBalancerFrontendIpConfig @ascs_lb_fip
+ 
+$ers_lb_fip = @{
+    Name = $ers_fip_name
+    SubnetId = $vm2_primaryip.Subnet.Id
+}
+$ers_fip = New-AzLoadBalancerFrontendIpConfig @ers_lb_fip
+
+# Create backend pool
+ 
+$bepool = New-AzLoadBalancerBackendAddressPoolConfig -Name $bkp_name
+
+# Create the health probe for ASCS and ERS
+ 
+$ascs_probe = @{
+    Name = $ascs_hp_name
+    Protocol = 'tcp'
+    Port = $ascs_hp_port
+    IntervalInSeconds = '5'
+    ProbeThreshold = '2'
+    ProbeCount = '1'
+}
+$ascs_healthprobe = New-AzLoadBalancerProbeConfig @ascs_probe
+    
+$ers_probe = @{
+    Name = $ers_hp_name
+    Protocol = 'tcp'
+    Port = $ers_hp_port
+    IntervalInSeconds = '5'
+    ProbeThreshold = '2'
+    ProbeCount = '1'
+}
+$ers_healthprobe = New-AzLoadBalancerProbeConfig @ers_probe
+
+# Create load balancing rule for ASCS and ERS
+ 
+$ascs_lbrule = @{
+    Name = $ascs_rule_name
+    Probe = $ascs_healthprobe
+    Protocol = 'All'
+    IdleTimeoutInMinutes = '30'
+    FrontendIpConfiguration = $ascs_fip
+    BackendAddressPool = $bePool 
+} 
+$ascs_rule = New-AzLoadBalancerRuleConfig @ascs_lbrule -EnableFloatingIP 
+ 
+$ers_lbrule = @{
+    Name = $ers_rule_name
+    Probe = $ers_healthprobe
+    Protocol = 'All'
+    IdleTimeoutInMinutes = '30'
+    FrontendIpConfiguration = $ers_fip
+    BackendAddressPool = $bePool 
+} 
+$ers_rule = New-AzLoadBalancerRuleConfig @ers_lbrule -EnableFloatingIP
+
+# Create the load balancer resource
+ 
+$loadbalancer = @{
+    ResourceGroupName = $rg_name
+    Name = $lb_name
+    Location = $location
+    Sku = 'Standard'
+    FrontendIpConfiguration = $ascs_fip,$ers_fip
+    BackendAddressPool = $bePool 
+    LoadBalancingRule = $ascs_rule,$ers_rule
+    Probe = $ascs_healthprobe,$ers_healthprobe 
+} 
+$lb = New-AzLoadBalancer @loadbalancer
+
+# Add ASCS and ERS VMs in backend pool of load balancer
+ 
+$vm1_primaryip.LoadBalancerBackendAddressPools.Add($lb.BackendAddressPools[0])
+$vm2_primaryip.LoadBalancerBackendAddressPools.Add($lb.BackendAddressPools[0])
+$vm1_nic_info | Set-AzNetworkInterface
+$vm2_nic_info | Set-AzNetworkInterface
+Note
+When VMs without public IP addresses are placed in the back-end pool of an internal (no public IP address) Standard Azure load balancer, there will be no outbound internet connectivity unless you perform additional configuration to allow routing to public endpoints. For details on how to achieve outbound connectivity, seePublic endpoint connectivity for virtual machines using Azure Standard Load Balancer in SAP high-availability scenarios.
+Important
+Don't enable TCP time stamps on Azure VMs placed behind Azure Load Balancer. Enabling TCP timestamps will cause the health probes to fail. Set thenet.ipv4.tcp_timestampsparameter to0. For details, seeLoad Balancer health probes.
+net.ipv4.tcp_timestamps
+0
+To prevent saptune from changing the manually setnet.ipv4.tcp_timestampsvalue from0back to1, you should update saptune version to 3.1.1 or higher. For more information, seesaptune 3.1.1 â Do I Need to Update?.
+net.ipv4.tcp_timestamps
+0
+1
+Deploy NFS
+There are two options for deploying Azure native NFS to host the SAP shared directories. You can either deploy anNFS file share on Azure Filesor deploy anNFS volume on Azure NetApp Files. NFS on Azure Files supports the NFSv4.1 protocol. NFS on Azure NetApp Files supports both NFSv4.1 and NFSv3.
+The next sections describe the steps to deploy NFS. Select onlyoneof the options.
+Deploy an Azure Files storage account and NFS shares
+NFS on Azure Files runs on top ofAzure Files premium storage. Before you set up NFS on Azure Files, seeHow to create an NFS share.
+There are two options for redundancy within an Azure region:
+Locally redundant storage (LRS)offers local, in-zone synchronous data replication.
+Zone-redundant storage (ZRS)replicates your data synchronously across the threeavailability zonesin the region.
+Check if your selected Azure region offers NFSv4.1 on Azure Files with the appropriate redundancy. Review theavailability of Azure Files by Azure regionforPremium Files Storage. If your scenario benefits from ZRS,verify that premium file shares with ZRS are supported in your Azure region.
+We recommend that you access your Azure storage account through anAzure private endpoint. Be sure to deploy the Azure Files storage account endpoint, and the VMs where you need to mount the NFS shares, in the same Azure virtual network or in peered Azure virtual networks.
+Deploy an Azure Files storage account namedsapnfsafs. This example uses ZRS. If you're not familiar with the process, seeCreate a storage accountfor the Azure portal.
+On theBasicstab, use these settings:ForStorage account name, entersapnfsafs.ForPerformance, selectPremium.ForPremium account type, selectFileStorage.ForReplication, selectZone redundancy (ZRS).
+ForStorage account name, entersapnfsafs.
+ForPerformance, selectPremium.
+ForPremium account type, selectFileStorage.
+ForReplication, selectZone redundancy (ZRS).
+SelectNext.
+On theAdvancedtab, clearRequire secure transfer for REST API. If you don't clear this option, you can't mount the NFS share to your VM. The mount operation will time out.
+SelectNext.
+In theNetworkingsection, configure these settings:UnderNetworking connectivity, forConnectivity method, selectPrivate endpoint.UnderPrivate endpoint, selectAdd private endpoint.
+UnderNetworking connectivity, forConnectivity method, selectPrivate endpoint.
+UnderPrivate endpoint, selectAdd private endpoint.
+On theCreate private endpointpane, select your subscription, resource group, and location. Then make the following selections:ForName, entersapnfsafs_pe.ForStorage sub-resource, selectfile.UnderNetworking, forVirtual network, select the virtual network and subnet to use. Again, you can use either the virtual network where your SAP VMs are or a peered virtual network.UnderPrivate DNS integration, accept the default option ofYesforIntegrate with private DNS zone. Be sure to select your private DNS zone.SelectOK.
+ForName, entersapnfsafs_pe.
+ForStorage sub-resource, selectfile.
+UnderNetworking, forVirtual network, select the virtual network and subnet to use. Again, you can use either the virtual network where your SAP VMs are or a peered virtual network.
+UnderPrivate DNS integration, accept the default option ofYesforIntegrate with private DNS zone. Be sure to select your private DNS zone.
+SelectOK.
+On theNetworkingtab again, selectNext.
+On theData protectiontab, keep all the default settings.
+SelectReview + createto validate your configuration.
+Wait for the validation to finish. Fix any issues before continuing.
+On theReview + createtab, selectCreate.
+Next, deploy the NFS shares in the storage account that you created. In this example, there are two NFS shares,sapnw1andsaptrans.
+sapnw1
+saptrans
+Sign in to theAzure portal.
+Select or search forStorage accounts.
+On theStorage accountspage, selectsapnfsafs.
+On the resource menu forsapnfsafs, selectFile sharesunderData storage.
+On theFile sharespage, selectFile share, and then:ForName, entersapnw1,saptrans.Select an appropriate share size. Consider the size of the data stored on the share, I/O per second (IOPS), and throughput requirements. For more information, seeAzure file share targets.SelectNFSas the protocol.SelectNo root Squash.  Otherwise, when you mount the shares on your VMs, you can't see the file owner or group.
+ForName, entersapnw1,saptrans.
+Select an appropriate share size. Consider the size of the data stored on the share, I/O per second (IOPS), and throughput requirements. For more information, seeAzure file share targets.
+SelectNFSas the protocol.
+SelectNo root Squash.  Otherwise, when you mount the shares on your VMs, you can't see the file owner or group.
+The SAP file systems that don't need to be mounted via NFS can also be deployed onAzure disk storage. In this example, you can deploy/usr/sap/NW1/D02and/usr/sap/NW1/D03on Azure disk storage.
+/usr/sap/NW1/D02
+/usr/sap/NW1/D03
+When you plan your deployment with NFS on Azure Files, consider the following important points:
+The minimum share size is 100 GiB. You pay for only thecapacity of the provisioned shares.
+Size your NFS shares not only based on capacity requirements, but also on IOPS and throughput requirements. For details, seeAzure file share targets.
+Test the workload to validate your sizing and ensure that it meets your performance targets. To learn how to troubleshoot performance issues with NFS on Azure Files, consultTroubleshoot Azure file share performance.
+For SAP J2EE systems, placing/usr/sap/<SID>/J<nr>on NFS on Azure Files isn't supported.
+/usr/sap/<SID>/J<nr>
+If your SAP system has a heavy load of batch jobs, you might have millions of job logs. If the SAP batch job logs are stored in the file system, pay special attention to the sizing of thesapmntshare. As of SAP_BASIS 7.52, the default behavior for the batch job logs is to be stored in the database. For details, seeJob log in the database.
+sapmnt
+Deploy a separatesapmntshare for each SAP system.
+sapmnt
+Don't use thesapmntshare for any other activity, such as interfaces.
+sapmnt
+Don't use thesaptransshare for any other activity, such as interfaces.
+saptrans
+Avoid consolidating the shares for too many SAP systems in a single storage account. There are alsoscalability and performance targets for storage accounts. Be careful to not exceed the limits for the storage account, too.
+In general,  don't consolidate the shares for more thanfiveSAP systems in a single storage account. This guideline helps you avoid exceeding the storage account limits and simplifies performance analysis.
+In general, avoid mixing shares likesapmntfor nonproduction and production SAP systems in the same storage account.
+sapmnt
+We recommend that you deploy on SLES 15 SP2 or later to benefit fromNFS client improvements.
+Use a private endpoint. In the unlikely event of a zonal failure, your NFS sessions automatically redirect to a healthy zone. You don't have to remount the NFS shares on your VMs.
+If you're deploying your VMs across availability zones, use astorage account with ZRSin the Azure regions that supports ZRS.
+Azure Files doesn't currently support automatic cross-region replication for disaster recovery scenarios.
+Deploy Azure NetApp Files resources
+Check that the Azure NetApp Files service is available in yourAzure region of choice.
+Check that the Azure NetApp Files service is available in yourAzure region of choice.
+Create the NetApp account in the selected Azure region. Followthese instructions.
+Create the NetApp account in the selected Azure region. Followthese instructions.
+Set up the Azure NetApp Files capacity pool. Followthese instructions.The SAP NetWeaver architecture presented in this article uses a single Azure NetApp Files capacity pool, Premium SKU. We recommend Azure NetApp Files Premium SKU for SAP NetWeaver application workloads on Azure.
+Set up the Azure NetApp Files capacity pool. Followthese instructions.
+The SAP NetWeaver architecture presented in this article uses a single Azure NetApp Files capacity pool, Premium SKU. We recommend Azure NetApp Files Premium SKU for SAP NetWeaver application workloads on Azure.
+Delegate a subnet to Azure NetApp Files, as described inthese instructions.
+Delegate a subnet to Azure NetApp Files, as described inthese instructions.
+Deploy Azure NetApp Files volumes by followingthese instructions. Deploy the volumes in the designated Azure NetApp Filessubnet. The IP addresses of the Azure NetApp volumes are assigned automatically.Keep in mind that the Azure NetApp Files resources and the Azure VMs must be in the same Azure virtual network or in peered Azure virtual networks. This example uses two Azure NetApp Files volumes:sapnw1andtrans. The file paths that are mounted to the corresponding mount points are:Volumesapnw1(nfs://10.27.1.5/sapnw1/sapmntNW1)Volumesapnw1(nfs://10.27.1.5/sapnw1/usrsapNW1)Volumetrans(nfs://10.27.1.5/trans)
+Deploy Azure NetApp Files volumes by followingthese instructions. Deploy the volumes in the designated Azure NetApp Filessubnet. The IP addresses of the Azure NetApp volumes are assigned automatically.
+Keep in mind that the Azure NetApp Files resources and the Azure VMs must be in the same Azure virtual network or in peered Azure virtual networks. This example uses two Azure NetApp Files volumes:sapnw1andtrans. The file paths that are mounted to the corresponding mount points are:
+sapnw1
+trans
+Volumesapnw1(nfs://10.27.1.5/sapnw1/sapmntNW1)
+sapnw1
+nfs://10.27.1.5/sapnw1/sapmntNW1
+Volumesapnw1(nfs://10.27.1.5/sapnw1/usrsapNW1)
+sapnw1
+nfs://10.27.1.5/sapnw1/usrsapNW1
+Volumetrans(nfs://10.27.1.5/trans)
+trans
+nfs://10.27.1.5/trans
+The SAP file systems that don't need to be shared can also be deployed onAzure disk storage. For example,/usr/sap/NW1/D02and/usr/sap/NW1/D03could be deployed as Azure disk storage.
+/usr/sap/NW1/D02
+/usr/sap/NW1/D03
+When you're considering Azure NetApp Files for the SAP NetWeaver high-availability architecture, be aware of the following important considerations:
+The minimum capacity pool is 4 tebibytes (TiB). You can increase the size of the capacity pool in 1-TiB increments.
+The minimum volume is 100 GiB.
+Azure NetApp Files and all virtual machines where Azure NetApp Files volumes are mounted must be in the same Azure virtual network or inpeered virtual networksin the same region. Azure NetApp Files access over virtual network peering in the same region is supported. Azure NetApp Files access over global peering isn't yet supported.
+The selected virtual network must have a subnet that's delegated to Azure NetApp Files.
+The throughput and performance characteristics of an Azure NetApp Files volume is a function of the volume quota and service level, as documented inService level for Azure NetApp Files. When you're sizing the Azure NetApp Files volumes for SAP, make sure that the resulting throughput meets the application's requirements.
+Azure NetApp Files offers anexport policy. You can control the allowed clients and the access type (for example, read/write or read-only).
+Azure NetApp Files isn't zone aware yet. Currently, Azure NetApp Files isn't deployed in all availability zones in an Azure region. Be aware of the potential latency implications in some Azure regions.
+Azure NetApp Files volumes can be deployed as NFSv3 or NFSv4.1 volumes. Both protocols are supported for the SAP application layer (ASCS/ERS, SAP application servers).
+Set up ASCS
+Next, you'll prepare and install the SAP ASCS and ERS instances.
+Create a Pacemaker cluster
+Follow the steps inSetting up Pacemaker on SUSE Linux Enterprise Server in Azureto create a basic Pacemaker cluster for SAP ASCS.
+Prepare for installation
+The following items are prefixed with:
+[A]: Applicable to all nodes.
+[1]: Applicable to only node 1.
+[2]: Applicable to only node 2.
+[A]Install the latest version of the SUSE connector.sudo zypper install sap-suse-cluster-connector
+[A]Install the latest version of the SUSE connector.
+sudo zypper install sap-suse-cluster-connector
+sudo zypper install sap-suse-cluster-connector
+[A]Install thesapstartsrvresource agent.sudo zypper install sapstartsrv-resource-agents
+[A]Install thesapstartsrvresource agent.
+sapstartsrv
+sudo zypper install sapstartsrv-resource-agents
+sudo zypper install sapstartsrv-resource-agents
+[A]Update SAP resource agents.To use the configuration that this article describes, you need a patch for the resource-agents package. To check if the patch is already installed, use the following command.sudo grep 'parameter name="IS_ERS"' /usr/lib/ocf/resource.d/heartbeat/SAPInstanceThe output should be similar to the following example.<parameter name="IS_ERS" unique="0" required="0">;If thegrepcommand doesn't find theIS_ERSparameter, you need to install the patch listed onthe SUSE download page.ImportantYou need to install at leastsapstartsrv-resource-agentsversion 0.91 andresource-agents4.x from November 2021.
+[A]Update SAP resource agents.
+To use the configuration that this article describes, you need a patch for the resource-agents package. To check if the patch is already installed, use the following command.
+sudo grep 'parameter name="IS_ERS"' /usr/lib/ocf/resource.d/heartbeat/SAPInstance
+sudo grep 'parameter name="IS_ERS"' /usr/lib/ocf/resource.d/heartbeat/SAPInstance
+The output should be similar to the following example.
+<parameter name="IS_ERS" unique="0" required="0">;
+<parameter name="IS_ERS" unique="0" required="0">;
+If thegrepcommand doesn't find theIS_ERSparameter, you need to install the patch listed onthe SUSE download page.
+grep
+IS_ERS
+Important
+You need to install at leastsapstartsrv-resource-agentsversion 0.91 andresource-agents4.x from November 2021.
+sapstartsrv-resource-agents
+resource-agents
+[A]Set up host name resolution.You can either use a DNS server or modify/etc/hostson all nodes. This example shows how to use the/etc/hostsfile.sudo vi /etc/hostsInsert the following lines to/etc/hosts. Change the IP address and host name to match your environment.# IP address of cluster node 1
+ 10.27.0.6    sap-cl1
+ # IP address of cluster node 2
+ 10.27.0.7     sap-cl2
+ # IP address of the load balancer's front-end configuration for SAP NetWeaver ASCS
+ 10.27.0.9   sapascs
+ # IP address of the load balancer's front-end configuration for SAP NetWeaver ERS
+ 10.27.0.10    sapers
+[A]Set up host name resolution.
+You can either use a DNS server or modify/etc/hostson all nodes. This example shows how to use the/etc/hostsfile.
+/etc/hosts
+/etc/hosts
+sudo vi /etc/hosts
+sudo vi /etc/hosts
+Insert the following lines to/etc/hosts. Change the IP address and host name to match your environment.
+/etc/hosts
+# IP address of cluster node 1
+ 10.27.0.6    sap-cl1
+ # IP address of cluster node 2
+ 10.27.0.7     sap-cl2
+ # IP address of the load balancer's front-end configuration for SAP NetWeaver ASCS
+ 10.27.0.9   sapascs
+ # IP address of the load balancer's front-end configuration for SAP NetWeaver ERS
+ 10.27.0.10    sapers
+# IP address of cluster node 1
+ 10.27.0.6    sap-cl1
+ # IP address of cluster node 2
+ 10.27.0.7     sap-cl2
+ # IP address of the load balancer's front-end configuration for SAP NetWeaver ASCS
+ 10.27.0.9   sapascs
+ # IP address of the load balancer's front-end configuration for SAP NetWeaver ERS
+ 10.27.0.10    sapers
+[A]Configure the SWAP file.sudo vi /etc/waagent.conf
+
+# Check if the ResourceDisk.Format property is already set to y, and if not, set it.
+ResourceDisk.Format=y
+
+# Set the ResourceDisk.EnableSwap property to y.
+# Create and use the SWAP file on the resource disk.
+ResourceDisk.EnableSwap=y
+
+# Set the size of the SWAP file with the ResourceDisk.SwapSizeMB property.
+# The free space of resource disk varies by virtual machine size. Don't set a value that's too big. You can check the SWAP space by using the swapon command.
+ResourceDisk.SwapSizeMB=2000Restart the agent to activate the change.sudo service waagent restart
+[A]Configure the SWAP file.
+sudo vi /etc/waagent.conf
+
+# Check if the ResourceDisk.Format property is already set to y, and if not, set it.
+ResourceDisk.Format=y
+
+# Set the ResourceDisk.EnableSwap property to y.
+# Create and use the SWAP file on the resource disk.
+ResourceDisk.EnableSwap=y
+
+# Set the size of the SWAP file with the ResourceDisk.SwapSizeMB property.
+# The free space of resource disk varies by virtual machine size. Don't set a value that's too big. You can check the SWAP space by using the swapon command.
+ResourceDisk.SwapSizeMB=2000
+sudo vi /etc/waagent.conf
+
+# Check if the ResourceDisk.Format property is already set to y, and if not, set it.
+ResourceDisk.Format=y
+
+# Set the ResourceDisk.EnableSwap property to y.
+# Create and use the SWAP file on the resource disk.
+ResourceDisk.EnableSwap=y
+
+# Set the size of the SWAP file with the ResourceDisk.SwapSizeMB property.
+# The free space of resource disk varies by virtual machine size. Don't set a value that's too big. You can check the SWAP space by using the swapon command.
+ResourceDisk.SwapSizeMB=2000
+Restart the agent to activate the change.
+sudo service waagent restart
+sudo service waagent restart
+Prepare SAP directories if you're using NFS on Azure Files
+[1]Create the SAP directories on the NFS share.Temporarily mount the NFS sharesapnw1to one of the VMs and create the SAP directories that will be used as nested mount points.# Temporarily mount the volume.
+sudo mkdir -p /saptmp
+sudo mount -t nfs sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1 /saptmp -o noresvport,vers=4,minorversion=1,sec=sys
+# Create the SAP directories.
+sudo cd /saptmp
+sudo mkdir -p sapmntNW1
+sudo mkdir -p usrsapNW1
+# Unmount the volume and delete the temporary directory.
+cd ..
+sudo umount /saptmp
+sudo rmdir /saptmp
+[1]Create the SAP directories on the NFS share.
+Temporarily mount the NFS sharesapnw1to one of the VMs and create the SAP directories that will be used as nested mount points.
+sapnw1
+# Temporarily mount the volume.
+sudo mkdir -p /saptmp
+sudo mount -t nfs sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1 /saptmp -o noresvport,vers=4,minorversion=1,sec=sys
+# Create the SAP directories.
+sudo cd /saptmp
+sudo mkdir -p sapmntNW1
+sudo mkdir -p usrsapNW1
+# Unmount the volume and delete the temporary directory.
+cd ..
+sudo umount /saptmp
+sudo rmdir /saptmp
+# Temporarily mount the volume.
+sudo mkdir -p /saptmp
+sudo mount -t nfs sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1 /saptmp -o noresvport,vers=4,minorversion=1,sec=sys
+# Create the SAP directories.
+sudo cd /saptmp
+sudo mkdir -p sapmntNW1
+sudo mkdir -p usrsapNW1
+# Unmount the volume and delete the temporary directory.
+cd ..
+sudo umount /saptmp
+sudo rmdir /saptmp
+[A]Create the shared directories.sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/NW1
+sudo chattr +i /usr/sap/trans
+[A]Create the shared directories.
+sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/NW1
+sudo chattr +i /usr/sap/trans
+sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/NW1
+sudo chattr +i /usr/sap/trans
+[A]Mount the file systems.With the simple mount configuration, the Pacemaker cluster doesn't control the file systems.echo "sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1/sapmntNW1 /sapmnt/NW1 nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1/usrsapNW1/ /usr/sap/NW1 nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/saptrans /usr/sap/trans nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab   
+# Mount the file systems.
+mount -a
+[A]Mount the file systems.
+With the simple mount configuration, the Pacemaker cluster doesn't control the file systems.
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1/sapmntNW1 /sapmnt/NW1 nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1/usrsapNW1/ /usr/sap/NW1 nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/saptrans /usr/sap/trans nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab   
+# Mount the file systems.
+mount -a
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1/sapmntNW1 /sapmnt/NW1 nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1/usrsapNW1/ /usr/sap/NW1 nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/saptrans /usr/sap/trans nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab   
+# Mount the file systems.
+mount -a
+Prepare SAP directories if you're using NFS on Azure NetApp Files
+The instructions in this section are applicable only if you're using Azure NetApp Files volumes with the NFSv4.1 protocol. Perform the configuration on all VMs where Azure NetApp Files NFSv4.1 volumes will be mounted.
+[A]Disable ID mapping.Verify the NFS domain setting. Make sure that the domain is configured as the default Azure NetApp Files domain,defaultv4iddomain.com. Also verify that the mapping is set tonobody.sudo cat /etc/idmapd.conf
+# Examplepython-azure-mgmt-compute
+[General]
+Verbosity = 0
+Pipefs-Directory = /var/lib/nfs/rpc_pipefs
+Domain = defaultv4iddomain.com
+[Mapping]
+Nobody-User = nobody
+Nobody-Group = nobodyVerifynfs4_disable_idmapping. It should be set toY.To create the directory structure wherenfs4_disable_idmappingis located, run themountcommand. You won't be able to manually create the directory under/sys/modules, because access is reserved for the kernel and drivers.# Check nfs4_disable_idmapping. 
+cat /sys/module/nfs/parameters/nfs4_disable_idmapping
+# If you need to set nfs4_disable_idmapping to Y:
+mkdir /mnt/tmp
+mount 10.27.1.5:/sapnw1 /mnt/tmp
+umount  /mnt/tmp
+echo "Y" > /sys/module/nfs/parameters/nfs4_disable_idmapping
+# Make the configuration permanent.
+echo "options nfs nfs4_disable_idmapping=Y" >> /etc/modprobe.d/nfs.conf
+[A]Disable ID mapping.
+Verify the NFS domain setting. Make sure that the domain is configured as the default Azure NetApp Files domain,defaultv4iddomain.com. Also verify that the mapping is set tonobody.sudo cat /etc/idmapd.conf
+# Examplepython-azure-mgmt-compute
+[General]
+Verbosity = 0
+Pipefs-Directory = /var/lib/nfs/rpc_pipefs
+Domain = defaultv4iddomain.com
+[Mapping]
+Nobody-User = nobody
+Nobody-Group = nobody
+Verify the NFS domain setting. Make sure that the domain is configured as the default Azure NetApp Files domain,defaultv4iddomain.com. Also verify that the mapping is set tonobody.
+defaultv4iddomain.com
+nobody
+sudo cat /etc/idmapd.conf
+# Examplepython-azure-mgmt-compute
+[General]
+Verbosity = 0
+Pipefs-Directory = /var/lib/nfs/rpc_pipefs
+Domain = defaultv4iddomain.com
+[Mapping]
+Nobody-User = nobody
+Nobody-Group = nobody
+sudo cat /etc/idmapd.conf
+# Examplepython-azure-mgmt-compute
+[General]
+Verbosity = 0
+Pipefs-Directory = /var/lib/nfs/rpc_pipefs
+Domain = defaultv4iddomain.com
+[Mapping]
+Nobody-User = nobody
+Nobody-Group = nobody
+Verifynfs4_disable_idmapping. It should be set toY.To create the directory structure wherenfs4_disable_idmappingis located, run themountcommand. You won't be able to manually create the directory under/sys/modules, because access is reserved for the kernel and drivers.# Check nfs4_disable_idmapping. 
+cat /sys/module/nfs/parameters/nfs4_disable_idmapping
+# If you need to set nfs4_disable_idmapping to Y:
+mkdir /mnt/tmp
+mount 10.27.1.5:/sapnw1 /mnt/tmp
+umount  /mnt/tmp
+echo "Y" > /sys/module/nfs/parameters/nfs4_disable_idmapping
+# Make the configuration permanent.
+echo "options nfs nfs4_disable_idmapping=Y" >> /etc/modprobe.d/nfs.conf
+Verifynfs4_disable_idmapping. It should be set toY.
+nfs4_disable_idmapping
+Y
+To create the directory structure wherenfs4_disable_idmappingis located, run themountcommand. You won't be able to manually create the directory under/sys/modules, because access is reserved for the kernel and drivers.
+nfs4_disable_idmapping
+mount
+/sys/modules
+# Check nfs4_disable_idmapping. 
+cat /sys/module/nfs/parameters/nfs4_disable_idmapping
+# If you need to set nfs4_disable_idmapping to Y:
+mkdir /mnt/tmp
+mount 10.27.1.5:/sapnw1 /mnt/tmp
+umount  /mnt/tmp
+echo "Y" > /sys/module/nfs/parameters/nfs4_disable_idmapping
+# Make the configuration permanent.
+echo "options nfs nfs4_disable_idmapping=Y" >> /etc/modprobe.d/nfs.conf
+# Check nfs4_disable_idmapping. 
+cat /sys/module/nfs/parameters/nfs4_disable_idmapping
+# If you need to set nfs4_disable_idmapping to Y:
+mkdir /mnt/tmp
+mount 10.27.1.5:/sapnw1 /mnt/tmp
+umount  /mnt/tmp
+echo "Y" > /sys/module/nfs/parameters/nfs4_disable_idmapping
+# Make the configuration permanent.
+echo "options nfs nfs4_disable_idmapping=Y" >> /etc/modprobe.d/nfs.conf
+[1]Temporarily mount the Azure NetApp Files volume on one of the VMs and create the SAP directories (file paths).# Temporarily mount the volume.
+sudo mkdir -p /saptmp
+# If you're using NFSv3:
+sudo mount -t nfs -o rw,hard,rsize=65536,wsize=65536,nfsvers=3,tcp 10.27.1.5:/sapnw1 /saptmp
+# If you're using NFSv4.1:
+sudo mount -t nfs -o rw,hard,rsize=65536,wsize=65536,nfsvers=4.1,sec=sys,tcp 10.27.1.5:/sapnw1 /saptmp
+# Create the SAP directories.
+sudo cd /saptmp
+sudo mkdir -p sapmntNW1
+sudo mkdir -p usrsapNW1
+# Unmount the volume and delete the temporary directory.
+sudo cd ..
+sudo umount /saptmp
+sudo rmdir /saptmp
+[1]Temporarily mount the Azure NetApp Files volume on one of the VMs and create the SAP directories (file paths).
+# Temporarily mount the volume.
+sudo mkdir -p /saptmp
+# If you're using NFSv3:
+sudo mount -t nfs -o rw,hard,rsize=65536,wsize=65536,nfsvers=3,tcp 10.27.1.5:/sapnw1 /saptmp
+# If you're using NFSv4.1:
+sudo mount -t nfs -o rw,hard,rsize=65536,wsize=65536,nfsvers=4.1,sec=sys,tcp 10.27.1.5:/sapnw1 /saptmp
+# Create the SAP directories.
+sudo cd /saptmp
+sudo mkdir -p sapmntNW1
+sudo mkdir -p usrsapNW1
+# Unmount the volume and delete the temporary directory.
+sudo cd ..
+sudo umount /saptmp
+sudo rmdir /saptmp
+# Temporarily mount the volume.
+sudo mkdir -p /saptmp
+# If you're using NFSv3:
+sudo mount -t nfs -o rw,hard,rsize=65536,wsize=65536,nfsvers=3,tcp 10.27.1.5:/sapnw1 /saptmp
+# If you're using NFSv4.1:
+sudo mount -t nfs -o rw,hard,rsize=65536,wsize=65536,nfsvers=4.1,sec=sys,tcp 10.27.1.5:/sapnw1 /saptmp
+# Create the SAP directories.
+sudo cd /saptmp
+sudo mkdir -p sapmntNW1
+sudo mkdir -p usrsapNW1
+# Unmount the volume and delete the temporary directory.
+sudo cd ..
+sudo umount /saptmp
+sudo rmdir /saptmp
+[A]Create the shared directories.sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/NW1
+sudo chattr +i /usr/sap/trans
+[A]Create the shared directories.
+sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/NW1
+sudo chattr +i /usr/sap/trans
+sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/NW1
+sudo chattr +i /usr/sap/trans
+[A]Mount the file systems.With the simple mount configuration, the Pacemaker cluster doesn't control the file systems.# If you're using NFSv3:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=3,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/sapnw1/usrsapNW1 /usr/sap/NW1 nfs nfsvers=3,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=3,hard 0 0" >> /etc/fstab
+# If you're using NFSv4.1:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/sapnw1/usrsapNW1 /usr/sap/NW1 nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+# Mount the file systems.
+mount -a
+[A]Mount the file systems.
+With the simple mount configuration, the Pacemaker cluster doesn't control the file systems.
+# If you're using NFSv3:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=3,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/sapnw1/usrsapNW1 /usr/sap/NW1 nfs nfsvers=3,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=3,hard 0 0" >> /etc/fstab
+# If you're using NFSv4.1:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/sapnw1/usrsapNW1 /usr/sap/NW1 nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+# Mount the file systems.
+mount -a
+# If you're using NFSv3:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=3,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/sapnw1/usrsapNW1 /usr/sap/NW1 nfs nfsvers=3,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=3,hard 0 0" >> /etc/fstab
+# If you're using NFSv4.1:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/sapnw1/usrsapNW1 /usr/sap/NW1 nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+# Mount the file systems.
+mount -a
+Install SAP NetWeaver ASCS and ERS
+[1]Create a virtual IP resource and health probe for the ASCS instance.ImportantWe recommend using theazure-lbresource agent, which is part of the resource-agents package with a minimum version ofresource-agents-4.3.0184.6ee15eb2-4.13.1.sudo crm node standby sap-cl2   
+sudo crm configure primitive vip_NW1_ASCS IPaddr2 \
+  params ip=10.27.0.9 \
+  op monitor interval=10 timeout=20
+
+sudo crm configure primitive nc_NW1_ASCS azure-lb port=62000 \
+  op monitor timeout=20s interval=10
+
+sudo crm configure group g-NW1_ASCS nc_NW1_ASCS vip_NW1_ASCS \
+  meta resource-stickiness=3000Make sure that the cluster status is OK and that all resources are started. It isn't important which node the resources are running on.sudo crm_mon -r
+# Node sap-cl2: standby
+# Online: [ sap-cl1 ]
+#
+# Full list of resources:
+#
+# stonith-sbd     (stonith:external/sbd): Started sap-cl1
+# Resource Group: g-NW1_ASCS
+#  nc_NW1_ASCS        (ocf::heartbeat:azure-lb):      Started sap-cl1
+#  vip_NW1_ASCS       (ocf::heartbeat:IPaddr2):       Started sap-cl1
+[1]Create a virtual IP resource and health probe for the ASCS instance.
+Important
+We recommend using theazure-lbresource agent, which is part of the resource-agents package with a minimum version ofresource-agents-4.3.0184.6ee15eb2-4.13.1.
+azure-lb
+resource-agents-4.3.0184.6ee15eb2-4.13.1
+sudo crm node standby sap-cl2   
+sudo crm configure primitive vip_NW1_ASCS IPaddr2 \
+  params ip=10.27.0.9 \
+  op monitor interval=10 timeout=20
+
+sudo crm configure primitive nc_NW1_ASCS azure-lb port=62000 \
+  op monitor timeout=20s interval=10
+
+sudo crm configure group g-NW1_ASCS nc_NW1_ASCS vip_NW1_ASCS \
+  meta resource-stickiness=3000
+sudo crm node standby sap-cl2   
+sudo crm configure primitive vip_NW1_ASCS IPaddr2 \
+  params ip=10.27.0.9 \
+  op monitor interval=10 timeout=20
+
+sudo crm configure primitive nc_NW1_ASCS azure-lb port=62000 \
+  op monitor timeout=20s interval=10
+
+sudo crm configure group g-NW1_ASCS nc_NW1_ASCS vip_NW1_ASCS \
+  meta resource-stickiness=3000
+Make sure that the cluster status is OK and that all resources are started. It isn't important which node the resources are running on.
+sudo crm_mon -r
+# Node sap-cl2: standby
+# Online: [ sap-cl1 ]
+#
+# Full list of resources:
+#
+# stonith-sbd     (stonith:external/sbd): Started sap-cl1
+# Resource Group: g-NW1_ASCS
+#  nc_NW1_ASCS        (ocf::heartbeat:azure-lb):      Started sap-cl1
+#  vip_NW1_ASCS       (ocf::heartbeat:IPaddr2):       Started sap-cl1
+sudo crm_mon -r
+# Node sap-cl2: standby
+# Online: [ sap-cl1 ]
+#
+# Full list of resources:
+#
+# stonith-sbd     (stonith:external/sbd): Started sap-cl1
+# Resource Group: g-NW1_ASCS
+#  nc_NW1_ASCS        (ocf::heartbeat:azure-lb):      Started sap-cl1
+#  vip_NW1_ASCS       (ocf::heartbeat:IPaddr2):       Started sap-cl1
+[1]Install SAP NetWeaver ASCS as root on the first node.Use a virtual host name that maps to the IP address of the load balancer's front-end configuration for ASCS (for example,sapascs,10.27.0.9) and the instance number that you used for the probe of the load balancer (for example,00).You can use thesapinstparameterSAPINST_REMOTE_ACCESS_USERto allow a non-root user to connect tosapinst. You can use theSAPINST_USE_HOSTNAMEparameter to install SAP by using a virtual host name.sudo <swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin SAPINST_USE_HOSTNAME=<virtual_hostname>If the installation fails to create a subfolder in/usr/sap/NW1/ASCS00, set the owner and group of theASCS00folder and retry.chown nw1adm /usr/sap/NW1/ASCS00
+chgrp sapsys /usr/sap/NW1/ASCS00
+[1]Install SAP NetWeaver ASCS as root on the first node.
+Use a virtual host name that maps to the IP address of the load balancer's front-end configuration for ASCS (for example,sapascs,10.27.0.9) and the instance number that you used for the probe of the load balancer (for example,00).
+sapascs
+10.27.0.9
+00
+You can use thesapinstparameterSAPINST_REMOTE_ACCESS_USERto allow a non-root user to connect tosapinst. You can use theSAPINST_USE_HOSTNAMEparameter to install SAP by using a virtual host name.
+sapinst
+SAPINST_REMOTE_ACCESS_USER
+sapinst
+SAPINST_USE_HOSTNAME
+sudo <swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin SAPINST_USE_HOSTNAME=<virtual_hostname>
+sudo <swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin SAPINST_USE_HOSTNAME=<virtual_hostname>
+If the installation fails to create a subfolder in/usr/sap/NW1/ASCS00, set the owner and group of theASCS00folder and retry.
+/usr/sap/NW1/ASCS00
+ASCS00
+chown nw1adm /usr/sap/NW1/ASCS00
+chgrp sapsys /usr/sap/NW1/ASCS00
+chown nw1adm /usr/sap/NW1/ASCS00
+chgrp sapsys /usr/sap/NW1/ASCS00
+[1]Create a virtual IP resource and health probe for the ERS instance.sudo crm node online sap-cl2
+sudo crm node standby sap-cl1
+
+sudo crm configure primitive vip_NW1_ERS IPaddr2 \
+  params ip=10.27.0.10 \
+  op monitor interval=10 timeout=20
+
+sudo crm configure primitive nc_NW1_ERS azure-lb port=62101 \
+  op monitor timeout=20s interval=10
+
+sudo crm configure group g-NW1_ERS nc_NW1_ERS vip_NW1_ERSMake sure that the cluster status is OK and that all resources are started. It isn't important which node the resources are running on.sudo crm_mon -r
+
+# Node sap-cl1: standby
+# Online: [ sap-cl2 ]
+# 
+# Full list of resources:
+#
+# stonith-sbd     (stonith:external/sbd): Started sap-cl2
+#  Resource Group: g-NW1_ASCS
+#      nc_NW1_ASCS        (ocf::heartbeat:azure-lb):      Started sap-cl2
+#      vip_NW1_ASCS       (ocf::heartbeat:IPaddr2):       Started sap-cl2
+#  Resource Group: g-NW1_ERS
+#      nc_NW1_ERS (ocf::heartbeat:azure-lb):      Started sap-cl2
+#      vip_NW1_ERS  (ocf::heartbeat:IPaddr2):     Started sap-cl2
+[1]Create a virtual IP resource and health probe for the ERS instance.
+sudo crm node online sap-cl2
+sudo crm node standby sap-cl1
+
+sudo crm configure primitive vip_NW1_ERS IPaddr2 \
+  params ip=10.27.0.10 \
+  op monitor interval=10 timeout=20
+
+sudo crm configure primitive nc_NW1_ERS azure-lb port=62101 \
+  op monitor timeout=20s interval=10
+
+sudo crm configure group g-NW1_ERS nc_NW1_ERS vip_NW1_ERS
+sudo crm node online sap-cl2
+sudo crm node standby sap-cl1
+
+sudo crm configure primitive vip_NW1_ERS IPaddr2 \
+  params ip=10.27.0.10 \
+  op monitor interval=10 timeout=20
+
+sudo crm configure primitive nc_NW1_ERS azure-lb port=62101 \
+  op monitor timeout=20s interval=10
+
+sudo crm configure group g-NW1_ERS nc_NW1_ERS vip_NW1_ERS
+Make sure that the cluster status is OK and that all resources are started. It isn't important which node the resources are running on.
+sudo crm_mon -r
+
+# Node sap-cl1: standby
+# Online: [ sap-cl2 ]
+# 
+# Full list of resources:
+#
+# stonith-sbd     (stonith:external/sbd): Started sap-cl2
+#  Resource Group: g-NW1_ASCS
+#      nc_NW1_ASCS        (ocf::heartbeat:azure-lb):      Started sap-cl2
+#      vip_NW1_ASCS       (ocf::heartbeat:IPaddr2):       Started sap-cl2
+#  Resource Group: g-NW1_ERS
+#      nc_NW1_ERS (ocf::heartbeat:azure-lb):      Started sap-cl2
+#      vip_NW1_ERS  (ocf::heartbeat:IPaddr2):     Started sap-cl2
+sudo crm_mon -r
+
+# Node sap-cl1: standby
+# Online: [ sap-cl2 ]
+# 
+# Full list of resources:
+#
+# stonith-sbd     (stonith:external/sbd): Started sap-cl2
+#  Resource Group: g-NW1_ASCS
+#      nc_NW1_ASCS        (ocf::heartbeat:azure-lb):      Started sap-cl2
+#      vip_NW1_ASCS       (ocf::heartbeat:IPaddr2):       Started sap-cl2
+#  Resource Group: g-NW1_ERS
+#      nc_NW1_ERS (ocf::heartbeat:azure-lb):      Started sap-cl2
+#      vip_NW1_ERS  (ocf::heartbeat:IPaddr2):     Started sap-cl2
+[2]Install SAP NetWeaver ERS as root on the second node.Use a virtual host name that maps to the IP address of the load balancer's front-end configuration for ERS (for example,sapers,10.27.0.10) and the instance number that you used for the probe of the load balancer (for example,01).You can use theSAPINST_REMOTE_ACCESS_USERparameter to allow a non-root user to connect tosapinst. You can use theSAPINST_USE_HOSTNAMEparameter to install SAP by using a virtual host name.<swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin SAPINST_USE_HOSTNAME=virtual_hostnameNoteUse SWPM SP 20 PL 05 or later. Earlier versions don't set the permissions correctly, and they cause the installation to fail.If the installation fails to create a subfolder in/usr/sap/NW1/ERS01, set the owner and group of theERS01folder and retry.chown nw1adm /usr/sap/NW1/ERS01
+chgrp sapsys /usr/sap/NW1/ERS01
+[2]Install SAP NetWeaver ERS as root on the second node.
+Use a virtual host name that maps to the IP address of the load balancer's front-end configuration for ERS (for example,sapers,10.27.0.10) and the instance number that you used for the probe of the load balancer (for example,01).
+sapers
+10.27.0.10
+01
+You can use theSAPINST_REMOTE_ACCESS_USERparameter to allow a non-root user to connect tosapinst. You can use theSAPINST_USE_HOSTNAMEparameter to install SAP by using a virtual host name.
+SAPINST_REMOTE_ACCESS_USER
+sapinst
+SAPINST_USE_HOSTNAME
+<swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin SAPINST_USE_HOSTNAME=virtual_hostname
+<swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin SAPINST_USE_HOSTNAME=virtual_hostname
+Note
+Use SWPM SP 20 PL 05 or later. Earlier versions don't set the permissions correctly, and they cause the installation to fail.
+If the installation fails to create a subfolder in/usr/sap/NW1/ERS01, set the owner and group of theERS01folder and retry.
+/usr/sap/NW1/ERS01
+ERS01
+chown nw1adm /usr/sap/NW1/ERS01
+chgrp sapsys /usr/sap/NW1/ERS01
+chown nw1adm /usr/sap/NW1/ERS01
+chgrp sapsys /usr/sap/NW1/ERS01
+[1]Adapt the ASCS instance profile.sudo vi /sapmnt/NW1/profile/NW1_ASCS00_sapascs
+
+# Change the restart command to a start command.
+# Restart_Program_01 = local $(_EN) pf=$(_PF).
+Start_Program_01 = local $(_EN) pf=$(_PF)
+
+# Add the following lines.
+service/halib = $(DIR_EXECUTABLE)/saphascriptco.so
+service/halib_cluster_connector = /usr/bin/sap_suse_cluster_connector
+
+# Add the keepalive parameter, if you're using ENSA1.
+enque/encni/set_so_keepalive = TRUEFor Standalone Enqueue Server 1 and 2 (ENSA1 and ENSA2), make sure that thekeepaliveOS parameters are set as described in SAP Note1410736.Now adapt the ERS instance profile.sudo vi /sapmnt/NW1/profile/NW1_ERS01_sapers
+
+# Change the restart command to a start command.
+# Restart_Program_00 = local $(_ER) pf=$(_PFL) NR=$(SCSID).
+Start_Program_00 = local $(_ER) pf=$(_PFL) NR=$(SCSID)
+
+# Add the following lines.
+service/halib = $(DIR_EXECUTABLE)/saphascriptco.so
+service/halib_cluster_connector = /usr/bin/sap_suse_cluster_connector
+
+# Remove Autostart from the ERS profile.
+# Autostart = 1
+[1]Adapt the ASCS instance profile.
+sudo vi /sapmnt/NW1/profile/NW1_ASCS00_sapascs
+
+# Change the restart command to a start command.
+# Restart_Program_01 = local $(_EN) pf=$(_PF).
+Start_Program_01 = local $(_EN) pf=$(_PF)
+
+# Add the following lines.
+service/halib = $(DIR_EXECUTABLE)/saphascriptco.so
+service/halib_cluster_connector = /usr/bin/sap_suse_cluster_connector
+
+# Add the keepalive parameter, if you're using ENSA1.
+enque/encni/set_so_keepalive = TRUE
+sudo vi /sapmnt/NW1/profile/NW1_ASCS00_sapascs
+
+# Change the restart command to a start command.
+# Restart_Program_01 = local $(_EN) pf=$(_PF).
+Start_Program_01 = local $(_EN) pf=$(_PF)
+
+# Add the following lines.
+service/halib = $(DIR_EXECUTABLE)/saphascriptco.so
+service/halib_cluster_connector = /usr/bin/sap_suse_cluster_connector
+
+# Add the keepalive parameter, if you're using ENSA1.
+enque/encni/set_so_keepalive = TRUE
+For Standalone Enqueue Server 1 and 2 (ENSA1 and ENSA2), make sure that thekeepaliveOS parameters are set as described in SAP Note1410736.
+keepalive
+Now adapt the ERS instance profile.
+sudo vi /sapmnt/NW1/profile/NW1_ERS01_sapers
+
+# Change the restart command to a start command.
+# Restart_Program_00 = local $(_ER) pf=$(_PFL) NR=$(SCSID).
+Start_Program_00 = local $(_ER) pf=$(_PFL) NR=$(SCSID)
+
+# Add the following lines.
+service/halib = $(DIR_EXECUTABLE)/saphascriptco.so
+service/halib_cluster_connector = /usr/bin/sap_suse_cluster_connector
+
+# Remove Autostart from the ERS profile.
+# Autostart = 1
+sudo vi /sapmnt/NW1/profile/NW1_ERS01_sapers
+
+# Change the restart command to a start command.
+# Restart_Program_00 = local $(_ER) pf=$(_PFL) NR=$(SCSID).
+Start_Program_00 = local $(_ER) pf=$(_PFL) NR=$(SCSID)
+
+# Add the following lines.
+service/halib = $(DIR_EXECUTABLE)/saphascriptco.so
+service/halib_cluster_connector = /usr/bin/sap_suse_cluster_connector
+
+# Remove Autostart from the ERS profile.
+# Autostart = 1
+[A]Configurekeepalive.Communication between the SAP NetWeaver application server and ASCS is routed through a software load balancer. The load balancer disconnects inactive connections after a configurable timeout.To prevent this disconnection, you need to set a parameter in the SAP NetWeaver ASCS profile, if you're using ENSA1. Change the Linux systemkeepalivesettings on all SAP servers for both ENSA1 and ENSA2. For more information, read SAP Note1410736.# Change the Linux system configuration.
+sudo sysctl net.ipv4.tcp_keepalive_time=300
+[A]Configurekeepalive.
+keepalive
+Communication between the SAP NetWeaver application server and ASCS is routed through a software load balancer. The load balancer disconnects inactive connections after a configurable timeout.
+To prevent this disconnection, you need to set a parameter in the SAP NetWeaver ASCS profile, if you're using ENSA1. Change the Linux systemkeepalivesettings on all SAP servers for both ENSA1 and ENSA2. For more information, read SAP Note1410736.
+keepalive
+# Change the Linux system configuration.
+sudo sysctl net.ipv4.tcp_keepalive_time=300
+# Change the Linux system configuration.
+sudo sysctl net.ipv4.tcp_keepalive_time=300
+[A]Configure the SAP users after the installation.# Add sidadm to the haclient group.
+sudo usermod -aG haclient nw1adm
+[A]Configure the SAP users after the installation.
+# Add sidadm to the haclient group.
+sudo usermod -aG haclient nw1adm
+# Add sidadm to the haclient group.
+sudo usermod -aG haclient nw1adm
+[1]Add the ASCS and ERS SAP services to thesapservicefile.Add the ASCS service entry to the second node, and copy the ERS service entry to the first node.cat /usr/sap/sapservices | grep ASCS00 | sudo ssh sap-cl2 "cat >>/usr/sap/sapservices"
+sudo ssh sap-cl2 "cat /usr/sap/sapservices" | grep ERS01 | sudo tee -a /usr/sap/sapservices
+[1]Add the ASCS and ERS SAP services to thesapservicefile.
+sapservice
+Add the ASCS service entry to the second node, and copy the ERS service entry to the first node.
+cat /usr/sap/sapservices | grep ASCS00 | sudo ssh sap-cl2 "cat >>/usr/sap/sapservices"
+sudo ssh sap-cl2 "cat /usr/sap/sapservices" | grep ERS01 | sudo tee -a /usr/sap/sapservices
+cat /usr/sap/sapservices | grep ASCS00 | sudo ssh sap-cl2 "cat >>/usr/sap/sapservices"
+sudo ssh sap-cl2 "cat /usr/sap/sapservices" | grep ERS01 | sudo tee -a /usr/sap/sapservices
+[A]Disablingsystemdservices of the ASCS and ERS SAP instance. This step is only applicable, if SAP startup framework is managed by systemd as per SAP Note3115048NoteWhen managing SAP instances like SAP ASCS and SAP ERS using SLES cluster configuration, you would need to make additional modifications to integrate the cluster with the native systemd-based SAP start framework. This ensures that maintenance procedures do no compromise cluster stability. After installation or switching SAP startup framework to systemd-enabled setup as per SAP Note3115048, you should disable thesystemdservices for the ASCS and ERS SAP instances.# Stop ASCS and ERS instances using <sid>adm
+sapcontrol -nr 00 -function Stop
+sapcontrol -nr 00 -function StopService
+
+sapcontrol -nr 01 -function Stop
+sapcontrol -nr 01 -function StopService
+
+# Execute below command on VM where you have performed ASCS instance installation (e.g. sap-cl1)
+sudo systemctl disable SAPNW1_00
+# Execute below command on VM where you have performed ERS instance installation (e.g. sap-cl2)
+sudo systemctl disable SAPNW1_01
+[A]Disablingsystemdservices of the ASCS and ERS SAP instance. This step is only applicable, if SAP startup framework is managed by systemd as per SAP Note3115048
+systemd
+Note
+When managing SAP instances like SAP ASCS and SAP ERS using SLES cluster configuration, you would need to make additional modifications to integrate the cluster with the native systemd-based SAP start framework. This ensures that maintenance procedures do no compromise cluster stability. After installation or switching SAP startup framework to systemd-enabled setup as per SAP Note3115048, you should disable thesystemdservices for the ASCS and ERS SAP instances.
+systemd
+# Stop ASCS and ERS instances using <sid>adm
+sapcontrol -nr 00 -function Stop
+sapcontrol -nr 00 -function StopService
+
+sapcontrol -nr 01 -function Stop
+sapcontrol -nr 01 -function StopService
+
+# Execute below command on VM where you have performed ASCS instance installation (e.g. sap-cl1)
+sudo systemctl disable SAPNW1_00
+# Execute below command on VM where you have performed ERS instance installation (e.g. sap-cl2)
+sudo systemctl disable SAPNW1_01
+# Stop ASCS and ERS instances using <sid>adm
+sapcontrol -nr 00 -function Stop
+sapcontrol -nr 00 -function StopService
+
+sapcontrol -nr 01 -function Stop
+sapcontrol -nr 01 -function StopService
+
+# Execute below command on VM where you have performed ASCS instance installation (e.g. sap-cl1)
+sudo systemctl disable SAPNW1_00
+# Execute below command on VM where you have performed ERS instance installation (e.g. sap-cl2)
+sudo systemctl disable SAPNW1_01
+[A]Enablesappingandsappong. Thesappingagent runs beforesapinitto hide the/usr/sap/sapservicesfile. Thesappongagent runs aftersapinitto unhide thesapservicesfile during VM boot.SAPStartSrvisn't started automatically for an SAP instance at boot time, because the Pacemaker cluster manages it.sudo systemctl enable sapping
+sudo systemctl enable sappong
+[A]Enablesappingandsappong. Thesappingagent runs beforesapinitto hide the/usr/sap/sapservicesfile. Thesappongagent runs aftersapinitto unhide thesapservicesfile during VM boot.SAPStartSrvisn't started automatically for an SAP instance at boot time, because the Pacemaker cluster manages it.
+sapping
+sappong
+sapping
+sapinit
+/usr/sap/sapservices
+sappong
+sapinit
+sapservices
+SAPStartSrv
+sudo systemctl enable sapping
+sudo systemctl enable sappong
+sudo systemctl enable sapping
+sudo systemctl enable sappong
+[1]CreateSAPStartSrvresource for ASCS and ERS by creating a file and then load the file.vi crm_sapstartsrv.txtEnter below primitive incrm_sapstartsrv.txtfile and saveprimitive rsc_sapstartsrv_NW1_ASCS00 ocf:suse:SAPStartSrv \
+ params InstanceName=NW1_ASCS00_sapascs
+
+primitive rsc_sapstartsrv_NW1_ERS01 ocf:suse:SAPStartSrv \
+ params InstanceName=NW1_ERS01_sapersLoad the file using below command.sudo crm configure load update crm_sapstartsrv.txtNoteIf youâve set up a SAPStartSrv resource using the "crm configure primitiveâ¦" command on crmsh version 4.4.0+20220708.6ed6b56f-150400.3.3.1 or later, itâs important to review the configuration of the SAPStartSrv resource primitives. If a monitor operation is present, it should be removed. While SUSE also suggests removing the start and stop operations, but these are not as crucial as the monitor operation. For more information, seerecent changes to crmsh package can result in unsupported configuration of SAPStartSrv resource Agent in a SAP NetWeaver HA cluster.
+[1]CreateSAPStartSrvresource for ASCS and ERS by creating a file and then load the file.
+SAPStartSrv
+vi crm_sapstartsrv.txt
+vi crm_sapstartsrv.txt
+Enter below primitive incrm_sapstartsrv.txtfile and save
+crm_sapstartsrv.txt
+primitive rsc_sapstartsrv_NW1_ASCS00 ocf:suse:SAPStartSrv \
+ params InstanceName=NW1_ASCS00_sapascs
+
+primitive rsc_sapstartsrv_NW1_ERS01 ocf:suse:SAPStartSrv \
+ params InstanceName=NW1_ERS01_sapers
+primitive rsc_sapstartsrv_NW1_ASCS00 ocf:suse:SAPStartSrv \
+ params InstanceName=NW1_ASCS00_sapascs
+
+primitive rsc_sapstartsrv_NW1_ERS01 ocf:suse:SAPStartSrv \
+ params InstanceName=NW1_ERS01_sapers
+Load the file using below command.
+sudo crm configure load update crm_sapstartsrv.txt
+sudo crm configure load update crm_sapstartsrv.txt
+Note
+If youâve set up a SAPStartSrv resource using the "crm configure primitiveâ¦" command on crmsh version 4.4.0+20220708.6ed6b56f-150400.3.3.1 or later, itâs important to review the configuration of the SAPStartSrv resource primitives. If a monitor operation is present, it should be removed. While SUSE also suggests removing the start and stop operations, but these are not as crucial as the monitor operation. For more information, seerecent changes to crmsh package can result in unsupported configuration of SAPStartSrv resource Agent in a SAP NetWeaver HA cluster.
+[1]Create the SAP cluster resources.Depending on whether you are running an ENSA1 or ENSA2 system, select respective tab to define the resources. SAP introduced support forENSA2, including replication, in SAP NetWeaver 7.52. Starting with ABAP Platform 1809, ENSA2 is installed by default. For ENSA2 support, see SAP Note2630416.ENSA1ENSA2sudo crm configure property maintenance-mode="true"
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 failure-timeout=60 migration-threshold=1 priority=10
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true \
+ meta priority=1000
+
+# If you're using NFSv4.1 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 failure-timeout=60 migration-threshold=1 priority=10
+
+# If you're using NFSv4.1 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true \
+ meta priority=1000
+
+sudo crm configure modgroup g-NW1_ASCS add rsc_sapstartsrv_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ASCS add rsc_sap_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ERS add rsc_sapstartsrv_NW1_ERS01
+sudo crm configure modgroup g-NW1_ERS add rsc_sap_NW1_ERS01
+
+sudo crm configure colocation col_sap_NW1_no_both -5000: g-NW1_ERS g-NW1_ASCS
+sudo crm configure location loc_sap_NW1_failover_to_ers rsc_sap_NW1_ASCS00 rule 2000: runs_ers_NW1 eq 1
+sudo crm configure order ord_sap_NW1_first_start_ascs Optional: rsc_sap_NW1_ASCS00:start rsc_sap_NW1_ERS01:stop symmetrical=false
+
+sudo crm_attribute --delete --name priority-fencing-delay
+
+sudo crm node online sap-cl1
+sudo crm configure property maintenance-mode="false"NoteIf you have a two-node cluster running ENSA2, you have the option to configure priority-fencing-delay cluster property. This property introduces additional delay in fencing a node that has higher total resoure priority when a split-brain scenario occurs. For more information, seeSUSE Linux Enteprise Server high availability extension administration guide.The property priority-fencing-delay is only applicable for ENSA2 running on two-node cluster. For more information, seeEnqueue Replication 2 High Availability cluster with simple mountsudo crm configure property maintenance-mode="true"
+
+sudo crm configure property priority-fencing-delay=30
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 priority=100
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:   
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true
+
+# If you're using NFSv4.1 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 priority=100
+
+# If you're using NFSv4.1 on Azure NetApp Files:   
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true
+
+sudo crm configure modgroup g-NW1_ASCS add rsc_sapstartsrv_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ASCS add rsc_sap_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ERS add rsc_sapstartsrv_NW1_ERS01
+sudo crm configure modgroup g-NW1_ERS add rsc_sap_NW1_ERS01
+
+sudo crm configure colocation col_sap_NW1_no_both -5000: g-NW1_ERS g-NW1_ASCS
+sudo crm configure order ord_sap_NW1_first_start_ascs Optional: rsc_sap_NW1_ASCS00:start rsc_sap_NW1_ERS01:stop symmetrical=false
+
+sudo crm node online sap-cl1
+sudo crm configure property maintenance-mode="false"
+[1]Create the SAP cluster resources.
+Depending on whether you are running an ENSA1 or ENSA2 system, select respective tab to define the resources. SAP introduced support forENSA2, including replication, in SAP NetWeaver 7.52. Starting with ABAP Platform 1809, ENSA2 is installed by default. For ENSA2 support, see SAP Note2630416.
+ENSA1
+ENSA2
+sudo crm configure property maintenance-mode="true"
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 failure-timeout=60 migration-threshold=1 priority=10
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true \
+ meta priority=1000
+
+# If you're using NFSv4.1 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 failure-timeout=60 migration-threshold=1 priority=10
+
+# If you're using NFSv4.1 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true \
+ meta priority=1000
+
+sudo crm configure modgroup g-NW1_ASCS add rsc_sapstartsrv_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ASCS add rsc_sap_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ERS add rsc_sapstartsrv_NW1_ERS01
+sudo crm configure modgroup g-NW1_ERS add rsc_sap_NW1_ERS01
+
+sudo crm configure colocation col_sap_NW1_no_both -5000: g-NW1_ERS g-NW1_ASCS
+sudo crm configure location loc_sap_NW1_failover_to_ers rsc_sap_NW1_ASCS00 rule 2000: runs_ers_NW1 eq 1
+sudo crm configure order ord_sap_NW1_first_start_ascs Optional: rsc_sap_NW1_ASCS00:start rsc_sap_NW1_ERS01:stop symmetrical=false
+
+sudo crm_attribute --delete --name priority-fencing-delay
+
+sudo crm node online sap-cl1
+sudo crm configure property maintenance-mode="false"
+sudo crm configure property maintenance-mode="true"
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 failure-timeout=60 migration-threshold=1 priority=10
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true \
+ meta priority=1000
+
+# If you're using NFSv4.1 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 failure-timeout=60 migration-threshold=1 priority=10
+
+# If you're using NFSv4.1 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true \
+ meta priority=1000
+
+sudo crm configure modgroup g-NW1_ASCS add rsc_sapstartsrv_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ASCS add rsc_sap_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ERS add rsc_sapstartsrv_NW1_ERS01
+sudo crm configure modgroup g-NW1_ERS add rsc_sap_NW1_ERS01
+
+sudo crm configure colocation col_sap_NW1_no_both -5000: g-NW1_ERS g-NW1_ASCS
+sudo crm configure location loc_sap_NW1_failover_to_ers rsc_sap_NW1_ASCS00 rule 2000: runs_ers_NW1 eq 1
+sudo crm configure order ord_sap_NW1_first_start_ascs Optional: rsc_sap_NW1_ASCS00:start rsc_sap_NW1_ERS01:stop symmetrical=false
+
+sudo crm_attribute --delete --name priority-fencing-delay
+
+sudo crm node online sap-cl1
+sudo crm configure property maintenance-mode="false"
+Note
+If you have a two-node cluster running ENSA2, you have the option to configure priority-fencing-delay cluster property. This property introduces additional delay in fencing a node that has higher total resoure priority when a split-brain scenario occurs. For more information, seeSUSE Linux Enteprise Server high availability extension administration guide.
+The property priority-fencing-delay is only applicable for ENSA2 running on two-node cluster. For more information, seeEnqueue Replication 2 High Availability cluster with simple mount
+sudo crm configure property maintenance-mode="true"
+
+sudo crm configure property priority-fencing-delay=30
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 priority=100
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:   
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true
+
+# If you're using NFSv4.1 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 priority=100
+
+# If you're using NFSv4.1 on Azure NetApp Files:   
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true
+
+sudo crm configure modgroup g-NW1_ASCS add rsc_sapstartsrv_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ASCS add rsc_sap_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ERS add rsc_sapstartsrv_NW1_ERS01
+sudo crm configure modgroup g-NW1_ERS add rsc_sap_NW1_ERS01
+
+sudo crm configure colocation col_sap_NW1_no_both -5000: g-NW1_ERS g-NW1_ASCS
+sudo crm configure order ord_sap_NW1_first_start_ascs Optional: rsc_sap_NW1_ASCS00:start rsc_sap_NW1_ERS01:stop symmetrical=false
+
+sudo crm node online sap-cl1
+sudo crm configure property maintenance-mode="false"
+sudo crm configure property maintenance-mode="true"
+
+sudo crm configure property priority-fencing-delay=30
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 priority=100
+
+# If you're using NFS on Azure Files or NFSv3 on Azure NetApp Files:   
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=60 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true
+
+# If you're using NFSv4.1 on Azure NetApp Files:
+sudo crm configure primitive rsc_sap_NW1_ASCS00 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ASCS00_sapascs START_PROFILE="/sapmnt/NW1/profile/NW1_ASCS00_sapascs" \
+ AUTOMATIC_RECOVER=false MINIMAL_PROBE=true \
+ meta resource-stickiness=5000 priority=100
+
+# If you're using NFSv4.1 on Azure NetApp Files:   
+sudo crm configure primitive rsc_sap_NW1_ERS01 SAPInstance \
+ op monitor interval=11 timeout=105 on-fail=restart \
+ params InstanceName=NW1_ERS01_sapers START_PROFILE="/sapmnt/NW1/profile/NW1_ERS01_sapers" \
+ AUTOMATIC_RECOVER=false IS_ERS=true MINIMAL_PROBE=true
+
+sudo crm configure modgroup g-NW1_ASCS add rsc_sapstartsrv_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ASCS add rsc_sap_NW1_ASCS00
+sudo crm configure modgroup g-NW1_ERS add rsc_sapstartsrv_NW1_ERS01
+sudo crm configure modgroup g-NW1_ERS add rsc_sap_NW1_ERS01
+
+sudo crm configure colocation col_sap_NW1_no_both -5000: g-NW1_ERS g-NW1_ASCS
+sudo crm configure order ord_sap_NW1_first_start_ascs Optional: rsc_sap_NW1_ASCS00:start rsc_sap_NW1_ERS01:stop symmetrical=false
+
+sudo crm node online sap-cl1
+sudo crm configure property maintenance-mode="false"
+If you're upgrading from an older version and switching to ENSA2, see SAP Note2641019.
+Make sure that the cluster status is OK and that all resources are started. It isn't important which node the resources are running on.
+sudo crm_mon -r
+# Full list of resources:
+# 
+# stonith-sbd     (stonith:external/sbd): Started sap-cl2
+#  Resource Group: g-NW1_ASCS
+#      nc_NW1_ASCS        (ocf::heartbeat:azure-lb):      Started sap-cl1
+#      vip_NW1_ASCS       (ocf::heartbeat:IPaddr2):       Started sap-cl1
+#      rsc_sapstartsrv_NW1_ASCS00 (ocf::suse:SAPStartSrv):        Started sap-cl1
+#      rsc_sap_NW1_ASCS00 (ocf::heartbeat:SAPInstance):   Started sap-cl1
+#  Resource Group: g-NW1_ERS
+#      nc_NW1_ERS (ocf::heartbeat:azure-lb):      Started sap-cl2
+#      vip_NW1_ERS        (ocf::heartbeat:IPaddr2):       Started sap-cl2
+#      rsc_sapstartsrv_NW1_ERS01  (ocf::suse:SAPStartSrv):        Started sap-cl2
+#      rsc_sap_NW1_ERS01  (ocf::heartbeat:SAPInstance):   Started sap-cl1
+sudo crm_mon -r
+# Full list of resources:
+# 
+# stonith-sbd     (stonith:external/sbd): Started sap-cl2
+#  Resource Group: g-NW1_ASCS
+#      nc_NW1_ASCS        (ocf::heartbeat:azure-lb):      Started sap-cl1
+#      vip_NW1_ASCS       (ocf::heartbeat:IPaddr2):       Started sap-cl1
+#      rsc_sapstartsrv_NW1_ASCS00 (ocf::suse:SAPStartSrv):        Started sap-cl1
+#      rsc_sap_NW1_ASCS00 (ocf::heartbeat:SAPInstance):   Started sap-cl1
+#  Resource Group: g-NW1_ERS
+#      nc_NW1_ERS (ocf::heartbeat:azure-lb):      Started sap-cl2
+#      vip_NW1_ERS        (ocf::heartbeat:IPaddr2):       Started sap-cl2
+#      rsc_sapstartsrv_NW1_ERS01  (ocf::suse:SAPStartSrv):        Started sap-cl2
+#      rsc_sap_NW1_ERS01  (ocf::heartbeat:SAPInstance):   Started sap-cl1
+Prepare the SAP application server
+Some databases require you to execute the database installation on an application server. Prepare the application server VMs to be able to execute the database installation.
+The following common steps assume that you install the application server on a server that's different from the ASCS and HANA servers:
+Set up host name resolution.You can either use a DNS server or modify/etc/hostson all nodes. This example shows how to use the/etc/hostsfile.sudo vi /etc/hostsInsert the following lines to/etc/hosts. Change the IP address and host name to match your environment.10.27.0.6   sap-cl1
+10.27.0.7   sap-cl2
+# IP address of the load balancer's front-end configuration for SAP NetWeaver ASCS
+10.27.0.9   sapascs
+# IP address of the load balancer's front-end configuration for SAP NetWeaver ERS
+10.27.0.10  sapers
+10.27.0.8   sapa01
+10.27.0.12  sapa02
+Set up host name resolution.
+You can either use a DNS server or modify/etc/hostson all nodes. This example shows how to use the/etc/hostsfile.
+/etc/hosts
+/etc/hosts
+sudo vi /etc/hosts
+sudo vi /etc/hosts
+Insert the following lines to/etc/hosts. Change the IP address and host name to match your environment.
+/etc/hosts
+10.27.0.6   sap-cl1
+10.27.0.7   sap-cl2
+# IP address of the load balancer's front-end configuration for SAP NetWeaver ASCS
+10.27.0.9   sapascs
+# IP address of the load balancer's front-end configuration for SAP NetWeaver ERS
+10.27.0.10  sapers
+10.27.0.8   sapa01
+10.27.0.12  sapa02
+10.27.0.6   sap-cl1
+10.27.0.7   sap-cl2
+# IP address of the load balancer's front-end configuration for SAP NetWeaver ASCS
+10.27.0.9   sapascs
+# IP address of the load balancer's front-end configuration for SAP NetWeaver ERS
+10.27.0.10  sapers
+10.27.0.8   sapa01
+10.27.0.12  sapa02
+Configure the SWAP file.sudo vi /etc/waagent.conf
+
+# Set the ResourceDisk.EnableSwap property to y.
+# Create and use the SWAP file on the resource disk.
+ResourceDisk.EnableSwap=y
+
+# Set the size of the SWAP file by using the ResourceDisk.SwapSizeMB property.
+# The free space of the resource disk varies by virtual machine size. Don't set a value that's too big. You can check the SWAP space by using the swapon command.
+ResourceDisk.SwapSizeMB=2000Restart the agent to activate the change.sudo service waagent restart
+Configure the SWAP file.
+sudo vi /etc/waagent.conf
+
+# Set the ResourceDisk.EnableSwap property to y.
+# Create and use the SWAP file on the resource disk.
+ResourceDisk.EnableSwap=y
+
+# Set the size of the SWAP file by using the ResourceDisk.SwapSizeMB property.
+# The free space of the resource disk varies by virtual machine size. Don't set a value that's too big. You can check the SWAP space by using the swapon command.
+ResourceDisk.SwapSizeMB=2000
+sudo vi /etc/waagent.conf
+
+# Set the ResourceDisk.EnableSwap property to y.
+# Create and use the SWAP file on the resource disk.
+ResourceDisk.EnableSwap=y
+
+# Set the size of the SWAP file by using the ResourceDisk.SwapSizeMB property.
+# The free space of the resource disk varies by virtual machine size. Don't set a value that's too big. You can check the SWAP space by using the swapon command.
+ResourceDisk.SwapSizeMB=2000
+Restart the agent to activate the change.
+sudo service waagent restart
+sudo service waagent restart
+Prepare SAP directories
+If you're using NFS on Azure Files, use the following instructions to prepare the SAP directories on the SAP application server VMs:
+Create the mount points.sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/trans
+Create the mount points.
+sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/trans
+sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/trans
+Mount the file systems.echo "sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1/sapmntNW1 /sapmnt/NW1  nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/saptrans /usr/sap/trans  nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab   
+# Mount the file systems.
+mount -a
+Mount the file systems.
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1/sapmntNW1 /sapmnt/NW1  nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/saptrans /usr/sap/trans  nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab   
+# Mount the file systems.
+mount -a
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/sapnw1/sapmntNW1 /sapmnt/NW1  nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab
+echo "sapnfsafs.file.core.windows.net:/sapnfsafs/saptrans /usr/sap/trans  nfs noresvport,vers=4,minorversion=1,sec=sys  0  0" >> /etc/fstab   
+# Mount the file systems.
+mount -a
+If you're using NFS on Azure NetApp Files, use the following instructions to prepare the SAP directories on the SAP application server VMs:
+Create the mount points.sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/trans
+Create the mount points.
+sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/trans
+sudo mkdir -p /sapmnt/NW1
+sudo mkdir -p /usr/sap/trans
+
+sudo chattr +i /sapmnt/NW1
+sudo chattr +i /usr/sap/trans
+Mount the file systems.# If you're using NFSv3:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=3,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=3, hard 0 0" >> /etc/fstab
+# If you're using NFSv4.1:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab    
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+# Mount the file systems.
+mount -a
+Mount the file systems.
+# If you're using NFSv3:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=3,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=3, hard 0 0" >> /etc/fstab
+# If you're using NFSv4.1:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab    
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+# Mount the file systems.
+mount -a
+# If you're using NFSv3:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=3,hard 0 0" >> /etc/fstab
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=3, hard 0 0" >> /etc/fstab
+# If you're using NFSv4.1:
+echo "10.27.1.5:/sapnw1/sapmntNW1 /sapmnt/NW1 nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab    
+echo "10.27.1.5:/saptrans /usr/sap/trans nfs nfsvers=4.1,sec=sys,hard 0 0" >> /etc/fstab
+# Mount the file systems.
+mount -a
+Install the database
+In this example, SAP NetWeaver is installed on SAP HANA. You can use any supported database for this installation. For more information on how to install SAP HANA in Azure, seeHigh availability of SAP HANA on Azure virtual machines. For a list of supported databases, see SAP Note1928533.
+Install the SAP NetWeaver database instance as root by using a virtual host name that maps to the IP address of the load balancer's front-end configuration for the database. You can use theSAPINST_REMOTE_ACCESS_USERparameter to allow a non-root user to connect tosapinst.
+SAPINST_REMOTE_ACCESS_USER
+sapinst
+sudo <swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin
+sudo <swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin
+Install the SAP NetWeaver application server
+Follow these steps to install an SAP application server:
+[A]Prepare the application server.Follow the steps inSAP NetWeaver application server preparation.
+[A]Prepare the application server.
+Follow the steps inSAP NetWeaver application server preparation.
+[A]Install a primary or additional SAP NetWeaver application server.You can use theSAPINST_REMOTE_ACCESS_USERparameter to allow a non-root user to connect tosapinst.sudo <swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin
+[A]Install a primary or additional SAP NetWeaver application server.
+You can use theSAPINST_REMOTE_ACCESS_USERparameter to allow a non-root user to connect tosapinst.
+SAPINST_REMOTE_ACCESS_USER
+sapinst
+sudo <swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin
+sudo <swpm>/sapinst SAPINST_REMOTE_ACCESS_USER=sapadmin
+[A]Update the SAP HANA secure store to point to the virtual name of the SAP HANA system replication setup.Run the following command to list the entries.hdbuserstore ListThe command should list all entries and should look similar to this example.DATA FILE       : /home/nw1adm/.hdb/sapa01/SSFS_HDB.DAT
+KEY FILE        : /home/nw1adm/.hdb/sapa01/SSFS_HDB.KEY
+
+KEY DEFAULT 
+  ENV : 10.27.0.4:30313
+  USER: SAPABAP1
+  DATABASE: NW1In this example, the IP address of the default entry points to the VM, not the load balancer. Change the entry to point to the virtual host name of the load balancer. Be sure to use the same port and database name. For example, use30313andNW1in the sample output.su - nw1adm
+hdbuserstore SET DEFAULT nw1db:30313@NW1 SAPABAP1 <password of ABAP schema>
+[A]Update the SAP HANA secure store to point to the virtual name of the SAP HANA system replication setup.
+Run the following command to list the entries.
+hdbuserstore List
+hdbuserstore List
+The command should list all entries and should look similar to this example.
+DATA FILE       : /home/nw1adm/.hdb/sapa01/SSFS_HDB.DAT
+KEY FILE        : /home/nw1adm/.hdb/sapa01/SSFS_HDB.KEY
+
+KEY DEFAULT 
+  ENV : 10.27.0.4:30313
+  USER: SAPABAP1
+  DATABASE: NW1
+DATA FILE       : /home/nw1adm/.hdb/sapa01/SSFS_HDB.DAT
+KEY FILE        : /home/nw1adm/.hdb/sapa01/SSFS_HDB.KEY
+
+KEY DEFAULT 
+  ENV : 10.27.0.4:30313
+  USER: SAPABAP1
+  DATABASE: NW1
+In this example, the IP address of the default entry points to the VM, not the load balancer. Change the entry to point to the virtual host name of the load balancer. Be sure to use the same port and database name. For example, use30313andNW1in the sample output.
+30313
+NW1
+su - nw1adm
+hdbuserstore SET DEFAULT nw1db:30313@NW1 SAPABAP1 <password of ABAP schema>
+su - nw1adm
+hdbuserstore SET DEFAULT nw1db:30313@NW1 SAPABAP1 <password of ABAP schema>
+Test your cluster setup
+Thoroughly test your Pacemaker cluster.Run the typical failover tests.
+Next steps
+HA for SAP NetWeaver on Azure VMs on SLES for SAP applications multi-SID guide
+SAP workload configurations with Azure availability zones
+Azure Virtual Machines planning and implementation for SAP
+Azure Virtual Machines deployment for SAP
+Azure Virtual Machines DBMS deployment for SAP
+High Availability of SAP HANA on Azure VMs
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,288 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Migrate a Python application to use passwordless connections with Azure SQL Database
+Article
+2023-10-11
+7 contributors
+In this article
+Applies to:Azure SQL Database
+Application requests to Azure SQL Database must be authenticated. Although there are multiple options for authenticating to Azure SQL Database, you should prioritize passwordless connections in your applications when possible. Traditional authentication methods that use passwords or secret keys create security risks and complications. Visit thepasswordless connections for Azure serviceshub to learn more about the advantages of moving to passwordless connections. The following tutorial explains how to migrate an existing Python application to connect to Azure SQL Database to use passwordless connections instead of a username and password solution.
+Configure the Azure SQL Database
+Passwordless connections use Microsoft Entra authentication to connect to Azure services, including Azure SQL Database. Microsoft Entra authentication, you can manage identities in a central location to simplify permission management. Learn more about configuring Microsoft Entra authentication for your Azure SQL Database:
+Microsoft Entra authentication overview
+Configure Microsoft Entra auth
+For this migration guide, ensure you have a Microsoft Entra admin assigned to your Azure SQL Database.
+Navigate to theMicrosoft Entrapage of your logical server.
+Navigate to theMicrosoft Entrapage of your logical server.
+SelectSet adminto open theMicrosoft Entra IDflyout menu.
+SelectSet adminto open theMicrosoft Entra IDflyout menu.
+In theMicrosoft Entra IDflyout menu, search for the user you want to assign as admin.
+In theMicrosoft Entra IDflyout menu, search for the user you want to assign as admin.
+Select the user and chooseSelect.
+Select the user and chooseSelect.
+
+Configure your local development environment
+Passwordless connections can be configured to work for both local and Azure hosted environments. In this section, you apply configurations to allow individual users to authenticate to Azure SQL Database for local development.
+Sign-in to Azure
+For local development, make sure you're signed-in with the same Azure AD account you want to use to access Azure SQL Database. You can authenticate via popular development tools, such as the Azure CLI or Azure PowerShell. The development tools with which you can authenticate vary across languages.
+Azure CLI
+Visual Studio
+Visual Studio Code
+PowerShell
+Sign-in to Azure through the Azure CLI using the following command:
+az login
+az login
+Select theSign inbutton in the top right of Visual Studio.
+
+Sign-in using the Azure AD account you assigned a role to previously.
+
+You will need toinstall the Azure CLIto work withDefaultAzureCredentialthrough Visual Studio Code.
+DefaultAzureCredential
+On the main menu of Visual Studio Code, navigate toTerminal > New Terminal.
+Sign-in to Azure through the Azure CLI using the following command:
+az login
+az login
+Sign-in to Azure using PowerShell via the following command:
+Connect-AzAccount
+Connect-AzAccount
+Create a database user and assign roles
+Create a user in Azure SQL Database. The user should correspond to the Azure account you used to sign-in locally in theSign-in to Azuresection.
+In theAzure portal, browse to your SQL database and selectQuery editor (preview).
+In theAzure portal, browse to your SQL database and selectQuery editor (preview).
+SelectContinue as<your-username>on the right side of the screen to sign into the database using your account.
+SelectContinue as<your-username>on the right side of the screen to sign into the database using your account.
+<your-username>
+On the query editor view, run the following T-SQL commands:CREATE USER [user@domain] FROM EXTERNAL PROVIDER;
+ALTER ROLE db_datareader ADD MEMBER [user@domain];
+ALTER ROLE db_datawriter ADD MEMBER [user@domain];
+ALTER ROLE db_ddladmin ADD MEMBER [user@domain];
+GORunning these commands assigns theSQL DB Contributorrole to the account specified. This role allows the identity to read, write, and modify the data and schema of your database. For more information about the roles assigned, seeFixed-database roles.
+On the query editor view, run the following T-SQL commands:
+CREATE USER [user@domain] FROM EXTERNAL PROVIDER;
+ALTER ROLE db_datareader ADD MEMBER [user@domain];
+ALTER ROLE db_datawriter ADD MEMBER [user@domain];
+ALTER ROLE db_ddladmin ADD MEMBER [user@domain];
+GO
+CREATE USER [user@domain] FROM EXTERNAL PROVIDER;
+ALTER ROLE db_datareader ADD MEMBER [user@domain];
+ALTER ROLE db_datawriter ADD MEMBER [user@domain];
+ALTER ROLE db_ddladmin ADD MEMBER [user@domain];
+GO
+
+Running these commands assigns theSQL DB Contributorrole to the account specified. This role allows the identity to read, write, and modify the data and schema of your database. For more information about the roles assigned, seeFixed-database roles.
+Update the local connection configuration
+Existing application code that connects to Azure SQL Database using thePython SQL Driver - pyodbccontinues to work with passwordless connections with minor changes. For example, the following code works with both SQL authentication and passwordless connections when running locally and when deployed to Azure App Service.
+import os
+import pyodbc, struct
+from azure.identity import DefaultAzureCredential
+
+connection_string = os.environ["AZURE_SQL_CONNECTIONSTRING"]
+
+def get_all():
+    with get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM Persons")
+        # Do something with the data
+    return
+
+def get_conn():
+    credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
+    token_bytes = credential.get_token("https://database.windows.net/.default").token.encode("UTF-16-LE")
+    token_struct = struct.pack(f'<I{len(token_bytes)}s', len(token_bytes), token_bytes)
+    SQL_COPT_SS_ACCESS_TOKEN = 1256  # This connection option is defined by microsoft in msodbcsql.h
+    conn = pyodbc.connect(connection_string, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct})
+    return conn
+import os
+import pyodbc, struct
+from azure.identity import DefaultAzureCredential
+
+connection_string = os.environ["AZURE_SQL_CONNECTIONSTRING"]
+
+def get_all():
+    with get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM Persons")
+        # Do something with the data
+    return
+
+def get_conn():
+    credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
+    token_bytes = credential.get_token("https://database.windows.net/.default").token.encode("UTF-16-LE")
+    token_struct = struct.pack(f'<I{len(token_bytes)}s', len(token_bytes), token_bytes)
+    SQL_COPT_SS_ACCESS_TOKEN = 1256  # This connection option is defined by microsoft in msodbcsql.h
+    conn = pyodbc.connect(connection_string, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct})
+    return conn
+Tip
+In this example code, the App Service environment variableWEBSITE_HOSTNAMEis used to determine what environment the code is running in. For other deployment scenarios, you can use other environment variables to determine the environment.
+WEBSITE_HOSTNAME
+To update the referenced connection string (AZURE_SQL_CONNECTIONSTRING) for local development, use the passwordless connection string format:
+AZURE_SQL_CONNECTIONSTRING
+Driver={ODBC Driver 18 for SQL Server};Server=tcp:<database-server-name>.database.windows.net,1433;Database=<database-name>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30
+Driver={ODBC Driver 18 for SQL Server};Server=tcp:<database-server-name>.database.windows.net,1433;Database=<database-name>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30
+Test the app
+Run your app locally and verify that the connections to Azure SQL Database are working as expected. Keep in mind that it may take several minutes for changes to Azure users and roles to propagate through your Azure environment. Your application is now configured to run locally without developers having to manage secrets in the application itself.
+Configure the Azure hosting environment
+Once your app is configured to use passwordless connections locally, the same code can authenticate to Azure SQL Database after it's deployed to Azure. The sections that follow explain how to configure a deployed application to connect to Azure SQL Database using amanaged identity. Managed identities provide an automatically managed identity in Microsoft Entra ID (formerly Azure Active Directory) for applications to use when connecting to resources that support Microsoft Entra authentication. Learn more about managed identities:
+Passwordless overview
+Managed identity best practices
+Create the managed identity
+Create a user-assigned managed identity using the Azure portal or the Azure CLI. Your application uses the identity to authenticate to other services.
+Azure portal
+Azure CLI
+At the top of the Azure portal, search forManaged identities. Select theManaged Identitiesresult.
+Select+ Createat the top of theManaged Identitiesoverview page.
+On theBasicstab, enter the following values:Subscription: Select your desired subscription.Resource group: Select your desired resource group.Region: Select a region near your location.Name: Enter a recognizable name for your identity, such asMigrationIdentity.
+Subscription: Select your desired subscription.
+Resource group: Select your desired resource group.
+Region: Select a region near your location.
+Name: Enter a recognizable name for your identity, such asMigrationIdentity.
+SelectReview + createat the bottom of the page.
+When the validation checks finish, selectCreate. Azure creates a new user-assigned identity.
+After the resource is created, selectGo to resourceto view the details of the managed identity.
+
+Use theaz identity createcommand to create a user-assigned managed identity:
+az identity create --name MigrationIdentity --resource-group <resource-group>
+az identity create --name MigrationIdentity --resource-group <resource-group>
+Associate the managed identity with your web app
+Configure your web app to use the user-assigned managed identity you created.
+Azure portal
+Azure CLI
+Complete the following steps in the Azure portal to associate the user-assigned managed identity with your app. These same steps apply to the following Azure services:
+Azure Spring Apps
+Azure Container Apps
+Azure virtual machines
+Azure Kubernetes Service
+Navigate to the overview page of your web app.
+SelectIdentityfrom the left navigation.
+SelectIdentityfrom the left navigation.
+On theIdentitypage, switch to theUser assignedtab.
+On theIdentitypage, switch to theUser assignedtab.
+Select+ Addto open theAdd user assigned managed identityflyout.
+Select+ Addto open theAdd user assigned managed identityflyout.
+Select the subscription you used previously to create the identity.
+Select the subscription you used previously to create the identity.
+Search for theMigrationIdentityby name and select it from the search results.
+Search for theMigrationIdentityby name and select it from the search results.
+SelectAddto associate the identity with your app.
+SelectAddto associate the identity with your app.
+
+Use the following Azure CLI commands to associate an identity with your app:
+Retrieve the fully qualified resource ID of the managed identity you created using theaz identity showcommand. Copy the output value to use in the next step.
+az identity show --name MigrationIdentity -g <your-identity-resource-group-name> --query id
+az identity show --name MigrationIdentity -g <your-identity-resource-group-name> --query id
+Azure App Service
+Azure Spring Apps
+Azure Container Apps
+Azure virtual machines
+Azure Kubernetes Service
+You can assign a managed identity to an Azure App Service instance with theaz webapp identity assigncommand. The--identitiesparameter requires the fully qualified resource ID of the managed identity you retrieved in the previous step. A fully qualified resource ID starts with '/subscriptions/{subscriptionId}' or '/providers/{resourceProviderNamespace}/'.
+--identities
+az webapp identity assign \
+    --resource-group <resource-group-name> \
+    --name <webapp-name> \
+    --identities <managed-identity-id>
+az webapp identity assign \
+    --resource-group <resource-group-name> \
+    --name <webapp-name> \
+    --identities <managed-identity-id>
+If you are working with Git Bash, be careful of path conversions when using fully qualified resource IDs. To disable path conversion, addMSYS_NO_PATHCONV=1to the beginning of your command. For more information, seeAuto translation of resource IDs.
+MSYS_NO_PATHCONV=1
+You can assign a managed identity to an Azure Spring Apps instance with theaz spring app identity assigncommand.
+az spring app identity assign \
+    --resource-group <resource-group-name> \
+    --name <app-name> \
+    --service <service-name> \
+    --user-assigned <managed-identity-id>
+az spring app identity assign \
+    --resource-group <resource-group-name> \
+    --name <app-name> \
+    --service <service-name> \
+    --user-assigned <managed-identity-id>
+You can assign a managed identity to a virtual machine with theaz containerapp identity assigncommand.
+az containerapp identity assign \
+    --resource-group <resource-group-name> \
+    --name <app-name> \
+    --user-assigned <managed-identity-id>
+az containerapp identity assign \
+    --resource-group <resource-group-name> \
+    --name <app-name> \
+    --user-assigned <managed-identity-id>
+You can assign a managed identity to a virtual machine with theaz vm identity assigncommand.
+az vm identity assign \
+    --resource-group <resource-group-name> \
+    --name <virtual-machine-name> \
+    --identities <managed-identity-id>
+az vm identity assign \
+    --resource-group <resource-group-name> \
+    --name <virtual-machine-name> \
+    --identities <managed-identity-id>
+You can assign a managed identity to an Azure Kubernetes Service (AKS) instance with theaz aks updatecommand.
+az aks update \
+    --resource-group <resource-group-name> \
+    --name <cluster-name> \
+    --enable-managed-identity \
+    --assign-identity <managed-identity-id> \
+    --assign-kubelet-identity <managed-identity-id>
+az aks update \
+    --resource-group <resource-group-name> \
+    --name <cluster-name> \
+    --enable-managed-identity \
+    --assign-identity <managed-identity-id> \
+    --assign-kubelet-identity <managed-identity-id>
+Create a database user for the identity and assign roles
+Create a SQL database user that maps back to the user-assigned managed identity. Assign the necessary SQL roles to the user to allow your app to read, write, and modify the data and schema of your database.
+In the Azure portal, browse to your SQL database and selectQuery editor (preview).
+In the Azure portal, browse to your SQL database and selectQuery editor (preview).
+SelectContinue as<username>on the right side of the screen to sign into the database using your account.
+SelectContinue as<username>on the right side of the screen to sign into the database using your account.
+<username>
+On the query editor view, run the following T-SQL commands:CREATE USER [user-assigned-identity-name] FROM EXTERNAL PROVIDER;
+ALTER ROLE db_datareader ADD MEMBER [user-assigned-identity-name];
+ALTER ROLE db_datawriter ADD MEMBER [user-assigned-identity-name];
+ALTER ROLE db_ddladmin ADD MEMBER [user-assigned-identity-name];
+GORunning these commands assigns theSQL DB Contributorrole to the user-assigned managed identity. This role allows the identity to read, write, and modify the data and schema of your database.
+On the query editor view, run the following T-SQL commands:
+CREATE USER [user-assigned-identity-name] FROM EXTERNAL PROVIDER;
+ALTER ROLE db_datareader ADD MEMBER [user-assigned-identity-name];
+ALTER ROLE db_datawriter ADD MEMBER [user-assigned-identity-name];
+ALTER ROLE db_ddladmin ADD MEMBER [user-assigned-identity-name];
+GO
+CREATE USER [user-assigned-identity-name] FROM EXTERNAL PROVIDER;
+ALTER ROLE db_datareader ADD MEMBER [user-assigned-identity-name];
+ALTER ROLE db_datawriter ADD MEMBER [user-assigned-identity-name];
+ALTER ROLE db_ddladmin ADD MEMBER [user-assigned-identity-name];
+GO
+
+Running these commands assigns theSQL DB Contributorrole to the user-assigned managed identity. This role allows the identity to read, write, and modify the data and schema of your database.
+Important
+Use caution when assigning database user roles in enterprise production environments. In those scenarios, the app shouldn't perform all operations using a single, elevated identity. Try to implement the principle of least privilege by configuring multiple identities with specific permissions for specific tasks.
+You can read more about configuring database roles and security on the following resources:
+Tutorial: Secure a database in Azure SQL Database
+Authorize database access to SQL Database
+Update the connection string
+Update your Azure app configuration to use the passwordless connection string format. The format should be the same used in your local environment.
+Connection strings can be stored as environment variables in your app hosting environment. The following instructions focus on App Service, but other Azure hosting services provide similar configurations.
+Driver={ODBC Driver 18 for SQL Server};Server=tcp:<database-server-name>.database.windows.net,1433;Database=<database-name>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30
+Driver={ODBC Driver 18 for SQL Server};Server=tcp:<database-server-name>.database.windows.net,1433;Database=<database-name>;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30
+<database-server-name>is the name of your Azure SQL Database server and<database-name>is the name of your Azure SQL Database.
+<database-server-name>
+<database-name>
+Create an app setting for the managed identity client ID
+To use the user-assigned managed identity, create an AZURE_CLIENT_ID environment variable and set it equal to the client ID of the managed identity.  You can set this variable in theConfigurationsection of your app in the Azure portal. You can find the client ID in theOverviewsection of the managed identity resource in the Azure portal.
+Save your changes and restart the application if it doesn't do so automatically.
+Note
+The example connection code shown in this migration guide uses theDefaultAzureCredentialclass when deployed. Specifically, it uses the DefaultAzureCredential without passing the user-assigned managed identity client ID to the constructor. In this scenario, the fallback is to check for the AZURE_CLIENT_ID environment variable. If the AZURE_CLIENT_ID environment variable doesn't exist, a system-assigned managed identity will be used if configured.
+If you pass the managed identity client ID in the DefaultAzureCredential constructor, the connection code can still be used locally and deployed because the authentication process falls back to interactive authentication in the local scenario. For more information, see theAzure Identity client library for Python.
+Test the application
+Test your app to make sure everything is still working. It may take a few minutes for all of the changes to propagate through your Azure environment.
+Next steps
+In this tutorial, you learned how to migrate an application to passwordless connections.
+You can read the following resources to explore the concepts discussed in this article in more depth:
+Passwordless overview
+Managed identity best practices
+Tutorial: Secure a database in Azure SQL Database
+Authorize database access to SQL Database
+Feedback
+Was this page helpful?
+Additional resources

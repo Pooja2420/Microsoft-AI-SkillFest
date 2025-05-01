@@ -1,0 +1,843 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use parallel jobs in pipelines
+Article
+2024-09-24
+9 contributors
+In this article
+APPLIES TO:Azure CLI ml extension v2 (current)Python SDK azure-ai-ml v2 (current)
+This article explains how to use the CLI v2 and Python SDK v2 to run parallel jobs in Azure Machine Learning pipelines. Parallel jobs accelerate job execution by distributing repeated tasks on powerful multinode compute clusters.
+Machine learning engineers always have scale requirements on their training or inferencing tasks. For example, when a data scientist provides a single script to train a sales prediction model, machine learning engineers need to apply this training task to each individual data store. Challenges of this scale-out process include long execution times that cause delays, and unexpected issues that require manual intervention to keep the task running.
+The core job of Azure Machine Learning parallelization is to split a single serial task into mini-batches and dispatch those mini-batches to multiple computes to execute in parallel. Parallel jobs significantly reduce end-to-end execution time and also handle errors automatically. Consider using Azure Machine Learning Parallel job to train many models on top of your partitioned data or to accelerate your large-scale batch inferencing tasks.
+For example, in a scenario where you're running an object detection model on a large set of images, Azure Machine Learning parallel jobs let you easily distribute your images to run custom code in parallel on a specific compute cluster. Parallelization can significantly reduce time cost. Azure Machine Learning parallel jobs can also simplify and automate your process to make it more efficient.
+Prerequisites
+Have an Azure Machine Learning account and workspace.
+UnderstandAzure Machine Learning pipelines.
+Azure CLI
+Python SDK
+Install the Azure CLI and themlextension. For more information, seeInstall, set up, and use the CLI (v2). Themlextension automatically installs the first time you run anaz mlcommand.
+ml
+ml
+az ml
+Understand how tocreate and run Azure Machine Learning pipelines and components with the CLI v2.
+Install theAzure Machine Learning SDK v2 for Python.
+Understand how tocreate and run Azure Machine Learning pipelines and components with the Python SDK v2.
+Create and run a pipeline with a parallel job step
+An Azure Machine Learning parallel job can be used only as a step in a pipeline job.
+Azure CLI
+Python SDK
+The following examples come fromRun a pipeline job using parallel job in pipelinein theAzure Machine Learning examplesrepository.
+The following examples come from theBuild a simple machine learning pipeline with parallel componentnotebook in theAzure Machine Learning examplesrepository.
+Prepare for parallelization
+This parallel job step requires preparation. You need an entry script that implements the predefined functions. You also need to set attributes in your parallel job definition that:
+Define and bind your input data.
+Set the data division method.
+Configure your compute resources.
+Call the entry script.
+The following sections describe how to prepare the parallel job.
+A parallel job requires one major input to be split and processed in parallel. The major input data format can be either tabular data or a list of files.
+Different data formats have different input types, input modes, and data division methods. The following table describes the options:
+mltable
+uri_folder
+ro_mount
+download
+mltable
+direct
+Note
+If you use tabularmltableas your major input data, you need to:
+mltable
+Install themltablelibrary in your environment, as in line 9 of thisconda file.
+mltable
+Have aMLTablespecification file under your specified path with thetransformations: - read_delimited:section filled out. For examples, seeCreate and manage data assets.
+transformations: - read_delimited:
+You can declare your major input data with theinput_dataattribute in the parallel job YAML or Python, and bind the data with the definedinputof your parallel job by using${{inputs.<input name>}}. Then you define the data division attribute for your major input depending on your data division method.
+input_data
+input
+${{inputs.<input name>}}
+mini_batch_size
+partition_keys
+After you define the data division attribute, configure the compute resources for your parallelization by setting theinstance_countandmax_concurrency_per_instanceattributes.
+instance_count
+max_concurrency_per_instance
+instance_count
+max_concurrency_per_instance
+These attributes work together with your specified compute cluster, as shown in the following diagram:
+
+The entry script is a single Python file that implements the following three predefined functions with custom code.
+Init()
+Run(mini_batch)
+mini_batch
+Shutdown()
+Important
+To avoid exceptions when parsing arguments inInit()orRun(mini_batch)functions, useparse_known_argsinstead ofparse_args. See theiris_scoreexample for an entry script with argument parser.
+Init()
+Run(mini_batch)
+parse_known_args
+parse_args
+Important
+TheRun(mini_batch)function requires a return of either a dataframe, list, or tuple item. The parallel job uses the count of that return to measure the success items under that mini-batch. Mini-batch count should be equal to the return list count if all items have processed.
+Run(mini_batch)
+The parallel job executes the functions in each processor, as shown in the following diagram.
+
+See the following entry script examples:
+Image identification for a list of image files
+Iris classification for a tabular iris data
+To call the entry script, set the following two attributes in your parallel job definition:
+code
+entry_script
+Azure CLI
+Python
+The following parallel job step declares the input type, mode, and data division method, binds the input, configures the compute, and calls the entry script.
+batch_prediction:
+  type: parallel
+  compute: azureml:cpu-cluster
+  inputs:
+    input_data: 
+      type: mltable
+      path: ./neural-iris-mltable
+      mode: direct
+    score_model: 
+      type: uri_folder
+      path: ./iris-model
+      mode: download
+  outputs:
+    job_output_file:
+      type: uri_file
+      mode: rw_mount
+
+  input_data: ${{inputs.input_data}}
+  mini_batch_size: "10kb"
+  resources:
+      instance_count: 2
+  max_concurrency_per_instance: 2
+
+  logging_level: "DEBUG"
+  mini_batch_error_threshold: 5
+  retry_settings:
+    max_retries: 2
+    timeout: 60
+
+  task:
+    type: run_function
+    code: "./script"
+    entry_script: iris_prediction.py
+    environment:
+      name: "prs-env"
+      version: 1
+      image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04
+      conda_file: ./environment/environment_parallel.yml
+batch_prediction:
+  type: parallel
+  compute: azureml:cpu-cluster
+  inputs:
+    input_data: 
+      type: mltable
+      path: ./neural-iris-mltable
+      mode: direct
+    score_model: 
+      type: uri_folder
+      path: ./iris-model
+      mode: download
+  outputs:
+    job_output_file:
+      type: uri_file
+      mode: rw_mount
+
+  input_data: ${{inputs.input_data}}
+  mini_batch_size: "10kb"
+  resources:
+      instance_count: 2
+  max_concurrency_per_instance: 2
+
+  logging_level: "DEBUG"
+  mini_batch_error_threshold: 5
+  retry_settings:
+    max_retries: 2
+    timeout: 60
+
+  task:
+    type: run_function
+    code: "./script"
+    entry_script: iris_prediction.py
+    environment:
+      name: "prs-env"
+      version: 1
+      image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04
+      conda_file: ./environment/environment_parallel.yml
+The following code declares thejob_data_pathas input, binds it to theinput_dataattribute, sets themini_batch_sizedata division attribute, and calls the entry script.
+job_data_path
+input_data
+mini_batch_size
+# parallel task to process file data
+file_batch_inference = parallel_run_function(
+    name="file_batch_score",
+    display_name="Batch Score with File Dataset",
+    description="parallel component for batch score",
+    inputs=dict(
+        job_data_path=Input(
+            type=AssetTypes.MLTABLE,
+            description="The data to be split and scored in parallel",
+        )
+    ),
+    outputs=dict(job_output_path=Output(type=AssetTypes.MLTABLE)),
+    input_data="${{inputs.job_data_path}}",
+    instance_count=2,
+    max_concurrency_per_instance=1,
+    mini_batch_size="1",
+    mini_batch_error_threshold=1,
+    retry_settings=dict(max_retries=2, timeout=60),
+    logging_level="DEBUG",
+    task=RunFunction(
+        code="./src",
+        entry_script="file_batch_inference.py",
+        program_arguments="--job_output_path ${{outputs.job_output_path}}",
+        environment="azureml://registries/azureml/environments/sklearn-1.5/labels/latest",
+    ),
+)
+# parallel task to process file data
+file_batch_inference = parallel_run_function(
+    name="file_batch_score",
+    display_name="Batch Score with File Dataset",
+    description="parallel component for batch score",
+    inputs=dict(
+        job_data_path=Input(
+            type=AssetTypes.MLTABLE,
+            description="The data to be split and scored in parallel",
+        )
+    ),
+    outputs=dict(job_output_path=Output(type=AssetTypes.MLTABLE)),
+    input_data="${{inputs.job_data_path}}",
+    instance_count=2,
+    max_concurrency_per_instance=1,
+    mini_batch_size="1",
+    mini_batch_error_threshold=1,
+    retry_settings=dict(max_retries=2, timeout=60),
+    logging_level="DEBUG",
+    task=RunFunction(
+        code="./src",
+        entry_script="file_batch_inference.py",
+        program_arguments="--job_output_path ${{outputs.job_output_path}}",
+        environment="azureml://registries/azureml/environments/sklearn-1.5/labels/latest",
+    ),
+)
+Azure Machine Learning parallel job exposes many optional settings that can automatically control the job without manual intervention. The following table describes these settings.
+mini_batch_error_threshold
+run()
+run()
+[-1, int.max]
+-1
+mini_batch_error_threshold
+mini_batch_max_retries
+mini_batch_error_threshold
+[0, int.max]
+2
+retry_settings.max_retries
+mini_batch_timeout
+run()
+(0, 259200]
+60
+retry_settings.timeout
+item_error_threshold
+[-1, int.max]
+-1
+--error_threshold
+allowed_failed_percent
+mini_batch_error_threshold
+[0, 100]
+100
+--allowed_failed_percent
+overhead_timeout
+run()
+(0, 259200]
+600
+--task_overhead_timeout
+progress_update_timeout
+(0, 259200]
+--progress_update_timeout
+first_task_creation_timeout
+(0, 259200]
+600
+--first_task_creation_timeout
+logging_level
+INFO
+WARNING
+DEBUG
+INFO
+logging_level
+append_row_to
+${{outputs.<output_name>}}
+task.append_row_to
+copy_logs_to_parent
+True
+False
+False
+--copy_logs_to_parent
+resource_monitor_interval
+0
+[0, int.max]
+600
+--resource_monitor_interval
+The following sample code updates these settings:
+Azure CLI
+Python
+batch_prediction:
+  type: parallel
+  compute: azureml:cpu-cluster
+  inputs:
+    input_data: 
+      type: mltable
+      path: ./neural-iris-mltable
+      mode: direct
+    score_model: 
+      type: uri_folder
+      path: ./iris-model
+      mode: download
+  outputs:
+    job_output_file:
+      type: uri_file
+      mode: rw_mount
+
+  input_data: ${{inputs.input_data}}
+  mini_batch_size: "10kb"
+  resources:
+      instance_count: 2
+  max_concurrency_per_instance: 2
+
+  logging_level: "DEBUG"
+  mini_batch_error_threshold: 5
+  retry_settings:
+    max_retries: 2
+    timeout: 60
+
+  task:
+    type: run_function
+    code: "./script"
+    entry_script: iris_prediction.py
+    environment:
+      name: "prs-env"
+      version: 1
+      image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04
+      conda_file: ./environment/environment_parallel.yml
+    program_arguments: >-
+      --model ${{inputs.score_model}}
+      --error_threshold 5
+      --allowed_failed_percent 30
+      --task_overhead_timeout 1200
+      --progress_update_timeout 600
+      --first_task_creation_timeout 600
+      --copy_logs_to_parent True
+      --resource_monitor_interva 20
+    append_row_to: ${{outputs.job_output_file}}
+batch_prediction:
+  type: parallel
+  compute: azureml:cpu-cluster
+  inputs:
+    input_data: 
+      type: mltable
+      path: ./neural-iris-mltable
+      mode: direct
+    score_model: 
+      type: uri_folder
+      path: ./iris-model
+      mode: download
+  outputs:
+    job_output_file:
+      type: uri_file
+      mode: rw_mount
+
+  input_data: ${{inputs.input_data}}
+  mini_batch_size: "10kb"
+  resources:
+      instance_count: 2
+  max_concurrency_per_instance: 2
+
+  logging_level: "DEBUG"
+  mini_batch_error_threshold: 5
+  retry_settings:
+    max_retries: 2
+    timeout: 60
+
+  task:
+    type: run_function
+    code: "./script"
+    entry_script: iris_prediction.py
+    environment:
+      name: "prs-env"
+      version: 1
+      image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04
+      conda_file: ./environment/environment_parallel.yml
+    program_arguments: >-
+      --model ${{inputs.score_model}}
+      --error_threshold 5
+      --allowed_failed_percent 30
+      --task_overhead_timeout 1200
+      --progress_update_timeout 600
+      --first_task_creation_timeout 600
+      --copy_logs_to_parent True
+      --resource_monitor_interva 20
+    append_row_to: ${{outputs.job_output_file}}
+# parallel task to process tabular data
+tabular_batch_inference = parallel_run_function(
+    name="batch_score_with_tabular_input",
+    display_name="Batch Score with Tabular Dataset",
+    description="parallel component for batch score",
+    inputs=dict(
+        job_data_path=Input(
+            type=AssetTypes.MLTABLE,
+            description="The data to be split and scored in parallel",
+        ),
+        score_model=Input(
+            type=AssetTypes.URI_FOLDER, description="The model for batch score."
+        ),
+    ),
+    outputs=dict(job_output_path=Output(type=AssetTypes.MLTABLE)),
+    input_data="${{inputs.job_data_path}}",
+    instance_count=2,
+    max_concurrency_per_instance=2,
+    mini_batch_size="100",
+    mini_batch_error_threshold=5,
+    logging_level="DEBUG",
+    retry_settings=dict(max_retries=2, timeout=60),
+    task=RunFunction(
+        code="./src",
+        entry_script="tabular_batch_inference.py",
+        environment=Environment(
+            image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04",
+            conda_file="./src/environment_parallel.yml",
+        ),
+        program_arguments="--model ${{inputs.score_model}} "
+        "--job_output_path ${{outputs.job_output_path}} "
+        "--error_threshold 5 "
+        "--allowed_failed_percent 30 "
+        "--task_overhead_timeout 1200 "
+        "--progress_update_timeout 600 "
+        "--first_task_creation_timeout 600 "
+        "--copy_logs_to_parent True "
+        "--resource_monitor_interva 20 ",
+        append_row_to="${{outputs.job_output_path}}",
+    ),
+)
+# parallel task to process tabular data
+tabular_batch_inference = parallel_run_function(
+    name="batch_score_with_tabular_input",
+    display_name="Batch Score with Tabular Dataset",
+    description="parallel component for batch score",
+    inputs=dict(
+        job_data_path=Input(
+            type=AssetTypes.MLTABLE,
+            description="The data to be split and scored in parallel",
+        ),
+        score_model=Input(
+            type=AssetTypes.URI_FOLDER, description="The model for batch score."
+        ),
+    ),
+    outputs=dict(job_output_path=Output(type=AssetTypes.MLTABLE)),
+    input_data="${{inputs.job_data_path}}",
+    instance_count=2,
+    max_concurrency_per_instance=2,
+    mini_batch_size="100",
+    mini_batch_error_threshold=5,
+    logging_level="DEBUG",
+    retry_settings=dict(max_retries=2, timeout=60),
+    task=RunFunction(
+        code="./src",
+        entry_script="tabular_batch_inference.py",
+        environment=Environment(
+            image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04",
+            conda_file="./src/environment_parallel.yml",
+        ),
+        program_arguments="--model ${{inputs.score_model}} "
+        "--job_output_path ${{outputs.job_output_path}} "
+        "--error_threshold 5 "
+        "--allowed_failed_percent 30 "
+        "--task_overhead_timeout 1200 "
+        "--progress_update_timeout 600 "
+        "--first_task_creation_timeout 600 "
+        "--copy_logs_to_parent True "
+        "--resource_monitor_interva 20 ",
+        append_row_to="${{outputs.job_output_path}}",
+    ),
+)
+Create the pipeline with parallel job step
+Azure CLI
+Python
+The following example shows the complete pipeline job with the parallel job step inline:
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+type: pipeline
+
+display_name: iris-batch-prediction-using-parallel
+description: The hello world pipeline job with inline parallel job
+tags:
+  tag: tagvalue
+  owner: sdkteam
+
+settings:
+  default_compute: azureml:cpu-cluster
+
+jobs:
+  batch_prediction:
+    type: parallel
+    compute: azureml:cpu-cluster
+    inputs:
+      input_data: 
+        type: mltable
+        path: ./neural-iris-mltable
+        mode: direct
+      score_model: 
+        type: uri_folder
+        path: ./iris-model
+        mode: download
+    outputs:
+      job_output_file:
+        type: uri_file
+        mode: rw_mount
+
+    input_data: ${{inputs.input_data}}
+    mini_batch_size: "10kb"
+    resources:
+        instance_count: 2
+    max_concurrency_per_instance: 2
+
+    logging_level: "DEBUG"
+    mini_batch_error_threshold: 5
+    retry_settings:
+      max_retries: 2
+      timeout: 60
+
+    task:
+      type: run_function
+      code: "./script"
+      entry_script: iris_prediction.py
+      environment:
+        name: "prs-env"
+        version: 1
+        image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04
+        conda_file: ./environment/environment_parallel.yml
+      program_arguments: >-
+        --model ${{inputs.score_model}}
+        --error_threshold 5
+        --allowed_failed_percent 30
+        --task_overhead_timeout 1200
+        --progress_update_timeout 600
+        --first_task_creation_timeout 600
+        --copy_logs_to_parent True
+        --resource_monitor_interva 20
+      append_row_to: ${{outputs.job_output_file}}
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+type: pipeline
+
+display_name: iris-batch-prediction-using-parallel
+description: The hello world pipeline job with inline parallel job
+tags:
+  tag: tagvalue
+  owner: sdkteam
+
+settings:
+  default_compute: azureml:cpu-cluster
+
+jobs:
+  batch_prediction:
+    type: parallel
+    compute: azureml:cpu-cluster
+    inputs:
+      input_data: 
+        type: mltable
+        path: ./neural-iris-mltable
+        mode: direct
+      score_model: 
+        type: uri_folder
+        path: ./iris-model
+        mode: download
+    outputs:
+      job_output_file:
+        type: uri_file
+        mode: rw_mount
+
+    input_data: ${{inputs.input_data}}
+    mini_batch_size: "10kb"
+    resources:
+        instance_count: 2
+    max_concurrency_per_instance: 2
+
+    logging_level: "DEBUG"
+    mini_batch_error_threshold: 5
+    retry_settings:
+      max_retries: 2
+      timeout: 60
+
+    task:
+      type: run_function
+      code: "./script"
+      entry_script: iris_prediction.py
+      environment:
+        name: "prs-env"
+        version: 1
+        image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04
+        conda_file: ./environment/environment_parallel.yml
+      program_arguments: >-
+        --model ${{inputs.score_model}}
+        --error_threshold 5
+        --allowed_failed_percent 30
+        --task_overhead_timeout 1200
+        --progress_update_timeout 600
+        --first_task_creation_timeout 600
+        --copy_logs_to_parent True
+        --resource_monitor_interva 20
+      append_row_to: ${{outputs.job_output_file}}
+First, import the required libraries, initiate theml_clientwith proper credentials, and create or retrieve your computes:
+ml_client
+# import required libraries
+from azure.identity import DefaultAzureCredential, InteractiveBrowserCredential
+from azure.ai.ml import MLClient, Input, Output, load_component
+from azure.ai.ml.dsl import pipeline
+from azure.ai.ml.entities import Environment
+from azure.ai.ml.constants import AssetTypes, InputOutputModes
+from azure.ai.ml.parallel import parallel_run_function, RunFunction
+# import required libraries
+from azure.identity import DefaultAzureCredential, InteractiveBrowserCredential
+from azure.ai.ml import MLClient, Input, Output, load_component
+from azure.ai.ml.dsl import pipeline
+from azure.ai.ml.entities import Environment
+from azure.ai.ml.constants import AssetTypes, InputOutputModes
+from azure.ai.ml.parallel import parallel_run_function, RunFunction
+try:
+    credential = DefaultAzureCredential()
+    # Check if given credential can get token successfully.
+    credential.get_token("https://management.azure.com/.default")
+except Exception as ex:
+    # Fall back to InteractiveBrowserCredential in case DefaultAzureCredential not work
+    credential = InteractiveBrowserCredential()
+try:
+    credential = DefaultAzureCredential()
+    # Check if given credential can get token successfully.
+    credential.get_token("https://management.azure.com/.default")
+except Exception as ex:
+    # Fall back to InteractiveBrowserCredential in case DefaultAzureCredential not work
+    credential = InteractiveBrowserCredential()
+# Get a handle to workspace
+ml_client = MLClient.from_config(credential=credential)
+
+# Retrieve an already attached Azure Machine Learning Compute.
+cpu_compute_target = "cpu-cluster"
+print(ml_client.compute.get(cpu_compute_target))
+gpu_compute_target = "gpu-cluster"
+print(ml_client.compute.get(gpu_compute_target))
+# Get a handle to workspace
+ml_client = MLClient.from_config(credential=credential)
+
+# Retrieve an already attached Azure Machine Learning Compute.
+cpu_compute_target = "cpu-cluster"
+print(ml_client.compute.get(cpu_compute_target))
+gpu_compute_target = "gpu-cluster"
+print(ml_client.compute.get(gpu_compute_target))
+Then, implement the parallel job by completing theparallel_run_function:
+parallel_run_function
+# parallel task to process tabular data
+tabular_batch_inference = parallel_run_function(
+    name="batch_score_with_tabular_input",
+    display_name="Batch Score with Tabular Dataset",
+    description="parallel component for batch score",
+    inputs=dict(
+        job_data_path=Input(
+            type=AssetTypes.MLTABLE,
+            description="The data to be split and scored in parallel",
+        ),
+        score_model=Input(
+            type=AssetTypes.URI_FOLDER, description="The model for batch score."
+        ),
+    ),
+    outputs=dict(job_output_path=Output(type=AssetTypes.MLTABLE)),
+    input_data="${{inputs.job_data_path}}",
+    instance_count=2,
+    max_concurrency_per_instance=2,
+    mini_batch_size="100",
+    mini_batch_error_threshold=5,
+    logging_level="DEBUG",
+    retry_settings=dict(max_retries=2, timeout=60),
+    task=RunFunction(
+        code="./src",
+        entry_script="tabular_batch_inference.py",
+        environment=Environment(
+            image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04",
+            conda_file="./src/environment_parallel.yml",
+        ),
+        program_arguments="--model ${{inputs.score_model}} "
+        "--job_output_path ${{outputs.job_output_path}} "
+        "--error_threshold 5 "
+        "--allowed_failed_percent 30 "
+        "--task_overhead_timeout 1200 "
+        "--progress_update_timeout 600 "
+        "--first_task_creation_timeout 600 "
+        "--copy_logs_to_parent True "
+        "--resource_monitor_interva 20 ",
+        append_row_to="${{outputs.job_output_path}}",
+    ),
+)
+# parallel task to process tabular data
+tabular_batch_inference = parallel_run_function(
+    name="batch_score_with_tabular_input",
+    display_name="Batch Score with Tabular Dataset",
+    description="parallel component for batch score",
+    inputs=dict(
+        job_data_path=Input(
+            type=AssetTypes.MLTABLE,
+            description="The data to be split and scored in parallel",
+        ),
+        score_model=Input(
+            type=AssetTypes.URI_FOLDER, description="The model for batch score."
+        ),
+    ),
+    outputs=dict(job_output_path=Output(type=AssetTypes.MLTABLE)),
+    input_data="${{inputs.job_data_path}}",
+    instance_count=2,
+    max_concurrency_per_instance=2,
+    mini_batch_size="100",
+    mini_batch_error_threshold=5,
+    logging_level="DEBUG",
+    retry_settings=dict(max_retries=2, timeout=60),
+    task=RunFunction(
+        code="./src",
+        entry_script="tabular_batch_inference.py",
+        environment=Environment(
+            image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04",
+            conda_file="./src/environment_parallel.yml",
+        ),
+        program_arguments="--model ${{inputs.score_model}} "
+        "--job_output_path ${{outputs.job_output_path}} "
+        "--error_threshold 5 "
+        "--allowed_failed_percent 30 "
+        "--task_overhead_timeout 1200 "
+        "--progress_update_timeout 600 "
+        "--first_task_creation_timeout 600 "
+        "--copy_logs_to_parent True "
+        "--resource_monitor_interva 20 ",
+        append_row_to="${{outputs.job_output_path}}",
+    ),
+)
+Finally, use your parallel job as a step in your pipeline and bind its inputs/outputs with other steps:
+@pipeline()
+def parallel_in_pipeline(pipeline_job_data_path, pipeline_score_model):
+
+    prepare_file_tabular_data = prepare_data(input_data=pipeline_job_data_path)
+    # output of file & tabular data should be type MLTable
+    prepare_file_tabular_data.outputs.file_output_data.type = AssetTypes.MLTABLE
+    prepare_file_tabular_data.outputs.tabular_output_data.type = AssetTypes.MLTABLE
+
+    batch_inference_with_file_data = file_batch_inference(
+        job_data_path=prepare_file_tabular_data.outputs.file_output_data
+    )
+    # use eval_mount mode to handle file data
+    batch_inference_with_file_data.inputs.job_data_path.mode = (
+        InputOutputModes.EVAL_MOUNT
+    )
+    batch_inference_with_file_data.outputs.job_output_path.type = AssetTypes.MLTABLE
+
+    batch_inference_with_tabular_data = tabular_batch_inference(
+        job_data_path=prepare_file_tabular_data.outputs.tabular_output_data,
+        score_model=pipeline_score_model,
+    )
+    # use direct mode to handle tabular data
+    batch_inference_with_tabular_data.inputs.job_data_path.mode = (
+        InputOutputModes.DIRECT
+    )
+
+    return {
+        "pipeline_job_out_file": batch_inference_with_file_data.outputs.job_output_path,
+        "pipeline_job_out_tabular": batch_inference_with_tabular_data.outputs.job_output_path,
+    }
+
+
+pipeline_job_data_path = Input(
+    path="./dataset/", type=AssetTypes.MLTABLE, mode=InputOutputModes.RO_MOUNT
+)
+pipeline_score_model = Input(
+    path="./model/", type=AssetTypes.URI_FOLDER, mode=InputOutputModes.DOWNLOAD
+)
+# create a pipeline
+pipeline_job = parallel_in_pipeline(
+    pipeline_job_data_path=pipeline_job_data_path,
+    pipeline_score_model=pipeline_score_model,
+)
+pipeline_job.outputs.pipeline_job_out_tabular.type = AssetTypes.URI_FILE
+
+# set pipeline level compute
+pipeline_job.settings.default_compute = "cpu-cluster"
+@pipeline()
+def parallel_in_pipeline(pipeline_job_data_path, pipeline_score_model):
+
+    prepare_file_tabular_data = prepare_data(input_data=pipeline_job_data_path)
+    # output of file & tabular data should be type MLTable
+    prepare_file_tabular_data.outputs.file_output_data.type = AssetTypes.MLTABLE
+    prepare_file_tabular_data.outputs.tabular_output_data.type = AssetTypes.MLTABLE
+
+    batch_inference_with_file_data = file_batch_inference(
+        job_data_path=prepare_file_tabular_data.outputs.file_output_data
+    )
+    # use eval_mount mode to handle file data
+    batch_inference_with_file_data.inputs.job_data_path.mode = (
+        InputOutputModes.EVAL_MOUNT
+    )
+    batch_inference_with_file_data.outputs.job_output_path.type = AssetTypes.MLTABLE
+
+    batch_inference_with_tabular_data = tabular_batch_inference(
+        job_data_path=prepare_file_tabular_data.outputs.tabular_output_data,
+        score_model=pipeline_score_model,
+    )
+    # use direct mode to handle tabular data
+    batch_inference_with_tabular_data.inputs.job_data_path.mode = (
+        InputOutputModes.DIRECT
+    )
+
+    return {
+        "pipeline_job_out_file": batch_inference_with_file_data.outputs.job_output_path,
+        "pipeline_job_out_tabular": batch_inference_with_tabular_data.outputs.job_output_path,
+    }
+
+
+pipeline_job_data_path = Input(
+    path="./dataset/", type=AssetTypes.MLTABLE, mode=InputOutputModes.RO_MOUNT
+)
+pipeline_score_model = Input(
+    path="./model/", type=AssetTypes.URI_FOLDER, mode=InputOutputModes.DOWNLOAD
+)
+# create a pipeline
+pipeline_job = parallel_in_pipeline(
+    pipeline_job_data_path=pipeline_job_data_path,
+    pipeline_score_model=pipeline_score_model,
+)
+pipeline_job.outputs.pipeline_job_out_tabular.type = AssetTypes.URI_FILE
+
+# set pipeline level compute
+pipeline_job.settings.default_compute = "cpu-cluster"
+Submit the pipeline job
+Azure CLI
+Python
+Submit your pipeline job with parallel step by using theaz ml job createCLI command:
+az ml job create
+az ml job create --file pipeline.yml
+az ml job create --file pipeline.yml
+Submit your pipeline job with parallel step by using thejobs.create_or_updatefunction ofml_client:
+jobs.create_or_update
+ml_client
+pipeline_job = ml_client.jobs.create_or_update(
+    pipeline_job, experiment_name="pipeline_samples"
+)
+pipeline_job
+pipeline_job = ml_client.jobs.create_or_update(
+    pipeline_job, experiment_name="pipeline_samples"
+)
+pipeline_job
+Check parallel step in studio UI
+After you submit a pipeline job, the SDK or CLI widget gives you a web URL link to the pipeline graph in the Azure Machine Learning studio UI.
+To view parallel job results, double-click the parallel step in the pipeline graph, select theSettingstab in the details panel, expandRun settings, and then expand theParallelsection.
+
+To debug parallel job failure, select theOutputs + logstab, expand thelogsfolder, and checkjob_result.txtto understand why the parallel job failed. For information about the logging structure of parallel jobs, seereadme.txtin the same folder.
+
+Related content
+CLI (v2) parallel job YAML schema
+Create and manage data assets
+Schedule machine learning pipeline jobs
+Feedback
+Was this page helpful?
+Additional resources

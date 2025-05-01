@@ -1,0 +1,478 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Self-joins in Azure Cosmos DB for NoSQL
+Article
+2024-08-22
+2 contributors
+In this article
+APPLIES TO:NoSQL
+In Azure Cosmos DB for NoSQL, data is schema-free and typically denormalized. Instead of joining data across entities and sets, like you would in a relational database, joins occur within a single item. Specifically, joins are scoped to that item and can't occur across multiple items and containers.
+Tip
+If you find yourself needing to join across items and containers, consider reworking yourdata modelto avoid this.
+Self-join with a single item
+Let's look at an example of a self-join within an item. Consider a container with a single item. This item represents a product with various tags:
+[
+  {
+    "id": "aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb",
+    "categoryId": "bbbbbbbb-1111-2222-3333-cccccccccccc",
+    "name": "Teapo Surfboard (6'10\") Grape",
+    "sku": "teapo-surfboard-72109",
+    "tags": [
+      {
+        "id": "cccccccc-2222-3333-4444-dddddddddddd",
+        "slug": "tail-shape-swallow",
+        "name": "Tail Shape: Swallow"
+      },
+      {
+        "id": "dddddddd-3333-4444-5555-eeeeeeeeeeee",
+        "slug": "length-inches-82",
+        "name": "Length: 82 inches"
+      },
+      {
+        "id": "eeeeeeee-4444-5555-6666-ffffffffffff",
+        "slug": "color-group-purple",
+        "name": "Color Group: Purple"
+      }
+    ]
+  }
+]
+[
+  {
+    "id": "aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb",
+    "categoryId": "bbbbbbbb-1111-2222-3333-cccccccccccc",
+    "name": "Teapo Surfboard (6'10\") Grape",
+    "sku": "teapo-surfboard-72109",
+    "tags": [
+      {
+        "id": "cccccccc-2222-3333-4444-dddddddddddd",
+        "slug": "tail-shape-swallow",
+        "name": "Tail Shape: Swallow"
+      },
+      {
+        "id": "dddddddd-3333-4444-5555-eeeeeeeeeeee",
+        "slug": "length-inches-82",
+        "name": "Length: 82 inches"
+      },
+      {
+        "id": "eeeeeeee-4444-5555-6666-ffffffffffff",
+        "slug": "color-group-purple",
+        "name": "Color Group: Purple"
+      }
+    ]
+  }
+]
+What if you need to find thecolor groupof this product? Typically, you would need to write a query that has a filter checking every potential index in thetagsarray for a value with a prefix ofcolor-group-.
+tags
+color-group-
+SELECT
+  * 
+FROM
+  products p
+WHERE
+  STARTSWITH(p.tags[0].slug, "color-group-") OR
+  STARTSWITH(p.tags[1].slug, "color-group-") OR
+  STARTSWITH(p.tags[2].slug, "color-group-")
+SELECT
+  * 
+FROM
+  products p
+WHERE
+  STARTSWITH(p.tags[0].slug, "color-group-") OR
+  STARTSWITH(p.tags[1].slug, "color-group-") OR
+  STARTSWITH(p.tags[2].slug, "color-group-")
+This technique can become untenable quickly. The complexity or length of the query syntax increases the number of potential items in the array. Also, this query isn't flexible enough to handle future products, which may have more than three tags.
+In a traditional relational database, the tags would be separated into a separate table and a cross-table join is performed with a filter applied to the results. In the API for NoSQL, we can perform a self-join operation within the item using theJOINkeyword.
+JOIN
+SELECT
+  p.id,
+  p.sku,
+  t.slug
+FROM
+  products p
+JOIN
+  t IN p.tags
+SELECT
+  p.id,
+  p.sku,
+  t.slug
+FROM
+  products p
+JOIN
+  t IN p.tags
+This query returns a simple array with an item for each value in the tags array.
+[
+  {
+    "id": "aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb",
+    "sku": "teapo-surfboard-72109",
+    "slug": "tail-shape-swallow"
+  },
+  {
+    "id": "aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb",
+    "sku": "teapo-surfboard-72109",
+    "slug": "length-inches-82"
+  },
+  {
+    "id": "aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb",
+    "sku": "teapo-surfboard-72109",
+    "slug": "color-group-purple"
+  }
+]
+[
+  {
+    "id": "aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb",
+    "sku": "teapo-surfboard-72109",
+    "slug": "tail-shape-swallow"
+  },
+  {
+    "id": "aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb",
+    "sku": "teapo-surfboard-72109",
+    "slug": "length-inches-82"
+  },
+  {
+    "id": "aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb",
+    "sku": "teapo-surfboard-72109",
+    "slug": "color-group-purple"
+  }
+]
+Let's break down the query. The query now has two aliases:pfor each product item in the result set, andtfor the self-joinedtagsarray. The*keyword is only valid to project all fields if it can infer the input set, but now there are two input sets (pandt). Because of this constraint, we must explicitly define our returned fields asidandskufrom the product along withslugfrom the tags. To make this query easier to read and understand, we can drop theidfield and use an alias for the tag'snamefield to rename it totag.
+p
+t
+tags
+*
+p
+t
+id
+sku
+slug
+id
+name
+tag
+SELECT
+  p.sku,
+  t.name AS tag
+FROM
+  products p
+JOIN
+  t IN p.tags
+SELECT
+  p.sku,
+  t.name AS tag
+FROM
+  products p
+JOIN
+  t IN p.tags
+[
+  {
+    "sku": "teapo-surfboard-72109",
+    "tag": "Tail Shape: Swallow"
+  },
+  {
+    "sku": "teapo-surfboard-72109",
+    "tag": "Length: 82 inches"
+  },
+  {
+    "sku": "teapo-surfboard-72109",
+    "tag": "Color Group: Purple"
+  }
+]
+[
+  {
+    "sku": "teapo-surfboard-72109",
+    "tag": "Tail Shape: Swallow"
+  },
+  {
+    "sku": "teapo-surfboard-72109",
+    "tag": "Length: 82 inches"
+  },
+  {
+    "sku": "teapo-surfboard-72109",
+    "tag": "Color Group: Purple"
+  }
+]
+Finally, we can use a filter to find the tagcolor-group-purple. Because we used theJOINkeyword, our filter is flexible enough to handle any variable number of tags.
+color-group-purple
+JOIN
+SELECT
+  p.sku,
+  t.name AS tag
+FROM
+  products p
+JOIN
+  t IN p.tags
+WHERE
+  STARTSWITH(t.slug, "color-group-")
+SELECT
+  p.sku,
+  t.name AS tag
+FROM
+  products p
+JOIN
+  t IN p.tags
+WHERE
+  STARTSWITH(t.slug, "color-group-")
+[
+  {
+    "sku": "teapo-surfboard-72109",
+    "tag": "Color Group: Purple"
+  }
+]
+[
+  {
+    "sku": "teapo-surfboard-72109",
+    "tag": "Color Group: Purple"
+  }
+]
+Self-joining multiple items
+Let's move on to a sample where we need to find a value within an array that exists in multiple items. For this example, consider a container with two product items. Each item contains relevant tags for that item.
+[
+  {
+    "id": "ffffffff-5555-6666-7777-aaaaaaaaaaaa",
+    "categoryId": "cccccccc-8888-9999-0000-dddddddddddd",
+    "categoryName": "Sleeping Bags",
+    "name": "Maresse Sleeping Bag (6') Ming",
+    "sku": "maresse-sleeping-bag-65503",
+    "tags": [
+      {
+        "id": "b1b1b1b1-cccc-dddd-eeee-f2f2f2f2f2f2",
+        "slug": "bag-shape-mummy",
+        "name": "Bag Shape: Mummy"
+      },
+      {
+        "id": "bbbbbbbb-7777-8888-9999-cccccccccccc",
+        "slug": "bag-insulation-down-fill",
+        "name": "Bag Insulation: Down Fill"
+      }
+    ]
+  },
+  {
+    "id": "c2c2c2c2-dddd-eeee-ffff-a3a3a3a3a3a3",
+    "categoryId": "cccccccc-8888-9999-0000-dddddddddddd",
+    "categoryName": "Sleeping Bags",
+    "name": "Vareno Sleeping Bag (6') Turmeric",
+    "sku": "vareno-sleeping-bag-65508",
+    "tags": [
+      {
+        "id": "dddddddd-9999-0000-1111-eeeeeeeeeeee",
+        "slug": "bag-insulation-synthetic-fill",
+        "name": "Bag Insulation: Synthetic Fill"
+      },
+      {
+        "id": "a0a0a0a0-bbbb-cccc-dddd-e1e1e1e1e1e1",
+        "slug": "color-group-yellow",
+        "name": "Color Group: Yellow"
+      },
+      {
+        "id": "b1b1b1b1-cccc-dddd-eeee-f2f2f2f2f2f2",
+        "slug": "bag-shape-mummy",
+        "name": "Bag Shape: Mummy"
+      }
+    ]
+  }
+]
+[
+  {
+    "id": "ffffffff-5555-6666-7777-aaaaaaaaaaaa",
+    "categoryId": "cccccccc-8888-9999-0000-dddddddddddd",
+    "categoryName": "Sleeping Bags",
+    "name": "Maresse Sleeping Bag (6') Ming",
+    "sku": "maresse-sleeping-bag-65503",
+    "tags": [
+      {
+        "id": "b1b1b1b1-cccc-dddd-eeee-f2f2f2f2f2f2",
+        "slug": "bag-shape-mummy",
+        "name": "Bag Shape: Mummy"
+      },
+      {
+        "id": "bbbbbbbb-7777-8888-9999-cccccccccccc",
+        "slug": "bag-insulation-down-fill",
+        "name": "Bag Insulation: Down Fill"
+      }
+    ]
+  },
+  {
+    "id": "c2c2c2c2-dddd-eeee-ffff-a3a3a3a3a3a3",
+    "categoryId": "cccccccc-8888-9999-0000-dddddddddddd",
+    "categoryName": "Sleeping Bags",
+    "name": "Vareno Sleeping Bag (6') Turmeric",
+    "sku": "vareno-sleeping-bag-65508",
+    "tags": [
+      {
+        "id": "dddddddd-9999-0000-1111-eeeeeeeeeeee",
+        "slug": "bag-insulation-synthetic-fill",
+        "name": "Bag Insulation: Synthetic Fill"
+      },
+      {
+        "id": "a0a0a0a0-bbbb-cccc-dddd-e1e1e1e1e1e1",
+        "slug": "color-group-yellow",
+        "name": "Color Group: Yellow"
+      },
+      {
+        "id": "b1b1b1b1-cccc-dddd-eeee-f2f2f2f2f2f2",
+        "slug": "bag-shape-mummy",
+        "name": "Bag Shape: Mummy"
+      }
+    ]
+  }
+]
+What if you needed to find every item with amummybag shape? You could search for the tagbag-shape-mummy, but you would need to write a complex query that accounts for two characteristics of these items:
+bag-shape-mummy
+The tag with abag-shape-prefix occurs at different indexes in each array. For theVarenosleeping bag, the tag is the third item (index:2). For theMaressesleeping bag, the tag is the first item (index:0).
+The tag with abag-shape-prefix occurs at different indexes in each array. For theVarenosleeping bag, the tag is the third item (index:2). For theMaressesleeping bag, the tag is the first item (index:0).
+bag-shape-
+2
+0
+Thetagsarray for each item is a different length. TheVarenosleeping bag has two tags while theMaressesleeping bag has three.
+Thetagsarray for each item is a different length. TheVarenosleeping bag has two tags while theMaressesleeping bag has three.
+tags
+Here, theJOINkeyword is a great tool to create a cross product of the items and tags. Joins create a complete cross product of the sets participating in the join. The result is a set of tuples with every permutation of the item and the values within the targeted array.
+JOIN
+A join operation on our sample sleeping bag products and tags creates the following items:
+Here's the SQL query and JSON result set for a join that includes multiple items in the container.
+SELECT
+  p.sku,
+  t.name AS tag
+FROM
+  products p
+JOIN
+  t IN p.tags
+WHERE
+  p.categoryName = "Sleeping Bags"
+SELECT
+  p.sku,
+  t.name AS tag
+FROM
+  products p
+JOIN
+  t IN p.tags
+WHERE
+  p.categoryName = "Sleeping Bags"
+[
+  {
+    "sku": "maresse-sleeping-bag-65503",
+    "tag": "Bag Shape: Mummy"
+  },
+  {
+    "sku": "maresse-sleeping-bag-65503",
+    "tag": "Bag Insulation: Down Fill"
+  },
+  {
+    "sku": "vareno-sleeping-bag-65508",
+    "tag": "Bag Insulation: Synthetic Fill"
+  },
+  {
+    "sku": "vareno-sleeping-bag-65508",
+    "tag": "Color Group: Yellow"
+  },
+  {
+    "sku": "vareno-sleeping-bag-65508",
+    "tag": "Bag Shape: Mummy"
+  }
+]
+[
+  {
+    "sku": "maresse-sleeping-bag-65503",
+    "tag": "Bag Shape: Mummy"
+  },
+  {
+    "sku": "maresse-sleeping-bag-65503",
+    "tag": "Bag Insulation: Down Fill"
+  },
+  {
+    "sku": "vareno-sleeping-bag-65508",
+    "tag": "Bag Insulation: Synthetic Fill"
+  },
+  {
+    "sku": "vareno-sleeping-bag-65508",
+    "tag": "Color Group: Yellow"
+  },
+  {
+    "sku": "vareno-sleeping-bag-65508",
+    "tag": "Bag Shape: Mummy"
+  }
+]
+Just like with the single item, you can apply a filter here to find only items that match a specific tag. For example, this query finds all items with a tag namedbag-shape-mummyto meet the initial requirement mentioned earlier in this section.
+bag-shape-mummy
+SELECT
+  p.sku,
+  t.name AS tag
+FROM
+  products p
+JOIN
+  t IN p.tags
+WHERE
+  p.categoryName = "Sleeping Bags" AND
+  t.slug = "bag-shape-mummy"
+SELECT
+  p.sku,
+  t.name AS tag
+FROM
+  products p
+JOIN
+  t IN p.tags
+WHERE
+  p.categoryName = "Sleeping Bags" AND
+  t.slug = "bag-shape-mummy"
+[
+  {
+    "sku": "maresse-sleeping-bag-65503",
+    "tag": "Bag Shape: Mummy"
+  },
+  {
+    "sku": "vareno-sleeping-bag-65508",
+    "tag": "Bag Shape: Mummy"
+  }
+]
+[
+  {
+    "sku": "maresse-sleeping-bag-65503",
+    "tag": "Bag Shape: Mummy"
+  },
+  {
+    "sku": "vareno-sleeping-bag-65508",
+    "tag": "Bag Shape: Mummy"
+  }
+]
+You can also change the filter to get a different result set. For example, this query finds all items that have a tag namedbag-insulation-synthetic-fill.
+bag-insulation-synthetic-fill
+SELECT
+  p.sku,
+  t.name AS tag
+FROM
+  products p
+JOIN
+  t IN p.tags
+WHERE
+  p.categoryName = "Sleeping Bags" AND
+  t.slug = "bag-insulation-synthetic-fill"
+SELECT
+  p.sku,
+  t.name AS tag
+FROM
+  products p
+JOIN
+  t IN p.tags
+WHERE
+  p.categoryName = "Sleeping Bags" AND
+  t.slug = "bag-insulation-synthetic-fill"
+[
+  {
+    "sku": "vareno-sleeping-bag-65508",
+    "tag": "Bag Insulation: Synthetic Fill"
+  }
+]
+[
+  {
+    "sku": "vareno-sleeping-bag-65508",
+    "tag": "Bag Insulation: Synthetic Fill"
+  }
+]
+Related content
+SELECTclause
+SELECT
+FROMclause
+FROM
+Subqueries
+Feedback
+Was this page helpful?
+Additional resources

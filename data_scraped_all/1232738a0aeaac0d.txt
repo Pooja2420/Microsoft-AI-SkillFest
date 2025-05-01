@@ -1,0 +1,277 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Create a user delegation SAS for a container or blob with .NET
+Article
+2024-09-06
+5 contributors
+In this article
+.NET
+Java
+Python
+A shared access signature (SAS) enables you to grant limited access to containers and blobs in your storage account. When you create a SAS, you specify its constraints, including which Azure Storage resources a client is allowed to access, what permissions they have on those resources, and how long the SAS is valid.
+Every SAS is signed with a key. You can sign a SAS in one of two ways:
+With a key created using Microsoft Entra credentials. A SAS that is signed with Microsoft Entra credentials is auser delegationSAS. A client that creates a user delegation SAS must be assigned an Azure RBAC role that includes theMicrosoft.Storage/storageAccounts/blobServices/generateUserDelegationKeyaction. To learn more, seeCreate a user delegation SAS.
+With the storage account key. Both aservice SASand anaccount SASare signed with the storage account key. The client that creates a service SAS must either have direct access to the account key or be assigned theMicrosoft.Storage/storageAccounts/listkeys/actionpermission. To learn more, seeCreate a service SASorCreate an account SAS.
+Note
+A user delegation SAS offers superior security to a SAS that is signed with the storage account key. Microsoft recommends using a user delegation SAS when possible. For more information, seeGrant limited access to data with shared access signatures (SAS).
+This article shows how to use Microsoft Entra credentials to create a user delegation SAS for a container or blob using theAzure Storage client library for .NET.
+About the user delegation SAS
+A SAS token for access to a container or blob may be secured by using either Microsoft Entra credentials or an account key. A SAS secured with Microsoft Entra credentials is called a user delegation SAS, because the OAuth 2.0 token used to sign the SAS is requested on behalf of the user.
+Microsoft recommends that you use Microsoft Entra credentials when possible as a security best practice, rather than using the account key, which can be more easily compromised. When your application design requires shared access signatures, use Microsoft Entra credentials to create a user delegation SAS for superior security. For more information about the user delegation SAS, seeCreate a user delegation SAS.
+Caution
+Any client that possesses a valid SAS can access data in your storage account as permitted by that SAS. It's important to protect a SAS from malicious or unintended use. Use discretion in distributing a SAS, and have a plan in place for revoking a compromised SAS.
+For more information about shared access signatures, seeGrant limited access to Azure Storage resources using shared access signatures (SAS).
+Assign Azure roles for access to data
+When a Microsoft Entra security principal attempts to access data, that security principal must have permissions to the resource. Whether the security principal is a managed identity in Azure or a Microsoft Entra user account running code in the development environment, the security principal must be assigned an Azure role that grants access to data. For information about assigning permissions via Azure RBAC, seeAssign an Azure role for access to blob data.
+Set up your project
+To work with the code examples in this article, follow these steps to set up your project.
+Install packages
+Install the following packages:
+.NET CLI
+PowerShell
+dotnet add package Azure.Identity
+dotnet add package Azure.Storage.Blobs
+dotnet add package Azure.Identity
+dotnet add package Azure.Storage.Blobs
+Install-Package Azure.Identity
+Install-Package Azure.Storage.Blobs
+Install-Package Azure.Identity
+Install-Package Azure.Storage.Blobs
+Set up the app code
+Add the followingusingdirectives:
+using
+using Azure;
+using Azure.Identity;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure.Storage.Blobs.Specialized;
+using Azure.Storage.Sas;
+using Azure;
+using Azure.Identity;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure.Storage.Blobs.Specialized;
+using Azure.Storage.Sas;
+Get an authenticated token credential
+To get a token credential that your code can use to authorize requests to Blob Storage, create an instance of theDefaultAzureCredentialclass. For more information about using the DefaultAzureCredential class to authorize a managed identity to access Blob Storage, seeAzure Identity client library for .NET.
+The following code snippet shows how to get the authenticated token credential and use it to create a service client for Blob storage:
+// Construct the blob endpoint from the account name.
+string endpoint = $"https://{accountName}.blob.core.windows.net";
+
+// Create a blob service client object using DefaultAzureCredential
+BlobServiceClient blobServiceClient = new BlobServiceClient(
+    new Uri(endpoint),
+    new DefaultAzureCredential());
+// Construct the blob endpoint from the account name.
+string endpoint = $"https://{accountName}.blob.core.windows.net";
+
+// Create a blob service client object using DefaultAzureCredential
+BlobServiceClient blobServiceClient = new BlobServiceClient(
+    new Uri(endpoint),
+    new DefaultAzureCredential());
+To learn more about authorizing access to Blob Storage from your applications with the .NET SDK, seeHow to authenticate .NET applications with Azure services.
+Get the user delegation key
+Every SAS is signed with a key. To create a user delegation SAS, you must first request a user delegation key, which is then used to sign the SAS. The user delegation key is analogous to the account key used to sign a service SAS or an account SAS, except that it relies on your Microsoft Entra credentials. When a client requests a user delegation key using an OAuth 2.0 token, Blob Storage returns the user delegation key on behalf of the user.
+Once you have the user delegation key, you can use that key to create any number of user delegation shared access signatures, over the lifetime of the key. The user delegation key is independent of the OAuth 2.0 token used to acquire it, so the token doesn't need to be renewed if the key is still valid. You can specify the length of time that the key remains valid, up to a maximum of seven days.
+Use one of the following methods to request the user delegation key:
+GetUserDelegationKey
+GetUserDelegationKeyAsync
+The following code example shows how to request the user delegation key:
+public static async Task<UserDelegationKey> RequestUserDelegationKey(
+    BlobServiceClient blobServiceClient)
+{
+    // Get a user delegation key for the Blob service that's valid for 1 day
+    UserDelegationKey userDelegationKey =
+        await blobServiceClient.GetUserDelegationKeyAsync(
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow.AddDays(1));
+
+    return userDelegationKey;
+}
+public static async Task<UserDelegationKey> RequestUserDelegationKey(
+    BlobServiceClient blobServiceClient)
+{
+    // Get a user delegation key for the Blob service that's valid for 1 day
+    UserDelegationKey userDelegationKey =
+        await blobServiceClient.GetUserDelegationKeyAsync(
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow.AddDays(1));
+
+    return userDelegationKey;
+}
+Create a user delegation SAS
+You can create a user delegation SAS for a container or blob, based on the needs of your app.
+Container
+Blob
+Once you've obtained the user delegation key, you can create a user delegation SAS to delegate limited access to a container. The following code example shows how to create a user delegation SAS for a container:
+public static async Task<Uri> CreateUserDelegationSASContainer(
+    BlobContainerClient containerClient,
+    UserDelegationKey userDelegationKey)
+{
+    // Create a SAS token for the container resource that's also valid for 1 day
+    BlobSasBuilder sasBuilder = new BlobSasBuilder()
+    {
+        BlobContainerName = containerClient.Name,
+        Resource = "c",
+        StartsOn = DateTimeOffset.UtcNow,
+        ExpiresOn = DateTimeOffset.UtcNow.AddDays(1)
+    };
+
+    // Specify the necessary permissions
+    sasBuilder.SetPermissions(BlobSasPermissions.Read | BlobSasPermissions.Write);
+
+    // Add the SAS token to the blob URI
+    BlobUriBuilder uriBuilder = new BlobUriBuilder(containerClient.Uri)
+    {
+        // Specify the user delegation key
+        Sas = sasBuilder.ToSasQueryParameters(
+            userDelegationKey,
+            containerClient.GetParentBlobServiceClient().AccountName)
+    };
+
+    return uriBuilder.ToUri();
+}
+public static async Task<Uri> CreateUserDelegationSASContainer(
+    BlobContainerClient containerClient,
+    UserDelegationKey userDelegationKey)
+{
+    // Create a SAS token for the container resource that's also valid for 1 day
+    BlobSasBuilder sasBuilder = new BlobSasBuilder()
+    {
+        BlobContainerName = containerClient.Name,
+        Resource = "c",
+        StartsOn = DateTimeOffset.UtcNow,
+        ExpiresOn = DateTimeOffset.UtcNow.AddDays(1)
+    };
+
+    // Specify the necessary permissions
+    sasBuilder.SetPermissions(BlobSasPermissions.Read | BlobSasPermissions.Write);
+
+    // Add the SAS token to the blob URI
+    BlobUriBuilder uriBuilder = new BlobUriBuilder(containerClient.Uri)
+    {
+        // Specify the user delegation key
+        Sas = sasBuilder.ToSasQueryParameters(
+            userDelegationKey,
+            containerClient.GetParentBlobServiceClient().AccountName)
+    };
+
+    return uriBuilder.ToUri();
+}
+Once you've obtained the user delegation key, you can create a user delegation SAS to delegate limited access to a blob. The following code example shows how to create a user delegation SAS for a blob:
+public static async Task<Uri> CreateUserDelegationSASBlob(
+    BlobClient blobClient,
+    UserDelegationKey userDelegationKey)
+{
+    // Create a SAS token for the blob resource that's also valid for 1 day
+    BlobSasBuilder sasBuilder = new BlobSasBuilder()
+    {
+        BlobContainerName = blobClient.BlobContainerName,
+        BlobName = blobClient.Name,
+        Resource = "b",
+        StartsOn = DateTimeOffset.UtcNow,
+        ExpiresOn = DateTimeOffset.UtcNow.AddDays(1)
+    };
+
+    // Specify the necessary permissions
+    sasBuilder.SetPermissions(BlobSasPermissions.Read | BlobSasPermissions.Write);
+
+    // Add the SAS token to the blob URI
+    BlobUriBuilder uriBuilder = new BlobUriBuilder(blobClient.Uri)
+    {
+        // Specify the user delegation key
+        Sas = sasBuilder.ToSasQueryParameters(
+            userDelegationKey,
+            blobClient
+            .GetParentBlobContainerClient()
+            .GetParentBlobServiceClient().AccountName)
+    };
+
+    return uriBuilder.ToUri();
+}
+public static async Task<Uri> CreateUserDelegationSASBlob(
+    BlobClient blobClient,
+    UserDelegationKey userDelegationKey)
+{
+    // Create a SAS token for the blob resource that's also valid for 1 day
+    BlobSasBuilder sasBuilder = new BlobSasBuilder()
+    {
+        BlobContainerName = blobClient.BlobContainerName,
+        BlobName = blobClient.Name,
+        Resource = "b",
+        StartsOn = DateTimeOffset.UtcNow,
+        ExpiresOn = DateTimeOffset.UtcNow.AddDays(1)
+    };
+
+    // Specify the necessary permissions
+    sasBuilder.SetPermissions(BlobSasPermissions.Read | BlobSasPermissions.Write);
+
+    // Add the SAS token to the blob URI
+    BlobUriBuilder uriBuilder = new BlobUriBuilder(blobClient.Uri)
+    {
+        // Specify the user delegation key
+        Sas = sasBuilder.ToSasQueryParameters(
+            userDelegationKey,
+            blobClient
+            .GetParentBlobContainerClient()
+            .GetParentBlobServiceClient().AccountName)
+    };
+
+    return uriBuilder.ToUri();
+}
+Use a user delegation SAS to authorize a client object
+You can use a user delegation SAS to authorize a client object to perform operations on a container or blob based on the permissions granted by the SAS.
+Container
+Blob
+The following code example shows how to use the user delegation SAS to authorize aBlobContainerClientobject. This client object can be used to perform operations on the container resource based on the permissions granted by the SAS.
+// Create a Uri object with a user delegation SAS appended
+BlobContainerClient containerClient = blobServiceClient
+    .GetBlobContainerClient("sample-container");
+Uri containerSASURI = await CreateUserDelegationSASContainer(containerClient, userDelegationKey);
+
+// Create a container client object with SAS authorization
+BlobContainerClient containerClientSAS = new BlobContainerClient(containerSASURI);
+// Create a Uri object with a user delegation SAS appended
+BlobContainerClient containerClient = blobServiceClient
+    .GetBlobContainerClient("sample-container");
+Uri containerSASURI = await CreateUserDelegationSASContainer(containerClient, userDelegationKey);
+
+// Create a container client object with SAS authorization
+BlobContainerClient containerClientSAS = new BlobContainerClient(containerSASURI);
+The following code example shows how to use the user delegation SAS to authorize aBlobClientobject. This client object can be used to perform operations on the blob resource based on the permissions granted by the SAS.
+// Create a Uri object with a user delegation SAS appended
+BlobClient blobClient = blobServiceClient
+    .GetBlobContainerClient("sample-container")
+    .GetBlobClient("sample-blob.txt");
+Uri blobSASURI = await CreateUserDelegationSASBlob(blobClient, userDelegationKey);
+
+// Create a blob client object with SAS authorization
+BlobClient blobClientSAS = new BlobClient(blobSASURI);
+// Create a Uri object with a user delegation SAS appended
+BlobClient blobClient = blobServiceClient
+    .GetBlobContainerClient("sample-container")
+    .GetBlobClient("sample-blob.txt");
+Uri blobSASURI = await CreateUserDelegationSASBlob(blobClient, userDelegationKey);
+
+// Create a blob client object with SAS authorization
+BlobClient blobClientSAS = new BlobClient(blobSASURI);
+Resources
+To learn more about creating a user delegation SAS using the Azure Blob Storage client library for .NET, see the following resources.
+Code samples
+View code samples from this article (GitHub)
+REST API operations
+The Azure SDK for .NET contains libraries that build on top of the Azure REST API, allowing you to interact with REST API operations through familiar .NET paradigms. The client library method for getting a user delegation key uses the following REST API operation:
+Get User Delegation Key(REST API)
+Client library resources
+Client library reference documentation
+Client library source code
+Package (NuGet)
+See also
+Grant limited access to Azure Storage resources using shared access signatures (SAS)
+Create a user delegation SAS
+Related content
+This article is part of the Blob Storage developer guide for .NET. To learn more, see the full list of developer guide articles atBuild your .NET app.
+Feedback
+Was this page helpful?
+Additional resources

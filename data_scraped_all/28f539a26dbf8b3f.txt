@@ -1,0 +1,158 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Deploy to Azure Container Instances from Azure Container Registry using a service principal
+Article
+2024-08-29
+18 contributors
+In this article
+Azure Container Registryis an Azure-based, managed container registry service used to store private Docker container images. This article describes how to pull container images stored in an Azure container registry when deploying to Azure Container Instances. One way to configure registry access is to create a Microsoft Entra service principal and password, and store the sign-in credentials in an Azure key vault.
+Prerequisites
+Azure container registry: You need an Azure container registry--and at least one container image in the registry--to complete the steps in this article. If you need a registry, seeCreate a container registry using the Azure CLI.
+Azure CLI: The command-line examples in this article use theAzure CLIand are formatted for the Bash shell. You caninstall the Azure CLIlocally, or use theAzure Cloud Shell.
+Limitations
+Windows containers don't support system-assigned managed identity-authenticated image pulls with ACR, only user-assigned.
+Configure registry authentication
+In a production scenario where you provide access to "headless" services and applications, we recommend you configure registry access by using aservice principal. A service principal allows you to provideAzure role-based access control (Azure RBAC)to your container images. For example, you can configure a service principal with pull-only access to a registry.
+Azure Container Registry provides moreauthentication options.
+In the following section, you create an Azure key vault and a service principal, and store the service principal's credentials in the vault.
+Create key vault
+If you don't already have a vault inAzure Key Vault, create one with the Azure CLI using the following commands.
+Update theRES_GROUPvariable with the name of an existing resource group in which to create the key vault, andACR_NAMEwith the name of your container registry. For brevity, commands in this article assume that your registry, key vault, and container instances are all created in the same resource group.
+RES_GROUP
+ACR_NAME
+Specify a name for your new key vault inAKV_NAME. The vault name must be unique within Azure and must be 3-24 alphanumeric characters in length, begin with a letter, end with a letter or digit, and can't contain consecutive hyphens.
+AKV_NAME
+RES_GROUP=myresourcegroup # Resource Group name
+ACR_NAME=myregistry       # Azure Container Registry registry name
+AKV_NAME=mykeyvault       # Azure Key Vault vault name
+
+az keyvault create -g $RES_GROUP -n $AKV_NAME
+RES_GROUP=myresourcegroup # Resource Group name
+ACR_NAME=myregistry       # Azure Container Registry registry name
+AKV_NAME=mykeyvault       # Azure Key Vault vault name
+
+az keyvault create -g $RES_GROUP -n $AKV_NAME
+Create service principal and store credentials
+Now create a service principal and store its credentials in your key vault.
+The following commands useaz ad sp create-for-rbacto create the service principal, andaz keyvault secret setto store the service principal'spasswordin the vault. Be sure to take note of the service principal'sappIdupon creation.
+# Create service principal
+az ad sp create-for-rbac \
+  --name http://$ACR_NAME-pull \
+  --scopes $(az acr show --name $ACR_NAME --query id --output tsv) \
+  --role acrpull
+
+SP_ID=xxxx # Replace with your service principal's appId
+
+# Store the registry *password* in the vault
+az keyvault secret set \
+  --vault-name $AKV_NAME \
+  --name $ACR_NAME-pull-pwd \
+  --value $(az ad sp show --id $SP_ID --query password --output tsv)
+# Create service principal
+az ad sp create-for-rbac \
+  --name http://$ACR_NAME-pull \
+  --scopes $(az acr show --name $ACR_NAME --query id --output tsv) \
+  --role acrpull
+
+SP_ID=xxxx # Replace with your service principal's appId
+
+# Store the registry *password* in the vault
+az keyvault secret set \
+  --vault-name $AKV_NAME \
+  --name $ACR_NAME-pull-pwd \
+  --value $(az ad sp show --id $SP_ID --query password --output tsv)
+The--roleargument in the preceding command configures the service principal with theacrpullrole, which grants it pull-only access to the registry. To grant both push and pull access, change the--roleargument toacrpush.
+--role
+--role
+Next, store the service principal'sappIdin the vault, which is theusernameyou pass to Azure Container Registry for authentication.
+# Store service principal ID in vault (the registry *username*)
+az keyvault secret set \
+    --vault-name $AKV_NAME \
+    --name $ACR_NAME-pull-usr \
+    --value $(az ad sp show --id $SP_ID --query appId --output tsv)
+# Store service principal ID in vault (the registry *username*)
+az keyvault secret set \
+    --vault-name $AKV_NAME \
+    --name $ACR_NAME-pull-usr \
+    --value $(az ad sp show --id $SP_ID --query appId --output tsv)
+You created an Azure key vault and stored two secrets in it:
+$ACR_NAME-pull-usr: The service principal ID, for use as the container registryusername.
+$ACR_NAME-pull-usr
+$ACR_NAME-pull-pwd: The service principal password, for use as the container registrypassword.
+$ACR_NAME-pull-pwd
+You can now reference these secrets by name when you or your applications and services pull images from the registry.
+Deploy container with Azure CLI
+Now that the service principal credentials are stored in Azure Key Vault secrets, your applications and services can use them to access your private registry.
+First get the registry's login server name by using theaz acr showcommand. The login server name is all lowercase and similar tomyregistry.azurecr.io.
+myregistry.azurecr.io
+ACR_LOGIN_SERVER=$(az acr show --name $ACR_NAME --resource-group $RES_GROUP --query "loginServer" --output tsv)
+ACR_LOGIN_SERVER=$(az acr show --name $ACR_NAME --resource-group $RES_GROUP --query "loginServer" --output tsv)
+Execute the followingaz container createcommand to deploy a container instance. The command uses the service principal's credentials stored in Azure Key Vault to authenticate to your container registry, and assumes you previously pushed theaci-helloworldimage to your registry. Update the--imagevalue if you'd like to use a different image from your registry.
+--image
+az container create \
+    --name aci-demo \
+    --resource-group $RES_GROUP \
+    --image $ACR_LOGIN_SERVER/aci-helloworld:v1 \
+    --registry-login-server $ACR_LOGIN_SERVER \
+    --registry-username $(az keyvault secret show --vault-name $AKV_NAME -n $ACR_NAME-pull-usr --query value -o tsv) \
+    --registry-password $(az keyvault secret show --vault-name $AKV_NAME -n $ACR_NAME-pull-pwd --query value -o tsv) \
+    --dns-name-label aci-demo-$RANDOM \
+    --query ipAddress.fqdn
+az container create \
+    --name aci-demo \
+    --resource-group $RES_GROUP \
+    --image $ACR_LOGIN_SERVER/aci-helloworld:v1 \
+    --registry-login-server $ACR_LOGIN_SERVER \
+    --registry-username $(az keyvault secret show --vault-name $AKV_NAME -n $ACR_NAME-pull-usr --query value -o tsv) \
+    --registry-password $(az keyvault secret show --vault-name $AKV_NAME -n $ACR_NAME-pull-pwd --query value -o tsv) \
+    --dns-name-label aci-demo-$RANDOM \
+    --query ipAddress.fqdn
+The--dns-name-labelvalue must be unique within Azure, so the preceding command appends a random number to the container's DNS name label. The output from the command displays the container's fully qualified domain name (FQDN), for example:
+--dns-name-label
+"aci-demo-25007.eastus.azurecontainer.io"
+"aci-demo-25007.eastus.azurecontainer.io"
+Once the container starts successfully, you can navigate to its FQDN in your browser to verify the application is running successfully.
+Deploy with Azure Resource Manager template
+You can specify the properties of your Azure container registry in an Azure Resource Manager template by including theimageRegistryCredentialsproperty in the container group definition. For example, you can specify the registry credentials directly:
+imageRegistryCredentials
+[...]
+"imageRegistryCredentials": [
+  {
+    "server": "imageRegistryLoginServer",
+    "username": "imageRegistryUsername",
+    "password": "imageRegistryPassword"
+  }
+]
+[...]
+[...]
+"imageRegistryCredentials": [
+  {
+    "server": "imageRegistryLoginServer",
+    "username": "imageRegistryUsername",
+    "password": "imageRegistryPassword"
+  }
+]
+[...]
+For complete container group settings, see theResource Manager template reference.
+For details on referencing Azure Key Vault secrets in a Resource Manager template, seeUse Azure Key Vault to pass secure parameter value during deployment.
+Deploy with Azure portal
+If you maintain container images in an Azure container registry, you can easily create a container in Azure Container Instances using the Azure portal. When using the portal to deploy a container instance from a container registry, you must enable the registry'sadmin account. The admin account is designed for a single user to access the registry, mainly for testing purposes.
+In the Azure portal, navigate to your container registry.
+In the Azure portal, navigate to your container registry.
+To confirm that the admin account is enabled, selectAccess keys, and underAdmin userselectEnable.
+To confirm that the admin account is enabled, selectAccess keys, and underAdmin userselectEnable.
+SelectRepositories, then select the repository that you want to deploy from, right-click the tag for the container image you want to deploy, and selectRun instance.
+SelectRepositories, then select the repository that you want to deploy from, right-click the tag for the container image you want to deploy, and selectRun instance.
+
+Enter a name for the container and a name for the resource group. You can also change the default values if you wish.
+Enter a name for the container and a name for the resource group. You can also change the default values if you wish.
+
+Once the deployment completes, you can navigate to the container group from the notifications pane to find its IP address and other properties.
+Once the deployment completes, you can navigate to the container group from the notifications pane to find its IP address and other properties.
+
+Next steps
+For more information about Azure Container Registry authentication, seeAuthenticate with an Azure container registry.
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,183 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Create an FCI with Storage Spaces Direct (SQL Server on Azure VMs)
+Article
+2024-09-27
+15 contributors
+In this article
+Applies to:SQL Server on Azure VM
+Tip
+There are manymethods to deploy an availability group. Simplify your deployment and eliminate the need for an Azure Load Balancer or distributed network name (DNN) for your Always On availability group by creating your SQL Server virtual machines (VMs) inmultiple subnetswithin the same Azure virtual network. If you've already created your availability group in a single subnet, you canmigrate it to a multi-subnet environment.
+This article explains how to create a failover cluster instance (FCI) by usingStorage Spaces Directwith SQL Server on Azure Virtual Machines (VMs). Storage Spaces Direct acts as a software-based virtual storage area network (VSAN) that synchronizes the storage (data disks) between the nodes (Azure VMs) in a Windows cluster.
+To learn more, see an overview ofFCI with SQL Server on Azure VMsandcluster best practices.
+Note
+It's now possible to lift and shift your failover cluster instance solution to SQL Server on Azure VMs using Azure Migrate. SeeMigrate failover cluster instanceto learn more.
+Overview
+Storage Spaces Direct (S2D)supports two types of architectures: converged and hyperconverged. A hyperconverged infrastructure places the storage on the same servers that host the clustered application, so that storage is on each SQL Server FCI node.
+The following diagram shows the complete solution, which uses hyperconverged Storage Spaces Direct with SQL Server on Azure VMs:
+
+The preceding diagram shows the following resources in the same resource group:
+Two virtual machines in a Windows Server failover cluster. When a virtual machine is in a failover cluster, it's also called acluster nodeornode.
+Each virtual machine has two or more data disks.
+Storage Spaces Direct synchronizes the data on the data disks and presents the synchronized storage as a storage pool.
+The storage pool presents a Cluster Shared Volume (CSV) to the failover cluster.
+The SQL Server FCI cluster role uses the CSV for the data drives.
+An Azure load balancer to hold the IP address for the SQL Server FCI for a single subnet scenario.
+An Azure availability set holds all the resources.
+Note
+You can create this entire solution in Azure from a template. An example of a template is available on the GitHubAzure quickstart templatespage. This example isn't designed or tested for any specific workload. You can run the template to create a SQL Server FCI with Storage Spaces Direct storage connected to your domain. You can evaluate the template and modify it for your purposes.
+Prerequisites
+Before you complete the instructions in this article, you should already have:
+An Azure subscription. Get started with afree Azure account.
+Two or more prepared Azure Windows virtual machinesin anavailability set.
+An account that has permissions to create objects on both Azure virtual machines and in Active Directory.
+The latest version ofPowerShell.
+Create Windows Failover Cluster
+The steps to create your Windows Server Failover Cluster differ between single subnet and multi-subnet environments. To create your cluster, follow the steps in the tutorial for either amulti-subnet scenarioor asingle subnet scenario. Though these tutorials create an availability group, the steps to create the cluster are the same for a failover cluster instance.
+Configure quorum
+Although the disk witness is the most resilient quorum option, it's not supported for failover cluster instances configured with Storage Spaces Direct. As such, the cloud witness is the recommended quorum solution for this type of cluster configuration for SQL Server on Azure VMs.
+If you have an even number of votes in the cluster, configure thequorum solutionthat best suits your business needs. For more information, seeQuorum with SQL Server VMs.
+Validate the cluster
+Validate the cluster in the Failover Cluster Manager UI or by using PowerShell.
+To validate the cluster by using the UI, do the following on one of the virtual machines:
+InServer Manager, selectTools, and then selectFailover Cluster Manager.
+InServer Manager, selectTools, and then selectFailover Cluster Manager.
+Right-click the cluster inFailover Cluster Manager, selectValidate Clusterto open theValidate a Configuration Wizard.
+Right-click the cluster inFailover Cluster Manager, selectValidate Clusterto open theValidate a Configuration Wizard.
+On theValidate a Configuration Wizard, selectNext.
+On theValidate a Configuration Wizard, selectNext.
+On theSelect Servers or a Clusterpage, enter the names of both virtual machines.
+On theSelect Servers or a Clusterpage, enter the names of both virtual machines.
+On theTesting optionspage, selectRun only tests I select.
+On theTesting optionspage, selectRun only tests I select.
+SelectNext.
+SelectNext.
+On theTest Selectionpage, select all testsexceptStorage:
+On theTest Selectionpage, select all testsexceptStorage:
+
+SelectNext.
+SelectNext.
+On theConfirmationpage, selectNext.  TheValidate a Configurationwizard runs the validation tests.
+On theConfirmationpage, selectNext.  TheValidate a Configurationwizard runs the validation tests.
+To validate the cluster by using PowerShell, run the following script from an administrator PowerShell session on one of the virtual machines:
+Test-Cluster âNode ("<node1>","<node2>") âInclude "Storage Spaces Direct", "Inventory", "Network", "System Configuration"
+Test-Cluster âNode ("<node1>","<node2>") âInclude "Storage Spaces Direct", "Inventory", "Network", "System Configuration"
+Add storage
+The disks for Storage Spaces Direct need to be empty. They can't contain partitions or other data. To clean the disks, follow the instructions inDeploy Storage Spaces Direct.
+Enable Storage Spaces Direct.The following PowerShell script enables Storage Spaces Direct:Enable-ClusterS2DInFailover Cluster Manager, you can now see the storage pool.
+Enable Storage Spaces Direct.
+The following PowerShell script enables Storage Spaces Direct:
+Enable-ClusterS2D
+Enable-ClusterS2D
+InFailover Cluster Manager, you can now see the storage pool.
+Create a volume.Storage Spaces Direct automatically creates a storage pool when you enable it. You're now ready to create a volume. The PowerShell cmdletNew-Volumeautomates the volume creation process. This process includes formatting, adding the volume to the cluster, and creating a CSV. This example creates an 800 gigabyte (GB) CSV:New-Volume -StoragePoolFriendlyName S2D* -FriendlyName VDisk01 -FileSystem CSVFS_REFS -Size 800GBAfter you've run the preceding command, an 800-GB volume is mounted as a cluster resource. The volume is atC:\ClusterStorage\Volume1\.This screenshot shows a CSV with Storage Spaces Direct:
+Create a volume.
+Storage Spaces Direct automatically creates a storage pool when you enable it. You're now ready to create a volume. The PowerShell cmdletNew-Volumeautomates the volume creation process. This process includes formatting, adding the volume to the cluster, and creating a CSV. This example creates an 800 gigabyte (GB) CSV:
+New-Volume
+New-Volume -StoragePoolFriendlyName S2D* -FriendlyName VDisk01 -FileSystem CSVFS_REFS -Size 800GB
+New-Volume -StoragePoolFriendlyName S2D* -FriendlyName VDisk01 -FileSystem CSVFS_REFS -Size 800GB
+After you've run the preceding command, an 800-GB volume is mounted as a cluster resource. The volume is atC:\ClusterStorage\Volume1\.
+C:\ClusterStorage\Volume1\
+This screenshot shows a CSV with Storage Spaces Direct:
+
+Test cluster failover
+Test the failover of your cluster. InFailover Cluster Manager, right-click your cluster, selectMore Actions>Move Core Cluster Resource>Select node, and then select the other node of the cluster. Move the core cluster resource to every node of the cluster, and then move it back to the primary node. If you can successfully move the cluster to each node, you're ready to install SQL Server.
+
+Create SQL Server FCI
+After you've configured the failover cluster and all cluster components, including storage, you can create the SQL Server FCI.
+Create first node in the SQL FCI
+To create the first node in the SQL Server FCI, follow these steps:
+Connect to the first virtual machine by usingBastion.
+Connect to the first virtual machine by usingBastion.
+InFailover Cluster Manager, make sure all core cluster resources are on the first virtual machine. If necessary, move all resources to that virtual machine.
+InFailover Cluster Manager, make sure all core cluster resources are on the first virtual machine. If necessary, move all resources to that virtual machine.
+If the version of the operating system is Windows Server 2019 and the Windows Cluster was created using the defaultDistributed Network Name (DNN), then the FCI installation for SQL Server 2017 and below will fail with the errorThe given key was not present in the dictionary.During installation, SQL Server setup queries for the existing Virtual Network Name (VNN) and doesn't recognize the Windows Cluster DNN. The issue has been fixed in SQL Server 2019 setup. For SQL Server 2017 and below, follow these steps to avoid the installation error:In Failover Cluster Manager, connect to the cluster, right-clickRolesand selectCreate Empty Role.Right-click the newly created empty role, selectAdd Resourceand selectClient Access Point.Enter any name and complete the wizard to create theClient Access Point.After the SQL Server FCI installation completes, the role containing the temporaryClient Access Pointcan be deleted.
+If the version of the operating system is Windows Server 2019 and the Windows Cluster was created using the defaultDistributed Network Name (DNN), then the FCI installation for SQL Server 2017 and below will fail with the errorThe given key was not present in the dictionary.
+The given key was not present in the dictionary
+During installation, SQL Server setup queries for the existing Virtual Network Name (VNN) and doesn't recognize the Windows Cluster DNN. The issue has been fixed in SQL Server 2019 setup. For SQL Server 2017 and below, follow these steps to avoid the installation error:
+In Failover Cluster Manager, connect to the cluster, right-clickRolesand selectCreate Empty Role.
+Right-click the newly created empty role, selectAdd Resourceand selectClient Access Point.
+Enter any name and complete the wizard to create theClient Access Point.
+After the SQL Server FCI installation completes, the role containing the temporaryClient Access Pointcan be deleted.
+Locate the installation media. If the virtual machine uses one of the Azure Marketplace images, the media is located atC:\SQLServer_<version number>_Full. SelectSetup.
+Locate the installation media. If the virtual machine uses one of the Azure Marketplace images, the media is located atC:\SQLServer_<version number>_Full. SelectSetup.
+C:\SQLServer_<version number>_Full
+InSQL Server Installation Center, selectInstallation.
+InSQL Server Installation Center, selectInstallation.
+SelectNew SQL Server failover cluster installation. Follow the instructions in the wizard to install the SQL Server FCI.
+SelectNew SQL Server failover cluster installation. Follow the instructions in the wizard to install the SQL Server FCI.
+On theCluster Network Configurationpage, the IP you provide varies depending on if your SQL Server VMs were deployed to a single subnet, or multiple subnets.For asingle subnet environment, provide the IP address that you plan to add to theAzure Load BalancerFor amulti-subnet environment, provide the secondary IP address in the subnet of thefirstSQL Server VM that you previously designated as theIP address of the failover cluster instance network name:
+On theCluster Network Configurationpage, the IP you provide varies depending on if your SQL Server VMs were deployed to a single subnet, or multiple subnets.
+For asingle subnet environment, provide the IP address that you plan to add to theAzure Load Balancer
+For amulti-subnet environment, provide the secondary IP address in the subnet of thefirstSQL Server VM that you previously designated as theIP address of the failover cluster instance network name:
+
+InDatabase Engine Configuration, The FCI data directories need to be on clustered storage. With Storage Spaces Direct, it's not a shared disk but a mount point to a volume on each server. Storage Spaces Direct synchronizes the volume between both nodes. The volume is presented to the cluster as a CSV. Use the CSV mount point for the data directories.
+InDatabase Engine Configuration, The FCI data directories need to be on clustered storage. With Storage Spaces Direct, it's not a shared disk but a mount point to a volume on each server. Storage Spaces Direct synchronizes the volume between both nodes. The volume is presented to the cluster as a CSV. Use the CSV mount point for the data directories.
+
+After you complete the instructions in the wizard, Setup installs a SQL Server FCI on the first node.
+After you complete the instructions in the wizard, Setup installs a SQL Server FCI on the first node.
+Add additional nodes the SQL FCI
+To add an additional node to the SQL Server FCI, follow these steps:
+After FCI installation succeeds on the first node, connect to the second node by usingBastion.
+After FCI installation succeeds on the first node, connect to the second node by usingBastion.
+Open theSQL Server Installation Center. SelectInstallation.
+Open theSQL Server Installation Center. SelectInstallation.
+SelectAdd node to a SQL Server failover cluster. Follow the instructions in the wizard to install SQL Server and add the node to the FCI.
+SelectAdd node to a SQL Server failover cluster. Follow the instructions in the wizard to install SQL Server and add the node to the FCI.
+For a multi-subnet scenario, inCluster Network Configuration, enter the secondary IP address in the subnet of thesecondSQL Server VM that you previously designated as theIP address of the failover cluster instance network nameAfter selectingNextinCluster Network Configuration, setup shows a dialog box indicating that SQL Server Setup detected multiple subnets as in the example image.  SelectYesto confirm.
+For a multi-subnet scenario, inCluster Network Configuration, enter the secondary IP address in the subnet of thesecondSQL Server VM that you previously designated as theIP address of the failover cluster instance network name
+
+After selectingNextinCluster Network Configuration, setup shows a dialog box indicating that SQL Server Setup detected multiple subnets as in the example image.  SelectYesto confirm.
+
+After you complete the instructions in the wizard, setup adds the second SQL Server FCI node.
+After you complete the instructions in the wizard, setup adds the second SQL Server FCI node.
+Repeat these steps on any other nodes that you want to add to the SQL Server failover cluster instance.
+Repeat these steps on any other nodes that you want to add to the SQL Server failover cluster instance.
+Note
+Azure Marketplace gallery images come with SQL Server Management Studio installed. If you didn't use a marketplace imageDownload SQL Server Management Studio (SSMS).
+Register with SQL IaaS Agent extension
+To manage your SQL Server VM from the portal, register it with theSQL IaaS Agent extension. Note that onlylimited functionalitywill be available to SQL Server VMs that have failover clustered instances of SQL Server (FCIs).
+Note
+At this time, SQL Server failover cluster instances on Azure virtual machines registered with the SQL IaaS Agent extension only support alimitednumber of features available through basic registration, and not those that require the agent, such as automated backup, patching, Microsoft Entra authentication and advanced portal management. See thetable of benefitsto learn more.
+Register a SQL Server VM with PowerShell (-LicenseType can bePAYGorAHUB):
+PAYG
+AHUB
+# Get the existing compute VM
+$vm = Get-AzVM -Name <vm_name> -ResourceGroupName <resource_group_name>
+         
+# Register SQL VM with SQL IaaS Agent extension
+New-AzSqlVM -Name $vm.Name -ResourceGroupName $vm.ResourceGroupName -Location $vm.Location `
+   -LicenseType <license_type>
+# Get the existing compute VM
+$vm = Get-AzVM -Name <vm_name> -ResourceGroupName <resource_group_name>
+         
+# Register SQL VM with SQL IaaS Agent extension
+New-AzSqlVM -Name $vm.Name -ResourceGroupName $vm.ResourceGroupName -Location $vm.Location `
+   -LicenseType <license_type>
+Configure connectivity
+If you deployed your SQL Server VMs in multiple subnets, skip this step. If you deployed your SQL Server VMs to a single subnet, then you'll need to configure an additional component to route traffic to your FCI. You can configure a virtual network name (VNN) with an Azure Load Balancer, or a distributed network name for a failover cluster instance.Review the differences between the twoand then deploy either adistributed network nameor avirtual network name and Azure Load Balancerfor your failover cluster instance.
+Limitations
+Disks that have been attached as NTFS-formatted disks can be used with Storage Spaces Direct only if the disk eligibility option is unchecked, or cleared, when storage is being added to the cluster.
+Disks that have been attached as NTFS-formatted disks can be used with Storage Spaces Direct only if the disk eligibility option is unchecked, or cleared, when storage is being added to the cluster.
+SQL Server FCIs registered with the SQL IaaS Agent extension don't support features that require the agent, such as automated backup, patching, Microsoft Entra authentication and advanced portal management. See thetable of benefitsfor more information.
+SQL Server FCIs registered with the SQL IaaS Agent extension don't support features that require the agent, such as automated backup, patching, Microsoft Entra authentication and advanced portal management. See thetable of benefitsfor more information.
+Failover cluster instances using Storage Spaces Direct as the shared storage do not support using a disk witness for the quorum of the cluster. Use a cloud witness instead.
+Failover cluster instances using Storage Spaces Direct as the shared storage do not support using a disk witness for the quorum of the cluster. Use a cloud witness instead.
+Microsoft Distributed Transaction Coordinator (MSDTC) is not supported by SQL Server on Azure VM failover cluster instances deployed to Storage Spaces direct. ReviewFCI limitationsfor more information.
+Microsoft Distributed Transaction Coordinator (MSDTC) is not supported by SQL Server on Azure VM failover cluster instances deployed to Storage Spaces direct. ReviewFCI limitationsfor more information.
+Microsoft Distributed Transaction Coordinator (MSDTC) is supported on Azure virtual machines starting with Windows Server 2019 and later when deployed to dedicated Clustered Shared Volumes (CSVs) and using astandard load balancer. MSDTC is not supported on Windows Server 2016 and earlier.
+Microsoft Distributed Transaction Coordinator (MSDTC) is supported on Azure virtual machines starting with Windows Server 2019 and later when deployed to dedicated Clustered Shared Volumes (CSVs) and using astandard load balancer. MSDTC is not supported on Windows Server 2016 and earlier.
+Limited extension support
+At this time, SQL Server failover cluster instances on Azure virtual machines registered with theSQL IaaS Agent extensiononly support a limited number of features available through basic registration, and not those that require the agent, such as automated backup, patching, Microsoft Entra authentication and advanced portal management. See thetable of benefitsto learn more.
+If your SQL Server VM has already been registered with the SQL IaaS Agent extension and you've enabled any features that require the agent, you need todelete the extensionfrom the SQL Server VM by deleting theSQL virtual machineresource for the corresponding VMs, and then registering it with the SQL IaaS Agent extension again. When you're deleting theSQL virtual machineresource by using the Azure portal, clear the check box next to the correct virtual machine to avoid deleting the virtual machine.
+Next steps
+If Storage Spaces Direct isn't the appropriate FCI storage solution for you, consider creating your FCI by usingAzure shared disksorPremium File Sharesinstead.
+To learn more, see:
+Windows Server Failover Cluster with SQL Server on Azure VMs
+Failover cluster instances with SQL Server on Azure VMs
+Failover cluster instance overview
+HADR settings for SQL Server on Azure VMs
+Feedback
+Was this page helpful?
+Additional resources

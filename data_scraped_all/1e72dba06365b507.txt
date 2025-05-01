@@ -1,0 +1,172 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use low priority VMs for batch deployments
+Article
+2024-08-28
+4 contributors
+In this article
+APPLIES TO:Azure CLI ml extension v2 (current)Python SDK azure-ai-ml v2 (current)
+Azure batch deployments support low priority virtual machines (VMs) to reduce the cost of batch inference workloads. Low priority VMs enable a large amount of compute power to be used for a low cost. Low priority virtual machines take advantage of surplus capacity in Azure. When you specify low priority VMs in your pools, Azure can use this surplus, when available.
+Tip
+The tradeoff for using low priority VMs is that those virtual machines might not be available or they might be preempted at any time, depending on available capacity. For this reason, this approach is most suitable for batch and asynchronous processing workloads, where job completion time is flexible and the work is distributed across many virtual machines.
+Low priority virtual machines are offered at a reduced price compared with dedicated virtual machines. For pricing details, seeAzure Machine Learning pricing.
+How batch deployment works with low priority VMs
+Azure Machine Learning Batch Deployments provides several capabilities that make it easy to consume and benefit from low priority VMs:
+Batch deployment jobs consume low priority VMs by running on Azure Machine Learning compute clusters created with low priority VMs. After a deployment is associated with a low priority VMs cluster, all the jobs produced by such deployment use low priority VMs. Per-job configuration isn't possible.
+Batch deployment jobs automatically seek the target number of VMs in the available compute cluster based on the number of tasks to submit. If VMs are preempted or unavailable, batch deployment jobs attempt to replace the lost capacity by queuing the failed tasks to the cluster.
+Low priority VMs have a separate vCPU quota that differs from the one for dedicated VMs. Low-priority cores per region have a default limit of 100 to 3,000, depending on your subscription. The number of low-priority cores per subscription can be increased and is a single value across VM families. SeeAzure Machine Learning compute quotas.
+Considerations and use cases
+Many batch workloads are a good fit for low priority VMs. Using low priority VMs can introduce execution delays when deallocation of VMs occurs. If you have flexibility in the time jobs have to finish, you might tolerate the potential drops in capacity.
+When you deploy models under batch endpoints, rescheduling can be done at the minibatch level. That approach has the benefit that deallocation only impacts those minibatches that are currently being processed and not finished on the affected node. All completed progress is kept.
+Limitations
+After a deployment is associated with a low priority VMs cluster, all the jobs produced by such deployment use low priority VMs. Per-job configuration isn't possible.
+Rescheduling is done at the mini-batch level, regardless of the progress. No checkpointing capability is provided.
+Warning
+In the cases where the entire cluster is preempted or running on a single-node cluster, the job is cancelled because there is no capacity available for it to run. Resubmitting is required in this case.
+Create batch deployments that use low priority VMs
+Batch deployment jobs consume low priority VMs by running on Azure Machine Learning compute clusters created with low priority VMs.
+Note
+After a deployment is associated with a low priority VMs cluster, all the jobs produced by such deployment use low priority VMs. Per-job configuration is not possible.
+You can create a low priority Azure Machine Learning compute cluster as follows:
+Azure CLI
+Python
+Create a compute definitionYAMLlike the following one,low-pri-cluster.yml:
+YAML
+$schema: https://azuremlschemas.azureedge.net/latest/amlCompute.schema.json 
+name: low-pri-cluster
+type: amlcompute
+size: STANDARD_DS3_v2
+min_instances: 0
+max_instances: 2
+idle_time_before_scale_down: 120
+tier: low_priority
+$schema: https://azuremlschemas.azureedge.net/latest/amlCompute.schema.json 
+name: low-pri-cluster
+type: amlcompute
+size: STANDARD_DS3_v2
+min_instances: 0
+max_instances: 2
+idle_time_before_scale_down: 120
+tier: low_priority
+Create the compute using the following command:
+az ml compute create -f low-pri-cluster.yml
+az ml compute create -f low-pri-cluster.yml
+To create a new compute cluster with low priority VMs where to create the deployment, use the following script:
+from azure.ai.ml.entities import AmlCompute
+
+compute_name = "low-pri-cluster"
+compute_cluster = AmlCompute(
+   name=compute_name, 
+   description="Low priority compute cluster", 
+   min_instances=0, 
+   max_instances=2,
+   tier='LowPriority'
+)
+
+ml_client.begin_create_or_update(compute_cluster)
+from azure.ai.ml.entities import AmlCompute
+
+compute_name = "low-pri-cluster"
+compute_cluster = AmlCompute(
+   name=compute_name, 
+   description="Low priority compute cluster", 
+   min_instances=0, 
+   max_instances=2,
+   tier='LowPriority'
+)
+
+ml_client.begin_create_or_update(compute_cluster)
+After you create the new compute, you can create or update your deployment to use the new cluster:
+Azure CLI
+Python
+To create or update a deployment under the new compute cluster, create aYAMLconfiguration file,endpoint.yml:
+YAML
+$schema: https://azuremlschemas.azureedge.net/latest/batchDeployment.schema.json
+endpoint_name: heart-classifier-batch
+name: classifier-xgboost
+description: A heart condition classifier based on XGBoost
+type: model
+model: azureml:heart-classifier@latest
+compute: azureml:low-pri-cluster
+resources:
+  instance_count: 2
+settings:
+  max_concurrency_per_instance: 2
+  mini_batch_size: 2
+  output_action: append_row
+  output_file_name: predictions.csv
+  retry_settings:
+    max_retries: 3
+    timeout: 300
+$schema: https://azuremlschemas.azureedge.net/latest/batchDeployment.schema.json
+endpoint_name: heart-classifier-batch
+name: classifier-xgboost
+description: A heart condition classifier based on XGBoost
+type: model
+model: azureml:heart-classifier@latest
+compute: azureml:low-pri-cluster
+resources:
+  instance_count: 2
+settings:
+  max_concurrency_per_instance: 2
+  mini_batch_size: 2
+  output_action: append_row
+  output_file_name: predictions.csv
+  retry_settings:
+    max_retries: 3
+    timeout: 300
+Then, create the deployment with the following command:
+az ml batch-endpoint create -f endpoint.yml
+az ml batch-endpoint create -f endpoint.yml
+To create or update a deployment under the new compute cluster, use the following script:
+deployment = ModelBatchDeployment(
+    name="classifier-xgboost",
+    description="A heart condition classifier based on XGBoost",
+    endpoint_name=endpoint.name,
+    model=model,
+    compute=compute_name,
+    settings=ModelBatchDeploymentSettings(
+      instance_count=2,
+      max_concurrency_per_instance=2,
+      mini_batch_size=2,
+      output_action=BatchDeploymentOutputAction.APPEND_ROW,
+      output_file_name="predictions.csv",
+      retry_settings=BatchRetrySettings(max_retries=3, timeout=300),
+   )
+)
+
+ml_client.batch_deployments.begin_create_or_update(deployment)
+deployment = ModelBatchDeployment(
+    name="classifier-xgboost",
+    description="A heart condition classifier based on XGBoost",
+    endpoint_name=endpoint.name,
+    model=model,
+    compute=compute_name,
+    settings=ModelBatchDeploymentSettings(
+      instance_count=2,
+      max_concurrency_per_instance=2,
+      mini_batch_size=2,
+      output_action=BatchDeploymentOutputAction.APPEND_ROW,
+      output_file_name="predictions.csv",
+      retry_settings=BatchRetrySettings(max_retries=3, timeout=300),
+   )
+)
+
+ml_client.batch_deployments.begin_create_or_update(deployment)
+View and monitor node deallocation
+New metrics are available in theAzure portalfor low priority VMs to monitor low priority VMs. These metrics are:
+Preempted nodes
+Preempted cores
+To view these metrics in the Azure portal:
+Navigate to your Azure Machine Learning workspace in theAzure portal.
+SelectMetricsfrom theMonitoringsection.
+Select the metrics you desire from theMetriclist.
+
+Related content
+Create an Azure Machine Learning compute cluster
+Deploy MLflow models in batch deployments
+Manage compute resources for model training
+Feedback
+Was this page helpful?
+Additional resources

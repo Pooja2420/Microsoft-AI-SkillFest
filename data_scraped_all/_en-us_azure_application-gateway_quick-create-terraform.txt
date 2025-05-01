@@ -1,0 +1,736 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Quickstart: Direct web traffic with Azure Application Gateway - Terraform
+Article
+2024-05-30
+2 contributors
+In this article
+In this quickstart, you use Terraform to create an Azure Application Gateway. Then you test the application gateway to make sure it works correctly. The Standard v2 SKU is used in this example.
+Terraformenables the definition, preview, and deployment of cloud infrastructure. Using Terraform, you create configuration files usingHCL syntax. The HCL syntax allows you to specify the cloud provider - such as Azure - and the elements that make up your cloud infrastructure. After you create your configuration files, you create anexecution planthat allows you to preview your infrastructure changes before they're deployed. Once you verify the changes, you apply the execution plan to deploy the infrastructure.
+Create an Azure resource group usingazurerm_resource_group
+Create an Azure Virtual Network usingazurerm_virtual_network
+Create an Azure subnet usingazurerm_subnet
+Create an Azure public IP usingazurerm_public_ip
+Create an Azure Application Gateway usingazurerm_application_gateway
+Create an Azure network interface usingazurerm_network_interface
+Create an Azure network interface application gateway backend address pool association usingazurerm_network_interface_application_gateway_backend_address_pool_association
+Create an Azure Windows Virtual Machine usingazurerm_windows_virtual_machine
+Create an Azure Virtual Machine Extension usingazurerm_virtual_machine_extension
+
+Note
+Application Gateway frontend now supports dual-stack IP addresses (Preview). You can now create up to four frontend IP addresses: Two IPv4 addresses (public and private) and two IPv6 addresses (public and private).
+Prerequisites
+Install and configure Terraform
+Implement the Terraform code
+Note
+The sample code for this article is located in theAzure Terraform GitHub repo. You can view the log file containing thetest results from current and previous versions of Terraform.
+See morearticles and sample code showing how to use Terraform to manage Azure resources
+Create a directory in which to test the sample Terraform code and make it the current directory.
+Create a directory in which to test the sample Terraform code and make it the current directory.
+Create a file namedproviders.tfand insert the following code:terraform {
+  required_version = ">=1.2"
+  
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.0"
+    }
+    random = {
+      source = "hashicorp/random"
+      version = "~> 3.0"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {}
+}
+Create a file namedproviders.tfand insert the following code:
+providers.tf
+terraform {
+  required_version = ">=1.2"
+  
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.0"
+    }
+    random = {
+      source = "hashicorp/random"
+      version = "~> 3.0"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {}
+}
+terraform {
+  required_version = ">=1.2"
+  
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.0"
+    }
+    random = {
+      source = "hashicorp/random"
+      version = "~> 3.0"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {}
+}
+Create a file namedmain.tfand insert the following code:resource "random_string" "rg" {
+  length  = 8
+  upper   = false
+  special = false
+}
+
+resource "azurerm_resource_group" "rg" {
+  name     = "101-application-gateway-${random_string.rg.result}"
+  location = "eastus"
+}
+
+resource "azurerm_virtual_network" "vnet" {
+  name                = "myVNet"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  address_space       = ["10.21.0.0/16"]
+}
+
+resource "azurerm_subnet" "frontend" {
+  name                 = "myAGSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.21.0.0/24"]
+}
+
+resource "azurerm_subnet" "backend" {
+  name                 = "myBackendSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.21.1.0/24"]
+}
+
+resource "azurerm_public_ip" "pip" {
+  name                = "myAGPublicIPAddress"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+
+resource "azurerm_application_gateway" "main" {
+  name                = "myAppGateway"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  sku {
+    name     = "Standard_v2"
+    tier     = "Standard_v2"
+    capacity = 2
+  }
+
+  gateway_ip_configuration {
+    name      = "my-gateway-ip-configuration"
+    subnet_id = azurerm_subnet.frontend.id
+  }
+
+  frontend_port {
+    name = var.frontend_port_name
+    port = 80
+  }
+
+  frontend_ip_configuration {
+    name                 = var.frontend_ip_configuration_name
+    public_ip_address_id = azurerm_public_ip.pip.id
+  }
+
+  backend_address_pool {
+    name = var.backend_address_pool_name
+  }
+
+  backend_http_settings {
+    name                  = var.http_setting_name
+    cookie_based_affinity = "Disabled"
+    port                  = 80
+    protocol              = "Http"
+    request_timeout       = 60
+  }
+
+  http_listener {
+    name                           = var.listener_name
+    frontend_ip_configuration_name = var.frontend_ip_configuration_name
+    frontend_port_name             = var.frontend_port_name
+    protocol                       = "Http"
+  }
+
+  request_routing_rule {
+    name                       = var.request_routing_rule_name
+    rule_type                  = "Basic"
+    http_listener_name         = var.listener_name
+    backend_address_pool_name  = var.backend_address_pool_name
+    backend_http_settings_name = var.http_setting_name
+    priority                   = 1
+  }
+}
+
+resource "azurerm_network_interface" "nic" {
+  count               = 2
+  name                = "nic-${count.index+1}"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "nic-ipconfig-${count.index+1}"
+    subnet_id                     = azurerm_subnet.backend.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_network_interface_application_gateway_backend_address_pool_association" "nic-assoc" {
+  count                   = 2
+  network_interface_id    = azurerm_network_interface.nic[count.index].id
+  ip_configuration_name   = "nic-ipconfig-${count.index+1}"
+  backend_address_pool_id = one(azurerm_application_gateway.main.backend_address_pool).id
+}
+
+resource "random_password" "password" {
+  length  = 16
+  special = true
+  lower   = true
+  upper   = true
+  numeric = true
+}
+
+resource "azurerm_windows_virtual_machine" "vm" {
+  count               = 2
+  name                = "myVM${count.index+1}"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_DS1_v2"
+  admin_username      = "azureadmin"
+  admin_password      = random_password.password.result
+
+  network_interface_ids = [
+    azurerm_network_interface.nic[count.index].id,
+  ]
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2019-Datacenter"
+    version   = "latest"
+  }
+}
+
+resource "azurerm_virtual_machine_extension" "vm-extensions" {
+  count                = 2
+  name                 = "vm${count.index+1}-ext"
+  virtual_machine_id   = azurerm_windows_virtual_machine.vm[count.index].id
+  publisher            = "Microsoft.Compute"
+  type                 = "CustomScriptExtension"
+  type_handler_version = "1.10"
+
+  settings = <<SETTINGS
+    {
+        "commandToExecute": "powershell Add-WindowsFeature Web-Server; powershell Add-Content -Path \"C:\\inetpub\\wwwroot\\Default.htm\" -Value $($env:computername)"
+    }
+SETTINGS
+
+}
+Create a file namedmain.tfand insert the following code:
+main.tf
+resource "random_string" "rg" {
+  length  = 8
+  upper   = false
+  special = false
+}
+
+resource "azurerm_resource_group" "rg" {
+  name     = "101-application-gateway-${random_string.rg.result}"
+  location = "eastus"
+}
+
+resource "azurerm_virtual_network" "vnet" {
+  name                = "myVNet"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  address_space       = ["10.21.0.0/16"]
+}
+
+resource "azurerm_subnet" "frontend" {
+  name                 = "myAGSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.21.0.0/24"]
+}
+
+resource "azurerm_subnet" "backend" {
+  name                 = "myBackendSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.21.1.0/24"]
+}
+
+resource "azurerm_public_ip" "pip" {
+  name                = "myAGPublicIPAddress"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+
+resource "azurerm_application_gateway" "main" {
+  name                = "myAppGateway"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  sku {
+    name     = "Standard_v2"
+    tier     = "Standard_v2"
+    capacity = 2
+  }
+
+  gateway_ip_configuration {
+    name      = "my-gateway-ip-configuration"
+    subnet_id = azurerm_subnet.frontend.id
+  }
+
+  frontend_port {
+    name = var.frontend_port_name
+    port = 80
+  }
+
+  frontend_ip_configuration {
+    name                 = var.frontend_ip_configuration_name
+    public_ip_address_id = azurerm_public_ip.pip.id
+  }
+
+  backend_address_pool {
+    name = var.backend_address_pool_name
+  }
+
+  backend_http_settings {
+    name                  = var.http_setting_name
+    cookie_based_affinity = "Disabled"
+    port                  = 80
+    protocol              = "Http"
+    request_timeout       = 60
+  }
+
+  http_listener {
+    name                           = var.listener_name
+    frontend_ip_configuration_name = var.frontend_ip_configuration_name
+    frontend_port_name             = var.frontend_port_name
+    protocol                       = "Http"
+  }
+
+  request_routing_rule {
+    name                       = var.request_routing_rule_name
+    rule_type                  = "Basic"
+    http_listener_name         = var.listener_name
+    backend_address_pool_name  = var.backend_address_pool_name
+    backend_http_settings_name = var.http_setting_name
+    priority                   = 1
+  }
+}
+
+resource "azurerm_network_interface" "nic" {
+  count               = 2
+  name                = "nic-${count.index+1}"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "nic-ipconfig-${count.index+1}"
+    subnet_id                     = azurerm_subnet.backend.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_network_interface_application_gateway_backend_address_pool_association" "nic-assoc" {
+  count                   = 2
+  network_interface_id    = azurerm_network_interface.nic[count.index].id
+  ip_configuration_name   = "nic-ipconfig-${count.index+1}"
+  backend_address_pool_id = one(azurerm_application_gateway.main.backend_address_pool).id
+}
+
+resource "random_password" "password" {
+  length  = 16
+  special = true
+  lower   = true
+  upper   = true
+  numeric = true
+}
+
+resource "azurerm_windows_virtual_machine" "vm" {
+  count               = 2
+  name                = "myVM${count.index+1}"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_DS1_v2"
+  admin_username      = "azureadmin"
+  admin_password      = random_password.password.result
+
+  network_interface_ids = [
+    azurerm_network_interface.nic[count.index].id,
+  ]
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2019-Datacenter"
+    version   = "latest"
+  }
+}
+
+resource "azurerm_virtual_machine_extension" "vm-extensions" {
+  count                = 2
+  name                 = "vm${count.index+1}-ext"
+  virtual_machine_id   = azurerm_windows_virtual_machine.vm[count.index].id
+  publisher            = "Microsoft.Compute"
+  type                 = "CustomScriptExtension"
+  type_handler_version = "1.10"
+
+  settings = <<SETTINGS
+    {
+        "commandToExecute": "powershell Add-WindowsFeature Web-Server; powershell Add-Content -Path \"C:\\inetpub\\wwwroot\\Default.htm\" -Value $($env:computername)"
+    }
+SETTINGS
+
+}
+resource "random_string" "rg" {
+  length  = 8
+  upper   = false
+  special = false
+}
+
+resource "azurerm_resource_group" "rg" {
+  name     = "101-application-gateway-${random_string.rg.result}"
+  location = "eastus"
+}
+
+resource "azurerm_virtual_network" "vnet" {
+  name                = "myVNet"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  address_space       = ["10.21.0.0/16"]
+}
+
+resource "azurerm_subnet" "frontend" {
+  name                 = "myAGSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.21.0.0/24"]
+}
+
+resource "azurerm_subnet" "backend" {
+  name                 = "myBackendSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.21.1.0/24"]
+}
+
+resource "azurerm_public_ip" "pip" {
+  name                = "myAGPublicIPAddress"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+
+resource "azurerm_application_gateway" "main" {
+  name                = "myAppGateway"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  sku {
+    name     = "Standard_v2"
+    tier     = "Standard_v2"
+    capacity = 2
+  }
+
+  gateway_ip_configuration {
+    name      = "my-gateway-ip-configuration"
+    subnet_id = azurerm_subnet.frontend.id
+  }
+
+  frontend_port {
+    name = var.frontend_port_name
+    port = 80
+  }
+
+  frontend_ip_configuration {
+    name                 = var.frontend_ip_configuration_name
+    public_ip_address_id = azurerm_public_ip.pip.id
+  }
+
+  backend_address_pool {
+    name = var.backend_address_pool_name
+  }
+
+  backend_http_settings {
+    name                  = var.http_setting_name
+    cookie_based_affinity = "Disabled"
+    port                  = 80
+    protocol              = "Http"
+    request_timeout       = 60
+  }
+
+  http_listener {
+    name                           = var.listener_name
+    frontend_ip_configuration_name = var.frontend_ip_configuration_name
+    frontend_port_name             = var.frontend_port_name
+    protocol                       = "Http"
+  }
+
+  request_routing_rule {
+    name                       = var.request_routing_rule_name
+    rule_type                  = "Basic"
+    http_listener_name         = var.listener_name
+    backend_address_pool_name  = var.backend_address_pool_name
+    backend_http_settings_name = var.http_setting_name
+    priority                   = 1
+  }
+}
+
+resource "azurerm_network_interface" "nic" {
+  count               = 2
+  name                = "nic-${count.index+1}"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "nic-ipconfig-${count.index+1}"
+    subnet_id                     = azurerm_subnet.backend.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_network_interface_application_gateway_backend_address_pool_association" "nic-assoc" {
+  count                   = 2
+  network_interface_id    = azurerm_network_interface.nic[count.index].id
+  ip_configuration_name   = "nic-ipconfig-${count.index+1}"
+  backend_address_pool_id = one(azurerm_application_gateway.main.backend_address_pool).id
+}
+
+resource "random_password" "password" {
+  length  = 16
+  special = true
+  lower   = true
+  upper   = true
+  numeric = true
+}
+
+resource "azurerm_windows_virtual_machine" "vm" {
+  count               = 2
+  name                = "myVM${count.index+1}"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_DS1_v2"
+  admin_username      = "azureadmin"
+  admin_password      = random_password.password.result
+
+  network_interface_ids = [
+    azurerm_network_interface.nic[count.index].id,
+  ]
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2019-Datacenter"
+    version   = "latest"
+  }
+}
+
+resource "azurerm_virtual_machine_extension" "vm-extensions" {
+  count                = 2
+  name                 = "vm${count.index+1}-ext"
+  virtual_machine_id   = azurerm_windows_virtual_machine.vm[count.index].id
+  publisher            = "Microsoft.Compute"
+  type                 = "CustomScriptExtension"
+  type_handler_version = "1.10"
+
+  settings = <<SETTINGS
+    {
+        "commandToExecute": "powershell Add-WindowsFeature Web-Server; powershell Add-Content -Path \"C:\\inetpub\\wwwroot\\Default.htm\" -Value $($env:computername)"
+    }
+SETTINGS
+
+}
+Tip
+You can modify values of theNameandTierparameters underresource\applicationGateWay\main\skuto use a different SKU. For example:Basic.
+Name
+Tier
+resource\applicationGateWay\main\sku
+Basic
+Create a file namedvariables.tfand insert the following code:variable "backend_address_pool_name" {
+    default = "myBackendPool"
+}
+
+variable "frontend_port_name" {
+    default = "myFrontendPort"
+}
+
+variable "frontend_ip_configuration_name" {
+    default = "myAGIPConfig"
+}
+
+variable "http_setting_name" {
+    default = "myHTTPsetting"
+}
+
+variable "listener_name" {
+    default = "myListener"
+}
+
+variable "request_routing_rule_name" {
+    default = "myRoutingRule"
+}
+Create a file namedvariables.tfand insert the following code:
+variables.tf
+variable "backend_address_pool_name" {
+    default = "myBackendPool"
+}
+
+variable "frontend_port_name" {
+    default = "myFrontendPort"
+}
+
+variable "frontend_ip_configuration_name" {
+    default = "myAGIPConfig"
+}
+
+variable "http_setting_name" {
+    default = "myHTTPsetting"
+}
+
+variable "listener_name" {
+    default = "myListener"
+}
+
+variable "request_routing_rule_name" {
+    default = "myRoutingRule"
+}
+variable "backend_address_pool_name" {
+    default = "myBackendPool"
+}
+
+variable "frontend_port_name" {
+    default = "myFrontendPort"
+}
+
+variable "frontend_ip_configuration_name" {
+    default = "myAGIPConfig"
+}
+
+variable "http_setting_name" {
+    default = "myHTTPsetting"
+}
+
+variable "listener_name" {
+    default = "myListener"
+}
+
+variable "request_routing_rule_name" {
+    default = "myRoutingRule"
+}
+Create a file namedoutputs.tfand insert the following code:output "gateway_frontend_ip" {
+  value = "http://${azurerm_public_ip.pip.ip_address}"
+}
+Create a file namedoutputs.tfand insert the following code:
+outputs.tf
+output "gateway_frontend_ip" {
+  value = "http://${azurerm_public_ip.pip.ip_address}"
+}
+output "gateway_frontend_ip" {
+  value = "http://${azurerm_public_ip.pip.ip_address}"
+}
+Initialize Terraform
+Runterraform initto initialize the Terraform deployment. This command downloads the Azure provider required to manage your Azure resources.
+terraform init -upgrade
+terraform init -upgrade
+Key points:
+The-upgradeparameter upgrades the necessary provider plugins to the newest version that complies with the configuration's version constraints.
+-upgrade
+Create a Terraform execution plan
+Runterraform planto create an execution plan.
+terraform plan -out main.tfplan
+terraform plan -out main.tfplan
+Key points:
+Theterraform plancommand creates an execution plan, but doesn't execute it. Instead, it determines what actions are necessary to create the configuration specified in your configuration files. This pattern allows you to verify whether the execution plan matches your expectations before making any changes to actual resources.
+terraform plan
+The optional-outparameter allows you to specify an output file for the plan. Using the-outparameter ensures that the plan you reviewed is exactly what is applied.
+-out
+-out
+Apply a Terraform execution plan
+Runterraform applyto apply the execution plan to your cloud infrastructure.
+terraform apply main.tfplan
+terraform apply main.tfplan
+Key points:
+The exampleterraform applycommand assumes you previously ranterraform plan -out main.tfplan.
+terraform apply
+terraform plan -out main.tfplan
+If you specified a different filename for the-outparameter, use that same filename in the call toterraform apply.
+-out
+terraform apply
+If you didn't use the-outparameter, callterraform applywithout any parameters.
+-out
+terraform apply
+Verify the results
+When you apply the execution plan, Terraform displays the frontend public IP address. If you've cleared the screen, you can retrieve that value with the following Terraform command:echo $(terraform output -raw gateway_frontend_ip)
+When you apply the execution plan, Terraform displays the frontend public IP address. If you've cleared the screen, you can retrieve that value with the following Terraform command:
+echo $(terraform output -raw gateway_frontend_ip)
+echo $(terraform output -raw gateway_frontend_ip)
+Paste the public IP address into the address bar of your web browser. Refresh the browser to see the name of the virtual machine. A valid response verifies the application gateway is successfully created and can connect with the backend.
+Paste the public IP address into the address bar of your web browser. Refresh the browser to see the name of the virtual machine. A valid response verifies the application gateway is successfully created and can connect with the backend.
+Clean up resources
+When you no longer need the resources created via Terraform, do the following steps:
+Runterraform planand specify thedestroyflag.terraform plan -destroy -out main.destroy.tfplanKey points:Theterraform plancommand creates an execution plan, but doesn't execute it. Instead, it determines what actions are necessary to create the configuration specified in your configuration files. This pattern allows you to verify whether the execution plan matches your expectations before making any changes to actual resources.The optional-outparameter allows you to specify an output file for the plan. Using the-outparameter ensures that the plan you reviewed is exactly what is applied.
+Runterraform planand specify thedestroyflag.
+destroy
+terraform plan -destroy -out main.destroy.tfplan
+terraform plan -destroy -out main.destroy.tfplan
+Key points:
+Theterraform plancommand creates an execution plan, but doesn't execute it. Instead, it determines what actions are necessary to create the configuration specified in your configuration files. This pattern allows you to verify whether the execution plan matches your expectations before making any changes to actual resources.
+terraform plan
+The optional-outparameter allows you to specify an output file for the plan. Using the-outparameter ensures that the plan you reviewed is exactly what is applied.
+-out
+-out
+Runterraform applyto apply the execution plan.terraform apply main.destroy.tfplan
+Runterraform applyto apply the execution plan.
+terraform apply main.destroy.tfplan
+terraform apply main.destroy.tfplan
+Troubleshoot Terraform on Azure
+Troubleshoot common problems when using Terraform on Azure
+Next steps
+Learn more about using Application Gateway
+Feedback
+Was this page helpful?
+Additional resources

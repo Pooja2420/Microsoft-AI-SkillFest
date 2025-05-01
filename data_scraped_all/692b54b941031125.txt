@@ -1,0 +1,292 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Deploy an app in Azure Government with Azure Pipelines
+Article
+2023-05-11
+11 contributors
+In this article
+This how-to guide helps you use Azure Pipelines to set up continuous integration (CI) and continuous delivery (CD) of your web app running in Azure Government. CI/CD automates the build of your code from a repository along with the deployment (release) of the built code artifacts to a service or set of services in Azure Government. In this how-to guide, you'll build a web app and deploy it to an Azure Governments App Service. The build and release process is triggered by a change to a code file in the repository.
+Note
+Azure DevOpsisn't available on Azure Government. While this how-to guide shows how to configure the CI/CD capabilities of Azure Pipelines to deploy an app to a service inside Azure Government, be aware that Azure Pipelines runs its pipelines outside of Azure Government. Research your organization's security and service policies before using it as part of your deployment tools. For guidance on how to use Azure DevOps Server to create a DevOps experience inside a private network on Azure Government, seeAzure DevOps Server on Azure Government.
+Azure Pipelinesis used by development teams to configure continuous deployment for applications hosted in Azure subscriptions. We can use this service for applications running in Azure Government by definingservice connectionsfor Azure Government.
+Note
+We recommend that you use the Azure Az PowerShell module to interact with Azure. To get started, seeInstall Azure PowerShell. To learn how to migrate to the Az PowerShell module, seeMigrate Azure PowerShell from AzureRM to Az.
+Prerequisites
+Before starting this how-to guide, you must complete the following prerequisites:
+Create an organization in Azure DevOps
+Create and add a project to the Azure DevOps organization
+Install and set upAzure PowerShell
+If you don't have an active Azure Government subscription, create afree accountbefore you begin.
+Create Azure Government App Service app
+FollowTutorial: Deploy an Azure App Service appto learn how to deploy an Azure App Service app to Azure Government. The following steps will set up a CD process to deploy to your web app.
+Set up build and source control integration
+Review one of the following quickstarts to set up a build for your specific type of app:
+ASP.NET 4
+.NET Core
+Node.js
+Generate a service principal
+Copy and paste the following service principal creation PowerShell script into an IDE or editor, and then save the script. This code is compatible only with Azure Az PowerShell v7.0.0 or higher.param
+(
+    [Parameter(Mandatory=$true, HelpMessage="Enter Azure subscription name - you need to be subscription admin to execute the script")]
+    [string] $subscriptionName,
+
+    [Parameter(Mandatory=$false, HelpMessage="Provide SPN role assignment")]
+    [string] $spnRole = "owner",
+
+    [Parameter(Mandatory=$false, HelpMessage="Provide Azure environment name for your subscription")]
+    [string] $environmentName = "AzureUSGovernment"
+)
+
+# Initialize
+$ErrorActionPreference = "Stop"
+$VerbosePreference = "SilentlyContinue"
+$userName = ($env:USERNAME).Replace(' ', '')
+$newguid = [guid]::NewGuid()
+$displayName = [String]::Format("AzDevOps.{0}.{1}", $userName, $newguid)
+$homePage = "http://" + $displayName
+$identifierUri = $homePage
+
+# Check for Azure Az PowerShell module
+$isAzureModulePresent = Get-Module -Name Az -ListAvailable
+if ([String]::IsNullOrEmpty($isAzureModulePresent) -eq $true)
+{
+    Write-Output "Script requires Azure PowerShell modules to be present. Obtain Azure PowerShell from https://learn.microsoft.com//powershell/azure/install-az-ps" -Verbose
+    return
+}
+
+Import-Module -Name Az.Accounts
+Write-Output "Provide your credentials to access your Azure subscription $subscriptionName" -Verbose
+Connect-AzAccount -Subscription $subscriptionName -Environment $environmentName
+$azureSubscription = Get-AzSubscription -SubscriptionName $subscriptionName
+$connectionName = $azureSubscription.Name
+$tenantId = $azureSubscription.TenantId
+$id = $azureSubscription.SubscriptionId
+
+# Create new Azure AD application
+Write-Output "Creating new application in Azure AD (App URI - $identifierUri)" -Verbose
+$azureAdApplication = New-AzADApplication -DisplayName $displayName -HomePage $homePage -Verbose
+$appId = $azureAdApplication.AppId
+$objectId = $azureAdApplication.Id
+Write-Output "Azure AD application creation completed successfully (Application Id: $appId) and (Object Id: $objectId)" -Verbose
+
+# Add secret to Azure AD application
+Write-Output "Creating new secret for Azure AD application"
+$secret = New-AzADAppCredential -ObjectId $objectId -EndDate (Get-Date).AddYears(2)
+Write-Output "Secret created successfully" -Verbose
+
+# Create new SPN
+Write-Output "Creating new SPN" -Verbose
+$spn = New-AzADServicePrincipal -ApplicationId $appId
+$spnName = $spn.DisplayName
+Write-Output "SPN creation completed successfully (SPN Name: $spnName)" -Verbose
+
+# Assign role to SPN
+Write-Output "Waiting for SPN creation to reflect in directory before role assignment"
+Start-Sleep 20
+Write-Output "Assigning role ($spnRole) to SPN app ($appId)" -Verbose
+New-AzRoleAssignment -RoleDefinitionName $spnRole -ApplicationId $spn.AppId
+Write-Output "SPN role assignment completed successfully" -Verbose
+
+# Print values
+Write-Output "`nCopy and paste below values for service connection" -Verbose
+Write-Output "***************************************************************************"
+Write-Output "Connection Name: $connectionName(SPN)"
+Write-Output "Environment: $environmentName"
+Write-Output "Subscription Id: $id"
+Write-Output "Subscription Name: $connectionName"
+Write-Output "Service Principal Id: $appId"
+Write-Output "Tenant Id: $tenantId"
+Write-Output "***************************************************************************"
+Copy and paste the following service principal creation PowerShell script into an IDE or editor, and then save the script. This code is compatible only with Azure Az PowerShell v7.0.0 or higher.
+param
+(
+    [Parameter(Mandatory=$true, HelpMessage="Enter Azure subscription name - you need to be subscription admin to execute the script")]
+    [string] $subscriptionName,
+
+    [Parameter(Mandatory=$false, HelpMessage="Provide SPN role assignment")]
+    [string] $spnRole = "owner",
+
+    [Parameter(Mandatory=$false, HelpMessage="Provide Azure environment name for your subscription")]
+    [string] $environmentName = "AzureUSGovernment"
+)
+
+# Initialize
+$ErrorActionPreference = "Stop"
+$VerbosePreference = "SilentlyContinue"
+$userName = ($env:USERNAME).Replace(' ', '')
+$newguid = [guid]::NewGuid()
+$displayName = [String]::Format("AzDevOps.{0}.{1}", $userName, $newguid)
+$homePage = "http://" + $displayName
+$identifierUri = $homePage
+
+# Check for Azure Az PowerShell module
+$isAzureModulePresent = Get-Module -Name Az -ListAvailable
+if ([String]::IsNullOrEmpty($isAzureModulePresent) -eq $true)
+{
+    Write-Output "Script requires Azure PowerShell modules to be present. Obtain Azure PowerShell from https://learn.microsoft.com//powershell/azure/install-az-ps" -Verbose
+    return
+}
+
+Import-Module -Name Az.Accounts
+Write-Output "Provide your credentials to access your Azure subscription $subscriptionName" -Verbose
+Connect-AzAccount -Subscription $subscriptionName -Environment $environmentName
+$azureSubscription = Get-AzSubscription -SubscriptionName $subscriptionName
+$connectionName = $azureSubscription.Name
+$tenantId = $azureSubscription.TenantId
+$id = $azureSubscription.SubscriptionId
+
+# Create new Azure AD application
+Write-Output "Creating new application in Azure AD (App URI - $identifierUri)" -Verbose
+$azureAdApplication = New-AzADApplication -DisplayName $displayName -HomePage $homePage -Verbose
+$appId = $azureAdApplication.AppId
+$objectId = $azureAdApplication.Id
+Write-Output "Azure AD application creation completed successfully (Application Id: $appId) and (Object Id: $objectId)" -Verbose
+
+# Add secret to Azure AD application
+Write-Output "Creating new secret for Azure AD application"
+$secret = New-AzADAppCredential -ObjectId $objectId -EndDate (Get-Date).AddYears(2)
+Write-Output "Secret created successfully" -Verbose
+
+# Create new SPN
+Write-Output "Creating new SPN" -Verbose
+$spn = New-AzADServicePrincipal -ApplicationId $appId
+$spnName = $spn.DisplayName
+Write-Output "SPN creation completed successfully (SPN Name: $spnName)" -Verbose
+
+# Assign role to SPN
+Write-Output "Waiting for SPN creation to reflect in directory before role assignment"
+Start-Sleep 20
+Write-Output "Assigning role ($spnRole) to SPN app ($appId)" -Verbose
+New-AzRoleAssignment -RoleDefinitionName $spnRole -ApplicationId $spn.AppId
+Write-Output "SPN role assignment completed successfully" -Verbose
+
+# Print values
+Write-Output "`nCopy and paste below values for service connection" -Verbose
+Write-Output "***************************************************************************"
+Write-Output "Connection Name: $connectionName(SPN)"
+Write-Output "Environment: $environmentName"
+Write-Output "Subscription Id: $id"
+Write-Output "Subscription Name: $connectionName"
+Write-Output "Service Principal Id: $appId"
+Write-Output "Tenant Id: $tenantId"
+Write-Output "***************************************************************************"
+param
+(
+    [Parameter(Mandatory=$true, HelpMessage="Enter Azure subscription name - you need to be subscription admin to execute the script")]
+    [string] $subscriptionName,
+
+    [Parameter(Mandatory=$false, HelpMessage="Provide SPN role assignment")]
+    [string] $spnRole = "owner",
+
+    [Parameter(Mandatory=$false, HelpMessage="Provide Azure environment name for your subscription")]
+    [string] $environmentName = "AzureUSGovernment"
+)
+
+# Initialize
+$ErrorActionPreference = "Stop"
+$VerbosePreference = "SilentlyContinue"
+$userName = ($env:USERNAME).Replace(' ', '')
+$newguid = [guid]::NewGuid()
+$displayName = [String]::Format("AzDevOps.{0}.{1}", $userName, $newguid)
+$homePage = "http://" + $displayName
+$identifierUri = $homePage
+
+# Check for Azure Az PowerShell module
+$isAzureModulePresent = Get-Module -Name Az -ListAvailable
+if ([String]::IsNullOrEmpty($isAzureModulePresent) -eq $true)
+{
+    Write-Output "Script requires Azure PowerShell modules to be present. Obtain Azure PowerShell from https://learn.microsoft.com//powershell/azure/install-az-ps" -Verbose
+    return
+}
+
+Import-Module -Name Az.Accounts
+Write-Output "Provide your credentials to access your Azure subscription $subscriptionName" -Verbose
+Connect-AzAccount -Subscription $subscriptionName -Environment $environmentName
+$azureSubscription = Get-AzSubscription -SubscriptionName $subscriptionName
+$connectionName = $azureSubscription.Name
+$tenantId = $azureSubscription.TenantId
+$id = $azureSubscription.SubscriptionId
+
+# Create new Azure AD application
+Write-Output "Creating new application in Azure AD (App URI - $identifierUri)" -Verbose
+$azureAdApplication = New-AzADApplication -DisplayName $displayName -HomePage $homePage -Verbose
+$appId = $azureAdApplication.AppId
+$objectId = $azureAdApplication.Id
+Write-Output "Azure AD application creation completed successfully (Application Id: $appId) and (Object Id: $objectId)" -Verbose
+
+# Add secret to Azure AD application
+Write-Output "Creating new secret for Azure AD application"
+$secret = New-AzADAppCredential -ObjectId $objectId -EndDate (Get-Date).AddYears(2)
+Write-Output "Secret created successfully" -Verbose
+
+# Create new SPN
+Write-Output "Creating new SPN" -Verbose
+$spn = New-AzADServicePrincipal -ApplicationId $appId
+$spnName = $spn.DisplayName
+Write-Output "SPN creation completed successfully (SPN Name: $spnName)" -Verbose
+
+# Assign role to SPN
+Write-Output "Waiting for SPN creation to reflect in directory before role assignment"
+Start-Sleep 20
+Write-Output "Assigning role ($spnRole) to SPN app ($appId)" -Verbose
+New-AzRoleAssignment -RoleDefinitionName $spnRole -ApplicationId $spn.AppId
+Write-Output "SPN role assignment completed successfully" -Verbose
+
+# Print values
+Write-Output "`nCopy and paste below values for service connection" -Verbose
+Write-Output "***************************************************************************"
+Write-Output "Connection Name: $connectionName(SPN)"
+Write-Output "Environment: $environmentName"
+Write-Output "Subscription Id: $id"
+Write-Output "Subscription Name: $connectionName"
+Write-Output "Service Principal Id: $appId"
+Write-Output "Tenant Id: $tenantId"
+Write-Output "***************************************************************************"
+Open your PowerShell window and run the following command, which sets a policy that enables running local files:Set-ExecutionPolicy -Scope Process -ExecutionPolicy BypassWhen asked whether you want to change the execution policy, enter "A" (for "Yes to All").
+Open your PowerShell window and run the following command, which sets a policy that enables running local files:
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+When asked whether you want to change the execution policy, enter "A" (for "Yes to All").
+Navigate to the directory where you saved the service principal creation PowerShell script.
+Navigate to the directory where you saved the service principal creation PowerShell script.
+Edit the following command with the name of your script and run:./<name of script file you saved>
+Edit the following command with the name of your script and run:
+./<name of script file you saved>
+./<name of script file you saved>
+The "subscriptionName" parameter can be found by logging into your Azure Government subscription viaConnect-AzAccount -EnvironmentName AzureUSGovernmentand then runningGet-AzureSubscription.
+The "subscriptionName" parameter can be found by logging into your Azure Government subscription viaConnect-AzAccount -EnvironmentName AzureUSGovernmentand then runningGet-AzureSubscription.
+Connect-AzAccount -EnvironmentName AzureUSGovernment
+Get-AzureSubscription
+After providing your Azure Government subscription credentials, you should see the following message:The Environment variable should be AzureUSGovernment
+After providing your Azure Government subscription credentials, you should see the following message:
+The Environment variable should be AzureUSGovernment
+The Environment variable should be AzureUSGovernment
+After the script has run, you should see your service connection values. Copy these values as we'll need them when setting up our endpoint.
+After the script has run, you should see your service connection values. Copy these values as we'll need them when setting up our endpoint.
+
+Configure the Azure Pipelines service connection
+FollowManage service connectionsto set up the Azure Pipelines service connection.
+Make one change specific to Azure Government:
+In step #3 ofManage service connections: Create a service connection, click onUse the full version of the service connection catalogand setEnvironmenttoAzureUSGovernment.
+Define a release process
+FollowDeploy an Azure Web Appinstructions to set up your release pipeline and deploy to your application in Azure Government.
+Q&A
+Do I need a build agent?You need at least oneagentto run your deployments. By default, the build and deployment processes are configured to usehosted agents. Configuring a private agent would limit data sharing outside of Azure Government.
+Can I configure CD on Azure DevOps Server (formerly Team Foundation Server) to target Azure Government?You can set up Azure DevOps Server in Azure Government. For guidance on how to use Azure DevOps Server to create a DevOps experience inside a private network on Azure Government, seeAzure DevOps Server on Azure Government.
+Next steps
+For more information, see the following resources:
+Sign up for Azure Government trial
+Acquiring and accessing Azure Government
+Ask questions via the azure-gov tag on Stack Overflow
+Azure Government blog
+What is Infrastructure as Code? â Azure DevOps
+DevSecOps for infrastructure as code (IaC) â Azure Architecture Center
+Azure Government overview
+Azure Government security
+Compare Azure Government and global Azure
+Azure Government compliance
+Azure compliance
+Feedback
+Was this page helpful?
+Additional resources

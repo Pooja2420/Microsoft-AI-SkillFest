@@ -1,0 +1,395 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Create and configure an Azure Kubernetes Services (AKS) cluster to use virtual nodes using Azure CLI
+Article
+2024-08-01
+26 contributors
+In this article
+Virtual nodes enable network communication between pods that run in Azure Container Instances (ACI) and AKS clusters. To provide this communication, you create a virtual network subnet and assign delegated permissions. Virtual nodes only work with AKS clusters created usingadvancednetworking (Azure CNI). By default, AKS clusters are created withbasicnetworking (kubenet). This article shows you how to create a virtual network and subnets, then deploy an AKS cluster that uses advanced networking.
+This article shows you how to use the Azure CLI to create and configure virtual network resources and an AKS cluster enabled with virtual nodes.
+Before you begin
+Important
+Before using virtual nodes with AKS, review both thelimitations of AKS virtual nodesand thevirtual networking limitations of ACI. These limitations affect the location, networking configuration, and other configuration details of both your AKS cluster and the virtual nodes.
+You need the ACI service provider registered with your subscription. You can check the status of the ACI provider registration using theaz provider listcommand.az provider list --query "[?contains(namespace,'Microsoft.ContainerInstance')]" -o tableTheMicrosoft.ContainerInstanceprovider should report asRegistered, as shown in the following example output:Namespace                    RegistrationState    RegistrationPolicy
+---------------------------  -------------------  --------------------
+Microsoft.ContainerInstance  Registered           RegistrationRequiredIf the provider shows asNotRegistered, register the provider using theaz provider register.az provider register --namespace Microsoft.ContainerInstance
+You need the ACI service provider registered with your subscription. You can check the status of the ACI provider registration using theaz provider listcommand.
+az provider list
+az provider list --query "[?contains(namespace,'Microsoft.ContainerInstance')]" -o table
+az provider list --query "[?contains(namespace,'Microsoft.ContainerInstance')]" -o table
+TheMicrosoft.ContainerInstanceprovider should report asRegistered, as shown in the following example output:
+Namespace                    RegistrationState    RegistrationPolicy
+---------------------------  -------------------  --------------------
+Microsoft.ContainerInstance  Registered           RegistrationRequired
+Namespace                    RegistrationState    RegistrationPolicy
+---------------------------  -------------------  --------------------
+Microsoft.ContainerInstance  Registered           RegistrationRequired
+If the provider shows asNotRegistered, register the provider using theaz provider register.
+az provider register
+az provider register --namespace Microsoft.ContainerInstance
+az provider register --namespace Microsoft.ContainerInstance
+If using Azure CLI, this article requires Azure CLI version 2.0.49 or later. Runaz --versionto find the version. If you need to install or upgrade, seeInstall Azure CLI. You can also useAzure Cloud Shell.
+If using Azure CLI, this article requires Azure CLI version 2.0.49 or later. Runaz --versionto find the version. If you need to install or upgrade, seeInstall Azure CLI. You can also useAzure Cloud Shell.
+az --version
+Launch Azure Cloud Shell
+The Azure Cloud Shell is a free interactive shell you can use to run the steps in this article. It has common Azure tools preinstalled and configured.
+To open the Cloud Shell, selectTry itfrom the upper right corner of a code block. You can also launch Cloud Shell in a separate browser tab by going tohttps://shell.azure.com/bash. SelectCopyto copy the blocks of code, paste it into the Cloud Shell, and press enter to run it.
+Create a resource group
+An Azure resource group is a logical group in which Azure resources are deployed and managed.
+Create a resource group using theaz group createcommand.az group create --name myResourceGroup --location eastus
+Create a resource group using theaz group createcommand.
+az group create
+az group create --name myResourceGroup --location eastus
+az group create --name myResourceGroup --location eastus
+Create a virtual network
+Important
+Virtual node requires a custom virtual network and associated subnet. It can't be associated with the same virtual network as the AKS cluster.
+Create a virtual network using theaz network vnet createcommand. The following example creates a virtual network namedmyVnetwith an address prefix of10.0.0.0/8and a subnet namedmyAKSSubnet. The address prefix of this subnet defaults to10.240.0.0/16.az network vnet create \
+    --resource-group myResourceGroup \
+    --name myVnet \
+    --address-prefixes 10.0.0.0/8 \
+    --subnet-name myAKSSubnet \
+    --subnet-prefix 10.240.0.0/16
+Create a virtual network using theaz network vnet createcommand. The following example creates a virtual network namedmyVnetwith an address prefix of10.0.0.0/8and a subnet namedmyAKSSubnet. The address prefix of this subnet defaults to10.240.0.0/16.
+az network vnet create
+az network vnet create \
+    --resource-group myResourceGroup \
+    --name myVnet \
+    --address-prefixes 10.0.0.0/8 \
+    --subnet-name myAKSSubnet \
+    --subnet-prefix 10.240.0.0/16
+az network vnet create \
+    --resource-group myResourceGroup \
+    --name myVnet \
+    --address-prefixes 10.0.0.0/8 \
+    --subnet-name myAKSSubnet \
+    --subnet-prefix 10.240.0.0/16
+Create an extra subnet for the virtual nodes using theaz network vnet subnet createcommand. The following example creates a subnet namedmyVirtualNodeSubnetwith an address prefix of10.241.0.0/16.az network vnet subnet create \
+    --resource-group myResourceGroup \
+    --vnet-name myVnet \
+    --name myVirtualNodeSubnet \
+    --address-prefixes 10.241.0.0/16
+Create an extra subnet for the virtual nodes using theaz network vnet subnet createcommand. The following example creates a subnet namedmyVirtualNodeSubnetwith an address prefix of10.241.0.0/16.
+az network vnet subnet create
+az network vnet subnet create \
+    --resource-group myResourceGroup \
+    --vnet-name myVnet \
+    --name myVirtualNodeSubnet \
+    --address-prefixes 10.241.0.0/16
+az network vnet subnet create \
+    --resource-group myResourceGroup \
+    --vnet-name myVnet \
+    --name myVirtualNodeSubnet \
+    --address-prefixes 10.241.0.0/16
+Create an AKS cluster with managed identity
+Get the subnet ID using theaz network vnet subnet showcommand.az network vnet subnet show --resource-group myResourceGroup --vnet-name myVnet --name myAKSSubnet --query id -o tsv
+Get the subnet ID using theaz network vnet subnet showcommand.
+az network vnet subnet show
+az network vnet subnet show --resource-group myResourceGroup --vnet-name myVnet --name myAKSSubnet --query id -o tsv
+az network vnet subnet show --resource-group myResourceGroup --vnet-name myVnet --name myAKSSubnet --query id -o tsv
+Create an AKS cluster using theaz aks createcommand and replace<subnetId>with the ID obtained in the previous step. The following example creates a cluster namedmyAKSClusterwith five nodes.az aks create \
+    --resource-group myResourceGroup \
+    --name myAKSCluster \
+    --node-count 5 \
+    --network-plugin azure \
+    --vnet-subnet-id <subnetId> \
+    --generate-ssh-keysAfter several minutes, the command completes and returns JSON-formatted information about the cluster.
+Create an AKS cluster using theaz aks createcommand and replace<subnetId>with the ID obtained in the previous step. The following example creates a cluster namedmyAKSClusterwith five nodes.
+az aks create
+<subnetId>
+az aks create \
+    --resource-group myResourceGroup \
+    --name myAKSCluster \
+    --node-count 5 \
+    --network-plugin azure \
+    --vnet-subnet-id <subnetId> \
+    --generate-ssh-keys
+az aks create \
+    --resource-group myResourceGroup \
+    --name myAKSCluster \
+    --node-count 5 \
+    --network-plugin azure \
+    --vnet-subnet-id <subnetId> \
+    --generate-ssh-keys
+After several minutes, the command completes and returns JSON-formatted information about the cluster.
+For more information on managed identities, seeUse managed identities.
+Enable the virtual nodes addon
+Note
+If you have an existing Azure Kubernetes Service Cluster created that uses Azure CNI for the Advanced Networking you should be able to enable virtual nodes as an add-on using the CLI.
+Enable virtual nodes using theaz aks enable-addonscommand. The following example uses the subnet namedmyVirtualNodeSubnetcreated in a previous step.az aks enable-addons \
+    --resource-group myResourceGroup \
+    --name myAKSCluster \
+    --addons virtual-node \
+    --subnet-name myVirtualNodeSubnet
+Enable virtual nodes using theaz aks enable-addonscommand. The following example uses the subnet namedmyVirtualNodeSubnetcreated in a previous step.
+az aks enable-addons
+az aks enable-addons \
+    --resource-group myResourceGroup \
+    --name myAKSCluster \
+    --addons virtual-node \
+    --subnet-name myVirtualNodeSubnet
+az aks enable-addons \
+    --resource-group myResourceGroup \
+    --name myAKSCluster \
+    --addons virtual-node \
+    --subnet-name myVirtualNodeSubnet
+Connect to the cluster
+Configurekubectlto connect to your Kubernetes cluster using theaz aks get-credentialscommand. This step downloads credentials and configures the Kubernetes CLI to use them.az aks get-credentials --resource-group myResourceGroup --name myAKSCluster
+Configurekubectlto connect to your Kubernetes cluster using theaz aks get-credentialscommand. This step downloads credentials and configures the Kubernetes CLI to use them.
+kubectl
+az aks get-credentials
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster
+Verify the connection to your cluster using thekubectl getcommand, which returns a list of the cluster nodes.kubectl get nodesThe following example output shows the single VM node created and the virtual node for Linux,virtual-node-aci-linux:NAME                          STATUS    ROLES     AGE       VERSION
+virtual-node-aci-linux        Ready     agent     28m       v1.11.2
+aks-agentpool-14693408-0      Ready     agent     32m       v1.11.2
+Verify the connection to your cluster using thekubectl getcommand, which returns a list of the cluster nodes.
+kubectl get
+kubectl get nodes
+kubectl get nodes
+The following example output shows the single VM node created and the virtual node for Linux,virtual-node-aci-linux:
+NAME                          STATUS    ROLES     AGE       VERSION
+virtual-node-aci-linux        Ready     agent     28m       v1.11.2
+aks-agentpool-14693408-0      Ready     agent     32m       v1.11.2
+NAME                          STATUS    ROLES     AGE       VERSION
+virtual-node-aci-linux        Ready     agent     28m       v1.11.2
+aks-agentpool-14693408-0      Ready     agent     32m       v1.11.2
+Deploy a sample app
+Create a file namedvirtual-node.yamland copy in the following YAML. The YAML schedules the container on the node by defining anodeSelectorandtoleration.apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aci-helloworld
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aci-helloworld
+  template:
+    metadata:
+      labels:
+        app: aci-helloworld
+    spec:
+      containers:
+      - name: aci-helloworld
+        image: mcr.microsoft.com/azuredocs/aci-helloworld
+        ports:
+        - containerPort: 80
+      nodeSelector:
+        kubernetes.io/role: agent
+        beta.kubernetes.io/os: linux
+        type: virtual-kubelet
+      tolerations:
+      - key: virtual-kubelet.io/provider
+        operator: Exists
+      - key: azure.com/aci
+        effect: NoSchedule
+Create a file namedvirtual-node.yamland copy in the following YAML. The YAML schedules the container on the node by defining anodeSelectorandtoleration.
+virtual-node.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aci-helloworld
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aci-helloworld
+  template:
+    metadata:
+      labels:
+        app: aci-helloworld
+    spec:
+      containers:
+      - name: aci-helloworld
+        image: mcr.microsoft.com/azuredocs/aci-helloworld
+        ports:
+        - containerPort: 80
+      nodeSelector:
+        kubernetes.io/role: agent
+        beta.kubernetes.io/os: linux
+        type: virtual-kubelet
+      tolerations:
+      - key: virtual-kubelet.io/provider
+        operator: Exists
+      - key: azure.com/aci
+        effect: NoSchedule
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aci-helloworld
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aci-helloworld
+  template:
+    metadata:
+      labels:
+        app: aci-helloworld
+    spec:
+      containers:
+      - name: aci-helloworld
+        image: mcr.microsoft.com/azuredocs/aci-helloworld
+        ports:
+        - containerPort: 80
+      nodeSelector:
+        kubernetes.io/role: agent
+        beta.kubernetes.io/os: linux
+        type: virtual-kubelet
+      tolerations:
+      - key: virtual-kubelet.io/provider
+        operator: Exists
+      - key: azure.com/aci
+        effect: NoSchedule
+Run the application using thekubectl applycommand.kubectl apply -f virtual-node.yaml
+Run the application using thekubectl applycommand.
+kubectl apply
+kubectl apply -f virtual-node.yaml
+kubectl apply -f virtual-node.yaml
+Get a list of pods and the scheduled node using thekubectl get podscommand with the-o wideargument.kubectl get pods -o wideThe pod is scheduled on the virtual nodevirtual-node-aci-linux, as shown in the following example output:NAME                            READY     STATUS    RESTARTS   AGE       IP           NODE
+aci-helloworld-9b55975f-bnmfl   1/1       Running   0          4m        10.241.0.4   virtual-node-aci-linuxThe pod is assigned an internal IP address from the Azure virtual network subnet delegated for use with virtual nodes.
+Get a list of pods and the scheduled node using thekubectl get podscommand with the-o wideargument.
+kubectl get pods
+-o wide
+kubectl get pods -o wide
+kubectl get pods -o wide
+The pod is scheduled on the virtual nodevirtual-node-aci-linux, as shown in the following example output:
+NAME                            READY     STATUS    RESTARTS   AGE       IP           NODE
+aci-helloworld-9b55975f-bnmfl   1/1       Running   0          4m        10.241.0.4   virtual-node-aci-linux
+NAME                            READY     STATUS    RESTARTS   AGE       IP           NODE
+aci-helloworld-9b55975f-bnmfl   1/1       Running   0          4m        10.241.0.4   virtual-node-aci-linux
+The pod is assigned an internal IP address from the Azure virtual network subnet delegated for use with virtual nodes.
+Note
+If you use images stored in Azure Container Registry,configure and use a Kubernetes secret. A current limitation of virtual nodes is you can't use integrated Microsoft Entra service principal authentication. If you don't use a secret, pods scheduled on virtual nodes fail to start and report the errorHTTP response status code 400 error code "InaccessibleImage".
+HTTP response status code 400 error code "InaccessibleImage"
+Test the virtual node pod
+Test the pod running on the virtual node by browsing to the demo application with a web client. As the pod is assigned an internal IP address, you can quickly test this connectivity from another pod on the AKS cluster.
+Test the pod running on the virtual node by browsing to the demo application with a web client. As the pod is assigned an internal IP address, you can quickly test this connectivity from another pod on the AKS cluster.
+Create a test pod and attach a terminal session to it using the followingkubectl run -itcommand.kubectl run -it --rm testvk --image=mcr.microsoft.com/dotnet/runtime-deps:6.0
+Create a test pod and attach a terminal session to it using the followingkubectl run -itcommand.
+kubectl run -it
+kubectl run -it --rm testvk --image=mcr.microsoft.com/dotnet/runtime-deps:6.0
+kubectl run -it --rm testvk --image=mcr.microsoft.com/dotnet/runtime-deps:6.0
+Installcurlin the pod usingapt-get.apt-get update && apt-get install -y curl
+Installcurlin the pod usingapt-get.
+curl
+apt-get
+apt-get update && apt-get install -y curl
+apt-get update && apt-get install -y curl
+Access the address of your pod usingcurl, such ashttp://10.241.0.4. Provide your own internal IP address shown in the previouskubectl get podscommand.curl -L http://10.241.0.4The demo application is displayed, as shown in the following condensed example output:<html>
+<head>
+  <title>Welcome to Azure Container Instances!</title>
+</head>
+[...]
+Access the address of your pod usingcurl, such ashttp://10.241.0.4. Provide your own internal IP address shown in the previouskubectl get podscommand.
+curl
+kubectl get pods
+curl -L http://10.241.0.4
+curl -L http://10.241.0.4
+The demo application is displayed, as shown in the following condensed example output:
+<html>
+<head>
+  <title>Welcome to Azure Container Instances!</title>
+</head>
+[...]
+<html>
+<head>
+  <title>Welcome to Azure Container Instances!</title>
+</head>
+[...]
+Close the terminal session to your test pod withexit. When your session is ends, the pod is deleted.
+Close the terminal session to your test pod withexit. When your session is ends, the pod is deleted.
+exit
+Remove virtual nodes
+Delete theaci-helloworldpod running on the virtual node using thekubectl deletecommand.kubectl delete -f virtual-node.yaml
+Delete theaci-helloworldpod running on the virtual node using thekubectl deletecommand.
+aci-helloworld
+kubectl delete
+kubectl delete -f virtual-node.yaml
+kubectl delete -f virtual-node.yaml
+Disable the virtual nodes using theaz aks disable-addonscommand.az aks disable-addons --resource-group myResourceGroup --name myAKSCluster --addons virtual-node
+Disable the virtual nodes using theaz aks disable-addonscommand.
+az aks disable-addons
+az aks disable-addons --resource-group myResourceGroup --name myAKSCluster --addons virtual-node
+az aks disable-addons --resource-group myResourceGroup --name myAKSCluster --addons virtual-node
+Remove the virtual network resources and resource group using the following commands.# Change the name of your resource group, cluster and network resources as needed
+RES_GROUP=myResourceGroup
+AKS_CLUSTER=myAKScluster
+AKS_VNET=myVnet
+AKS_SUBNET=myVirtualNodeSubnet
+
+# Get AKS node resource group
+NODE_RES_GROUP=$(az aks show --resource-group $RES_GROUP --name $AKS_CLUSTER --query nodeResourceGroup --output tsv)
+
+# Get network profile ID
+NETWORK_PROFILE_ID=$(az network profile list --resource-group $NODE_RES_GROUP --query "[0].id" --output tsv)
+
+# Delete the network profile
+az network profile delete --id $NETWORK_PROFILE_ID -y
+
+# Grab the service association link ID
+SAL_ID=$(az network vnet subnet show --resource-group $RES_GROUP --vnet-name $AKS_VNET --name $AKS_SUBNET --query id --output tsv)/providers/Microsoft.ContainerInstance/serviceAssociationLinks/default
+
+# Delete the service association link for the subnet
+az resource delete --ids $SAL_ID --api-version 2021-10-01
+
+# Delete the subnet delegation to Azure Container Instances
+az network vnet subnet update --resource-group $RES_GROUP --vnet-name $AKS_VNET --name $AKS_SUBNET --remove delegations
+Remove the virtual network resources and resource group using the following commands.
+# Change the name of your resource group, cluster and network resources as needed
+RES_GROUP=myResourceGroup
+AKS_CLUSTER=myAKScluster
+AKS_VNET=myVnet
+AKS_SUBNET=myVirtualNodeSubnet
+
+# Get AKS node resource group
+NODE_RES_GROUP=$(az aks show --resource-group $RES_GROUP --name $AKS_CLUSTER --query nodeResourceGroup --output tsv)
+
+# Get network profile ID
+NETWORK_PROFILE_ID=$(az network profile list --resource-group $NODE_RES_GROUP --query "[0].id" --output tsv)
+
+# Delete the network profile
+az network profile delete --id $NETWORK_PROFILE_ID -y
+
+# Grab the service association link ID
+SAL_ID=$(az network vnet subnet show --resource-group $RES_GROUP --vnet-name $AKS_VNET --name $AKS_SUBNET --query id --output tsv)/providers/Microsoft.ContainerInstance/serviceAssociationLinks/default
+
+# Delete the service association link for the subnet
+az resource delete --ids $SAL_ID --api-version 2021-10-01
+
+# Delete the subnet delegation to Azure Container Instances
+az network vnet subnet update --resource-group $RES_GROUP --vnet-name $AKS_VNET --name $AKS_SUBNET --remove delegations
+# Change the name of your resource group, cluster and network resources as needed
+RES_GROUP=myResourceGroup
+AKS_CLUSTER=myAKScluster
+AKS_VNET=myVnet
+AKS_SUBNET=myVirtualNodeSubnet
+
+# Get AKS node resource group
+NODE_RES_GROUP=$(az aks show --resource-group $RES_GROUP --name $AKS_CLUSTER --query nodeResourceGroup --output tsv)
+
+# Get network profile ID
+NETWORK_PROFILE_ID=$(az network profile list --resource-group $NODE_RES_GROUP --query "[0].id" --output tsv)
+
+# Delete the network profile
+az network profile delete --id $NETWORK_PROFILE_ID -y
+
+# Grab the service association link ID
+SAL_ID=$(az network vnet subnet show --resource-group $RES_GROUP --vnet-name $AKS_VNET --name $AKS_SUBNET --query id --output tsv)/providers/Microsoft.ContainerInstance/serviceAssociationLinks/default
+
+# Delete the service association link for the subnet
+az resource delete --ids $SAL_ID --api-version 2021-10-01
+
+# Delete the subnet delegation to Azure Container Instances
+az network vnet subnet update --resource-group $RES_GROUP --vnet-name $AKS_VNET --name $AKS_SUBNET --remove delegations
+Next steps
+In this article, you scheduled a pod on the virtual node and assigned a private internal IP address. You could instead create a service deployment and route traffic to your pod through a load balancer or ingress controller. For more information, seeCreate a basic ingress controller in AKS.
+Virtual nodes are often one component of a scaling solution in AKS. For more information on scaling solutions, see the following articles:
+Use the Kubernetes horizontal pod autoscaler
+Use the Kubernetes cluster autoscaler
+Check out the Autoscale sample for Virtual Nodes
+Read more about the Virtual Kubelet open source library
+Azure Kubernetes Service
+
+Additional resources

@@ -1,0 +1,2281 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Manually install WebLogic Server on Azure Virtual Machines (VMs)
+Article
+2024-09-18
+10 contributors
+In this article
+This tutorial shows the steps to install Oracle WebLogic Server (WLS) and configure a WebLogic cluster on Azure Virtual Machines (VMs), on Windows or GNU/Linux.
+In this tutorial, you learn how to:
+Create a custom virtual network and create the VMs within the network.
+Provision VMs with desired Java Development Kit (JDK) and WLS installed.
+Configure a WebLogic Server domain and a WebLogic Server cluster using the Oracle Configuration Wizard.
+Deploy and run a Java application in the cluster.
+Expose the application to the public internet via Azure Application Gateway.
+Validate the successful configuration.
+If you prefer a fully automated solution that does all of these steps on your behalf on GNU/Linux VMs, directly from the Azure portal, seeQuickstart: Deploy WebLogic Server on Azure Virtual Machine using the Azure portal.
+If you're interested in providing feedback or working closely on your migration scenarios with the engineering team developing WebLogic on Azure solutions, fill out this shortsurvey on WebLogic migrationand include your contact information. The team of program managers, architects, and engineers will promptly get in touch with you to initiate close collaboration.
+Prerequisites
+A local machine with a Unix-like operating system installed - for example, Ubuntu, macOS, or Windows Subsystem for Linux.
+An Azure subscription. If you don't have anAzure subscription, create afree accountbefore you begin.
+Install Azure CLI version 2.46.0 or higherto run Azure CLI commands.When prompted, install Azure CLI extensions on first use. For more information about extensions, seeUse extensions with Azure CLI.Runaz versionto find the version and dependent libraries that are installed. To upgrade to the latest version, runaz upgrade.
+When prompted, install Azure CLI extensions on first use. For more information about extensions, seeUse extensions with Azure CLI.
+Runaz versionto find the version and dependent libraries that are installed. To upgrade to the latest version, runaz upgrade.
+You must have an Oracle account. To create an Oracle account and accept the license agreement for WebLogic Server images, follow the steps inOracle Container Registry. Make note of your Oracle Account password and email.
+Prepare the environment
+In this section, you set up the infrastructure within which you install the JDK and WebLogic Server.
+Assumptions
+In this tutorial, you configure a WebLogic Server cluster with an administration server and two managed servers on a total of three VMs. To configure the cluster, you need to create the following three Azure VMs within the same availability set:
+The admin VM (VM nameadminVM) has the administration server running.
+adminVM
+The managed VMs (VM namesmspVM1andmspVM2) have two managed servers running.
+mspVM1
+mspVM2
+Sign in to Azure
+If you haven't done so already, sign in to your Azure subscription by using theaz logincommand and follow the on-screen directions.
+az login
+az login
+Note
+If multiple Azure tenants are associated with your Azure credentials, you must specify which tenant you want to sign in to. You can do this by using the--tenantoption. For example:az login --tenant contoso.onmicrosoft.com.
+--tenant
+az login --tenant contoso.onmicrosoft.com
+Create a resource group
+Create a resource group withaz group create. Resource group names must be globally unique within a subscription. For this reason, consider prepending some unique identifier to any names you create that must be unique. A useful technique is to use your initials followed by today's date inmmddformat. This example creates a resource group namedabc1110rgin theeastuslocation:
+mmdd
+abc1110rg
+eastus
+export RESOURCE_GROUP_NAME=abc1110rg
+
+az group create \
+    --name ${RESOURCE_GROUP_NAME} \
+    --location eastus
+export RESOURCE_GROUP_NAME=abc1110rg
+
+az group create \
+    --name ${RESOURCE_GROUP_NAME} \
+    --location eastus
+Create a virtual network
+The resources comprising your WebLogic Server cluster must communicate with each other, and the public internet, using a virtual network. For a complete guide to planning your virtual network, see the Cloud Adoption Framework for Azure guidePlan virtual networks. For more information, seeAzure Virtual Network frequently asked questions.
+The example in this section creates a virtual network with address space192.168.0.0/16and creates a subnet used for VMs.
+192.168.0.0/16
+First, create a virtual network by usingaz network vnet create. The following example creates a network namedmyVNet:
+myVNet
+az network vnet create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myVNet \
+    --address-prefixes 192.168.0.0/24
+az network vnet create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myVNet \
+    --address-prefixes 192.168.0.0/24
+Create a subnet for the WebLogic Server cluster by usingaz network vnet subnet create. The following example creates a subnet namedmySubnet:
+mySubnet
+az network vnet subnet create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mySubnet \
+    --vnet-name myVNet \
+    --address-prefixes 192.168.0.0/25
+az network vnet subnet create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mySubnet \
+    --vnet-name myVNet \
+    --address-prefixes 192.168.0.0/25
+Create a subnet for Application Gateway by usingaz network vnet subnet create. The following example creates a subnet namedwlsVMGateway:
+wlsVMGateway
+az network vnet subnet create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name wlsVMGateway \
+    --vnet-name myVNet \
+    --address-prefixes 192.168.0.128/25
+az network vnet subnet create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name wlsVMGateway \
+    --vnet-name myVNet \
+    --address-prefixes 192.168.0.128/25
+Create an availability set
+Create an availability set by usingaz vm availability-set create, as shown in the following example. Creating an availability set is optional, but we recommend it. For more information, seeExample Azure infrastructure walkthrough for Windows VMs.
+az vm availability-set create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myAvailabilitySet \
+    --platform-fault-domain-count 2 \
+    --platform-update-domain-count 2
+az vm availability-set create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myAvailabilitySet \
+    --platform-fault-domain-count 2 \
+    --platform-update-domain-count 2
+The following sections describe the steps for installing WebLogic Server on either GNU/Linux or Windows Server. You can choose the operating system, JDK version, and WebLogic version according to your requirements, but you should verify that they're available inOracle Fusion Middleware Supported System Configurations. Also, consider system and platform-specific requirements carefully before proceeding. For more information, seeSystem Requirements and Specifications. Select the tab for your chosen operating system.
+This article uses an Azure VM image maintained by Oracle and Microsoft containing the latest supported version of the software. For the full list of WebLogic Server base images maintained by Oracle and Microsoft, seeAzure Marketplace. If you want to use Windows OS, the instructions start with a base Windows VM and walk you through the steps of installing all of the necessary dependencies.
+Oracle Linux
+Windows Server
+The Marketplace image that you use to create the VMs in this article isOracle:weblogic-141100-jdk11-ol91:owls-141100-jdk11-ol91:latest.
+Oracle:weblogic-141100-jdk11-ol91:owls-141100-jdk11-ol91:latest
+Note
+You can query all the available Oracle WebLogic images provided by Oracle withaz vm image listaz vm image list --publisher oracle --output table --all | grep "weblogic". For more information, seeOracle VM images and their deployment on Microsoft Azure.
+az vm image list --publisher oracle --output table --all | grep "weblogic"
+Create an Oracle Linux machine for admin server
+In this section, you create Oracle Linux machines with JDK 11 and WebLogic 14.1.1.0 installed, for the admin server and managed servers.
+Create a VM usingaz vm create. You run the Administration Server on this VM.
+The following example creates Oracle Linux VMs using an SSH key pair for the authentication. If desired, you can use password authentication instead.
+If you don't have an SSH key pair, you can generate it by using the following command:
+ssh-keygen -t rsa -b 2048 -f ~/.ssh/wls-vm-key
+ssh-keygen -t rsa -b 2048 -f ~/.ssh/wls-vm-key
+This command creates the following files:
+~/.ssh/wls-vm-key: The private key.
+~/.ssh/wls-vm-key.pub: The public key.
+export VM_URN=Oracle:weblogic-141100-jdk11-ol91:owls-141100-jdk11-ol91:latest
+
+az vm create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --availability-set myAvailabilitySet \
+    --image ${VM_URN} \
+    --size Standard_DS1_v2  \
+    --admin-username azureuser \
+    --ssh-key-value ~/.ssh/wls-vm-key.pub \
+    --public-ip-address "" \
+    --nsg ""
+export VM_URN=Oracle:weblogic-141100-jdk11-ol91:owls-141100-jdk11-ol91:latest
+
+az vm create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --availability-set myAvailabilitySet \
+    --image ${VM_URN} \
+    --size Standard_DS1_v2  \
+    --admin-username azureuser \
+    --ssh-key-value ~/.ssh/wls-vm-key.pub \
+    --public-ip-address "" \
+    --nsg ""
+Note
+The use of username and password credentials to grant access to a VM is discouraged. If your particular usage requirements suggest credential based access is the best approach, you can create the VM with username and password:
+export VM_URN=Oracle:weblogic-141100-jdk11-ol91:owls-141100-jdk11-ol91:latest
+az vm create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --availability-set myAvailabilitySet \
+    --image ${VM_URN} \
+    --size Standard_DS1_v2 \
+    --admin-username azureuser \
+    --admin-password <your-password> \
+    --public-ip-address "" \
+    --nsg ""
+export VM_URN=Oracle:weblogic-141100-jdk11-ol91:owls-141100-jdk11-ol91:latest
+az vm create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --availability-set myAvailabilitySet \
+    --image ${VM_URN} \
+    --size Standard_DS1_v2 \
+    --admin-username azureuser \
+    --admin-password <your-password> \
+    --public-ip-address "" \
+    --nsg ""
+Create a Windows VM and set up X-server
+This tutorial uses the graphical interface of WebLogic Server to complete the installation and configuration. You use a Windows VM as a "jump box" and run anX Windows System serverto view the graphical installers on the three VMs of the WebLogic Server cluster.
+Follow these steps to provision a Windows 10 machine and install an X-server. If you already have a Windows machine within the same network as the Oracle Linux machine, you don't need to provision a new one from Azure. You can jump to the section that installs the X-server.
+Use the following steps to create a Windows 10 VM from the Azure portal:Open the resource group you created before in the Azure portal.SelectCreateto create the resource.SelectCompute, search forwindows 10, and then selectMicrosoft Windows 10.Select the plan that you want, and then selectCreate.Use the following values to configure the VM:Virtual machine name:myWindowsVMImage:Windows 10 ProUsername:azureuserPassword:Secret123456Select the checkbox underLicensing.SelectReview + create, and then selectCreate.It takes a few minutes to create the VM and supporting resources.After the deployment finishes, install the X server and use it to configure the application server on the Linux machines by using a graphical interface.
+Use the following steps to create a Windows 10 VM from the Azure portal:
+Open the resource group you created before in the Azure portal.
+SelectCreateto create the resource.
+SelectCompute, search forwindows 10, and then selectMicrosoft Windows 10.
+Select the plan that you want, and then selectCreate.
+Use the following values to configure the VM:Virtual machine name:myWindowsVMImage:Windows 10 ProUsername:azureuserPassword:Secret123456
+Virtual machine name:myWindowsVM
+Image:Windows 10 Pro
+Username:azureuser
+Password:Secret123456
+Select the checkbox underLicensing.
+SelectReview + create, and then selectCreate.
+It takes a few minutes to create the VM and supporting resources.
+After the deployment finishes, install the X server and use it to configure the application server on the Linux machines by using a graphical interface.
+Use the following steps to install and launch the X server:Use Remote Desktop to connect tomyWindowsVM. For a detailed guide, seeHow to connect using Remote Desktop and sign on to an Azure virtual machine running Windows. You must execute the remaining steps in this section onmyWindowsVM.Download and installVcXsrv Windows X Server.Disable the firewall. To allow communication from the Linux VMs, use the following steps to turn off Windows Defender Firewall:Search for and openWindows Defender Firewall.FindTurn Windows Defender Firewall on or off, and then selectTurn offinPrivate network settings. You can leavePublic network settingsalone.SelectOK.Close theWindows Defender Firewallsettings panel.SelectX-launchfrom the desktop.For display settings, set the display number to-1to use multiple windows, and then selectNext.ForSelect how to start clients, selectStart no client, and then selectNext.For extra settings, selectClipboard and Primary Selection,Native opengl, andDisable access control.SelectNextto finish.AWindows Security Alertdialog might appear with this message: "Allow VcXsrv windows X-server to communicate on these networks." SelectAllow access.
+Use the following steps to install and launch the X server:
+Use Remote Desktop to connect tomyWindowsVM. For a detailed guide, seeHow to connect using Remote Desktop and sign on to an Azure virtual machine running Windows. You must execute the remaining steps in this section onmyWindowsVM.
+myWindowsVM
+myWindowsVM
+Download and installVcXsrv Windows X Server.
+Disable the firewall. To allow communication from the Linux VMs, use the following steps to turn off Windows Defender Firewall:Search for and openWindows Defender Firewall.FindTurn Windows Defender Firewall on or off, and then selectTurn offinPrivate network settings. You can leavePublic network settingsalone.SelectOK.Close theWindows Defender Firewallsettings panel.
+Search for and openWindows Defender Firewall.
+FindTurn Windows Defender Firewall on or off, and then selectTurn offinPrivate network settings. You can leavePublic network settingsalone.
+SelectOK.
+Close theWindows Defender Firewallsettings panel.
+SelectX-launchfrom the desktop.
+For display settings, set the display number to-1to use multiple windows, and then selectNext.
+ForSelect how to start clients, selectStart no client, and then selectNext.
+For extra settings, selectClipboard and Primary Selection,Native opengl, andDisable access control.
+SelectNextto finish.
+AWindows Security Alertdialog might appear with this message: "Allow VcXsrv windows X-server to communicate on these networks." SelectAllow access.
+Copy the SSH key~/.ssh/wls-vm-keyto the Windows VM and save it toC:\Users\azureuser.ssh.
+Create Oracle Linux machines for managed servers
+Create two VMs usingaz vm create. You run the managed servers on these VMs.
+The following example creates Oracle Linux VMs using user name and password pair for the authentication. If desired, you can use TLS/SSL authentication instead.
+export VM_URN=Oracle:weblogic-141100-jdk11-ol91:owls-141100-jdk11-ol91:latest
+
+az vm create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM1 \
+    --availability-set myAvailabilitySet \
+    --image ${VM_URN} \
+    --size Standard_DS1_v2  \
+    --admin-username azureuser \
+    --ssh-key-value ~/.ssh/wls-vm-key.pub \
+    --public-ip-address "" \
+    --nsg ""
+
+az vm create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM2 \
+    --availability-set myAvailabilitySet \
+    --image ${VM_URN} \
+    --size Standard_DS1_v2  \
+    --admin-username azureuser \
+    --ssh-key-value ~/.ssh/wls-vm-key.pub \
+    --public-ip-address "" \
+    --nsg ""
+export VM_URN=Oracle:weblogic-141100-jdk11-ol91:owls-141100-jdk11-ol91:latest
+
+az vm create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM1 \
+    --availability-set myAvailabilitySet \
+    --image ${VM_URN} \
+    --size Standard_DS1_v2  \
+    --admin-username azureuser \
+    --ssh-key-value ~/.ssh/wls-vm-key.pub \
+    --public-ip-address "" \
+    --nsg ""
+
+az vm create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM2 \
+    --availability-set myAvailabilitySet \
+    --image ${VM_URN} \
+    --size Standard_DS1_v2  \
+    --admin-username azureuser \
+    --ssh-key-value ~/.ssh/wls-vm-key.pub \
+    --public-ip-address "" \
+    --nsg ""
+Use the following commands to get and show the private IP addresses, which you use in later sections:
+export ADMINVM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export ADMINVM_IP=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+export MSPVM1_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM1 \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export MSPVM1_IP=$(az network nic show \
+    --ids ${MSPVM1_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+export MSPVM2_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM2 \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export MSPVM2_IP=$(az network nic show \
+    --ids ${MSPVM2_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+echo "Private IP of adminVM: ${ADMINVM_IP}"
+echo "Private IP of mspVM1: ${MSPVM1_IP}"
+echo "Private IP of mspVM2: ${MSPVM2_IP}"
+export ADMINVM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export ADMINVM_IP=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+export MSPVM1_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM1 \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export MSPVM1_IP=$(az network nic show \
+    --ids ${MSPVM1_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+export MSPVM2_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM2 \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export MSPVM2_IP=$(az network nic show \
+    --ids ${MSPVM2_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+echo "Private IP of adminVM: ${ADMINVM_IP}"
+echo "Private IP of mspVM1: ${MSPVM1_IP}"
+echo "Private IP of mspVM2: ${MSPVM2_IP}"
+Now, you're ready to connect to the Oracle Linux machine to configure a WebLogic cluster with graphical interface.
+Configure WebLogic Server domain and cluster
+A WebLogic Server domain is a logically related group of WebLogic Server instances, and the resources running on and connected to them, that can be managed as a single administrative unit. For more information, seeWebLogic Server Domains.
+The foundation of high availability in WebLogic Server is the cluster. A WebLogic Server cluster is a group of WebLogic Server instances running simultaneously and working together to provide increased scalability and reliability. For more information, seeOracle WebLogic Cluster.
+There are two kinds of cluster, as described in the following list. For more information, seeAbout Dynamic Clusters.
+Dynamic cluster: A cluster that contains one or more generated (dynamic) server instances that are based on a single shared server template. When you create a dynamic cluster, the dynamic servers are preconfigured and automatically generated for you, enabling you to easily scale up the number of server instances in your dynamic cluster when you need another server capacity. You can start the dynamic servers without having to first manually configure and add them to the cluster.
+Configured cluster: A cluster in which you manually configure and add each server instance. You have to configure and add new server instance to increase server capacity.
+To show you how to form a WebLogic cluster, this tutorial guides you through the process of creating a configured cluster.
+You keep using the X-server and Oracle Configuration Wizard to create the WebLogic Server domain.
+The following section shows how to create a new WebLogic Server domain on theadminVM. Make sure you're still on your Windows machine, if not, remote connect tomyWindowsVM.
+adminVM
+myWindowsVM
+Connect toadminVMfrom a command prompt.Run the following commands on your Windows machinemyWindowsVM. Replace192.168.0.4with youradminVMprivate IP address:set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set ADMINVM_IP="192.168.0.4"
+ssh -i %SSH_KEY% azureuser@%ADMINVM_IP%
+Connect toadminVMfrom a command prompt.
+adminVM
+Run the following commands on your Windows machinemyWindowsVM. Replace192.168.0.4with youradminVMprivate IP address:
+myWindowsVM
+192.168.0.4
+adminVM
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set ADMINVM_IP="192.168.0.4"
+ssh -i %SSH_KEY% azureuser@%ADMINVM_IP%
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set ADMINVM_IP="192.168.0.4"
+ssh -i %SSH_KEY% azureuser@%ADMINVM_IP%
+Use the following commands to initialize the folder for domain configuration:sudo su
+
+export DOMAIN_PATH="/u01/domains"
+mkdir -p ${DOMAIN_PATH}
+chown oracle:oracle -R ${DOMAIN_PATH}
+Use the following commands to initialize the folder for domain configuration:
+sudo su
+
+export DOMAIN_PATH="/u01/domains"
+mkdir -p ${DOMAIN_PATH}
+chown oracle:oracle -R ${DOMAIN_PATH}
+sudo su
+
+export DOMAIN_PATH="/u01/domains"
+mkdir -p ${DOMAIN_PATH}
+chown oracle:oracle -R ${DOMAIN_PATH}
+Use the following commands to Install the dependency for X-server:# install dependencies for X-server
+sudo yum install -y libXtst libSM libXrender
+# install dependencies to run a Java GUI client
+sudo yum install -y fontconfig urw-base35-fonts
+Use the following commands to Install the dependency for X-server:
+# install dependencies for X-server
+sudo yum install -y libXtst libSM libXrender
+# install dependencies to run a Java GUI client
+sudo yum install -y fontconfig urw-base35-fonts
+# install dependencies for X-server
+sudo yum install -y libXtst libSM libXrender
+# install dependencies to run a Java GUI client
+sudo yum install -y fontconfig urw-base35-fonts
+Use the following commands to become theoracleuser and set theDISPLAYvariable:sudo su - oracle
+
+export DISPLAY=<my-windows-vm-private-ip>:0.0
+#export DISPLAY=192.168.0.5:0.0
+Use the following commands to become theoracleuser and set theDISPLAYvariable:
+oracle
+DISPLAY
+sudo su - oracle
+
+export DISPLAY=<my-windows-vm-private-ip>:0.0
+#export DISPLAY=192.168.0.5:0.0
+sudo su - oracle
+
+export DISPLAY=<my-windows-vm-private-ip>:0.0
+#export DISPLAY=192.168.0.5:0.0
+Run the following command to launch the Oracle Configuration Wizard:bash /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin/config.sh
+Run the following command to launch the Oracle Configuration Wizard:
+bash /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin/config.sh
+bash /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin/config.sh
+The Oracle Configuration Wizard starts and directs you to configure the domain. The following page asks for domain type and location. SelectCreate a new domainand set domain location to/u01/domains/wlsd. The domain configuration is saved to this folder.
+
+SelectNext, then selectCreate Domain Using Product Templates. Keep the default selected template, as shown in the following screenshot:
+
+SelectNext, then inputAdministration Account. Set theNameasweblogicandPasswordasSecret123456.
+
+SelectNext. For domain mode, selectProduction. For JDK, keep the default option.
+
+SelectNext. For advanced configurations, selectAdministration Server,Node Manager, andTopology.
+
+SelectNextand fill in theAdministration Servername withadmin. Fill in theListen IP Addresswith the private IP ofadminVM. The value is192.168.0.4in this example.
+adminVM
+
+SelectNext. ForNode Manager Type, selectPer Domain Custom Location, and fill in location with/u01/domains/wlsd/nodemanager. ForNode Manager Credentials, the username isweblogicand the password isSecret123456.
+
+SelectNext. For managed servers, add the following items. Use the IP addresses you discovered earlier:
+msp1
+mspVM1
+8001
+msp2
+mspVM2
+8001
+
+SelectNext, then create a cluster with the namecluster1.
+cluster1
+
+SelectNext. Don't change the values forServer TemplatesandDynamic Servers. The defaults are acceptable for a dynamic cluster.
+ForAssign Servers to Clusters, assign bothmsp1andmsp2tocluster1.
+msp1
+msp2
+cluster1
+
+SelectNext. Add the machinesadminVM,mspVM1, andmspVM2. Use the IP addresses you discovered earlier.
+adminVM
+mspVM1
+mspVM2
+mspVM1
+mspVM1
+5556
+mspVM2
+mspVM2
+5556
+adminVM
+adminVM
+5556
+
+SelectNext. ForAssign Servers to Machines, assign serveradmintoadminVM,msp1tomspVM1, andmsp2tomspVM2.
+admin
+adminVM
+msp1
+mspVM1
+msp2
+mspVM2
+
+SelectNext. You see theConfiguration Summary, which should look like the following screenshot:
+
+SelectCreate. TheConfiguration Progresspage shows the progress. All the listed items should be configured successfully.
+
+Finally, there's anEnd of Configurationpage to show the URL of the Administration Server.
+
+The Administration Server isn't running, so the URL doesn't resolve. SelectNext, thenFinish. You finished configuring thewlsddomain with a clustercluster1, including two managed servers.
+wlsd
+cluster1
+Next, you apply the domain configuration tomspVM1andmspVM2.
+mspVM1
+mspVM2
+This tutorial uses the WebLogic Server pack and unpack command to extend the domain. For more information, seeOverview of the Pack and Unpack Commands.
+Pack the domain configuration onadminVMwith the following steps, assuming you're still onadminVMand logged in with theoracleuser:cd /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin
+bash pack.sh -domain=/u01/domains/wlsd -managed=true -template=/tmp/cluster.jar -template_name="wlsd"If the command is completed successfully, you see output similar the following example:[oracle@adminVM bin]$ bash pack.sh -domain=/u01/domains/wlsd -managed=true -template=/tmp/cluster.jar -template_name="wlsd"
+<< read domain from "/u01/domains/wlsd"
+>>  succeed: read domain from "/u01/domains/wlsd"
+<< set config option Managed to "true"
+>>  succeed: set config option Managed to "true"
+<< write template to "/tmp/cluster.jar"
+..............................
+>>  succeed: write template to "/tmp/cluster.jar"
+<< close template
+>>  succeed: close templateUse the following commands to copy/tmp/cluster.jartomspVM1andmspVM2usingscp. If prompted for key fingerprint, typeyes. Enter the passwordSecret123456when prompted.scp /tmp/cluster.jar azureuser@<mspvm1-private-ip>:/tmp/cluster.jar
+scp /tmp/cluster.jar azureuser@<mspvm2-private-ip>:/tmp/cluster.jar
+#scp /tmp/cluster.jar azureuser@192.168.0.6:/tmp/cluster.jar
+#scp /tmp/cluster.jar azureuser@192.168.0.7:/tmp/cluster.jar
+Pack the domain configuration onadminVMwith the following steps, assuming you're still onadminVMand logged in with theoracleuser:
+adminVM
+adminVM
+oracle
+cd /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin
+bash pack.sh -domain=/u01/domains/wlsd -managed=true -template=/tmp/cluster.jar -template_name="wlsd"
+cd /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin
+bash pack.sh -domain=/u01/domains/wlsd -managed=true -template=/tmp/cluster.jar -template_name="wlsd"
+If the command is completed successfully, you see output similar the following example:
+[oracle@adminVM bin]$ bash pack.sh -domain=/u01/domains/wlsd -managed=true -template=/tmp/cluster.jar -template_name="wlsd"
+<< read domain from "/u01/domains/wlsd"
+>>  succeed: read domain from "/u01/domains/wlsd"
+<< set config option Managed to "true"
+>>  succeed: set config option Managed to "true"
+<< write template to "/tmp/cluster.jar"
+..............................
+>>  succeed: write template to "/tmp/cluster.jar"
+<< close template
+>>  succeed: close template
+[oracle@adminVM bin]$ bash pack.sh -domain=/u01/domains/wlsd -managed=true -template=/tmp/cluster.jar -template_name="wlsd"
+<< read domain from "/u01/domains/wlsd"
+>>  succeed: read domain from "/u01/domains/wlsd"
+<< set config option Managed to "true"
+>>  succeed: set config option Managed to "true"
+<< write template to "/tmp/cluster.jar"
+..............................
+>>  succeed: write template to "/tmp/cluster.jar"
+<< close template
+>>  succeed: close template
+Use the following commands to copy/tmp/cluster.jartomspVM1andmspVM2usingscp. If prompted for key fingerprint, typeyes. Enter the passwordSecret123456when prompted.
+mspVM1
+mspVM2
+scp
+yes
+scp /tmp/cluster.jar azureuser@<mspvm1-private-ip>:/tmp/cluster.jar
+scp /tmp/cluster.jar azureuser@<mspvm2-private-ip>:/tmp/cluster.jar
+#scp /tmp/cluster.jar azureuser@192.168.0.6:/tmp/cluster.jar
+#scp /tmp/cluster.jar azureuser@192.168.0.7:/tmp/cluster.jar
+scp /tmp/cluster.jar azureuser@<mspvm1-private-ip>:/tmp/cluster.jar
+scp /tmp/cluster.jar azureuser@<mspvm2-private-ip>:/tmp/cluster.jar
+#scp /tmp/cluster.jar azureuser@192.168.0.6:/tmp/cluster.jar
+#scp /tmp/cluster.jar azureuser@192.168.0.7:/tmp/cluster.jar
+Use the following instructions to apply domain configuration tomspVM1:Open a new command prompt, and use the following commands to connect tomspVM1. Replace192.168.0.6with yourmspVM1private IP address:set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set MSPVM1_IP="192.168.0.6"
+ssh -i %SSH_KEY% azureuser@%MSPVM1_IP%Enter the password for the connection. For this example, the password isSecret123456.You logged intomspVM1with userazureuser. Next, use the following commands to become the root user and update file ownership of/tmp/cluster.jartooracle:sudo su
+
+chown oracle:oracle /tmp/cluster.jar
+
+export DOMAIN_PATH="/u01/domains"
+mkdir -p ${DOMAIN_PATH}
+chown oracle:oracle -R ${DOMAIN_PATH}As theoracleuser, use the following commands to apply the domain configuration:sudo su - oracle
+
+cd /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin
+bash unpack.sh -domain=/u01/domains/wlsd -template=/tmp/cluster.jarIf the command completes successfully, you see output similar to the following example:[oracle@mspVM1 bin]$ bash unpack.sh -domain=/u01/domains/wlsd -template=/tmp/cluster.jar
+<< read template from "/tmp/cluster.jar"
+>>  succeed: read template from "/tmp/cluster.jar"
+<< set config option DomainName to "wlsd"
+>>  succeed: set config option DomainName to "wlsd"
+>>  validateConfig "KeyStorePasswords"
+>>  succeed: validateConfig "KeyStorePasswords"
+<< write Domain to "/u01/domains/wlsd"
+..................................................
+>>  succeed: write Domain to "/u01/domains/wlsd"
+<< close template
+>>  succeed: close template
+Use the following instructions to apply domain configuration tomspVM1:
+mspVM1
+Open a new command prompt, and use the following commands to connect tomspVM1. Replace192.168.0.6with yourmspVM1private IP address:
+mspVM1
+192.168.0.6
+mspVM1
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set MSPVM1_IP="192.168.0.6"
+ssh -i %SSH_KEY% azureuser@%MSPVM1_IP%
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set MSPVM1_IP="192.168.0.6"
+ssh -i %SSH_KEY% azureuser@%MSPVM1_IP%
+Enter the password for the connection. For this example, the password isSecret123456.
+Secret123456
+You logged intomspVM1with userazureuser. Next, use the following commands to become the root user and update file ownership of/tmp/cluster.jartooracle:
+mspVM1
+azureuser
+oracle
+sudo su
+
+chown oracle:oracle /tmp/cluster.jar
+
+export DOMAIN_PATH="/u01/domains"
+mkdir -p ${DOMAIN_PATH}
+chown oracle:oracle -R ${DOMAIN_PATH}
+sudo su
+
+chown oracle:oracle /tmp/cluster.jar
+
+export DOMAIN_PATH="/u01/domains"
+mkdir -p ${DOMAIN_PATH}
+chown oracle:oracle -R ${DOMAIN_PATH}
+As theoracleuser, use the following commands to apply the domain configuration:
+oracle
+sudo su - oracle
+
+cd /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin
+bash unpack.sh -domain=/u01/domains/wlsd -template=/tmp/cluster.jar
+sudo su - oracle
+
+cd /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin
+bash unpack.sh -domain=/u01/domains/wlsd -template=/tmp/cluster.jar
+If the command completes successfully, you see output similar to the following example:
+[oracle@mspVM1 bin]$ bash unpack.sh -domain=/u01/domains/wlsd -template=/tmp/cluster.jar
+<< read template from "/tmp/cluster.jar"
+>>  succeed: read template from "/tmp/cluster.jar"
+<< set config option DomainName to "wlsd"
+>>  succeed: set config option DomainName to "wlsd"
+>>  validateConfig "KeyStorePasswords"
+>>  succeed: validateConfig "KeyStorePasswords"
+<< write Domain to "/u01/domains/wlsd"
+..................................................
+>>  succeed: write Domain to "/u01/domains/wlsd"
+<< close template
+>>  succeed: close template
+[oracle@mspVM1 bin]$ bash unpack.sh -domain=/u01/domains/wlsd -template=/tmp/cluster.jar
+<< read template from "/tmp/cluster.jar"
+>>  succeed: read template from "/tmp/cluster.jar"
+<< set config option DomainName to "wlsd"
+>>  succeed: set config option DomainName to "wlsd"
+>>  validateConfig "KeyStorePasswords"
+>>  succeed: validateConfig "KeyStorePasswords"
+<< write Domain to "/u01/domains/wlsd"
+..................................................
+>>  succeed: write Domain to "/u01/domains/wlsd"
+<< close template
+>>  succeed: close template
+Use the following instructions to apply domain configuration tomspVM2:ConnectmspVM2in a new command prompt. Replace192.168.0.7with yourmspVM2private IP address:set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set MSPVM2_IP="192.168.0.7"
+ssh -i %SSH_KEY% azureuser@%MSPVM2_IP%Enter the password for the connection. For this example, the password isSecret123456.You logged intomspVM2with userazureuser. Use the following commands to change to the root user and update the file ownership of/tmp/cluster.jarand initialize the folder for domain configuration:sudo su
+
+chown oracle:oracle /tmp/cluster.jar
+
+export DOMAIN_PATH="/u01/domains"
+mkdir -p ${DOMAIN_PATH}
+chown oracle:oracle -R ${DOMAIN_PATH}
+
+sudo su - oracle
+
+cd /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin
+bash unpack.sh -domain=/u01/domains/wlsd -template=/tmp/cluster.jar
+Use the following instructions to apply domain configuration tomspVM2:
+mspVM2
+ConnectmspVM2in a new command prompt. Replace192.168.0.7with yourmspVM2private IP address:
+mspVM2
+192.168.0.7
+mspVM2
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set MSPVM2_IP="192.168.0.7"
+ssh -i %SSH_KEY% azureuser@%MSPVM2_IP%
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set MSPVM2_IP="192.168.0.7"
+ssh -i %SSH_KEY% azureuser@%MSPVM2_IP%
+Enter the password for the connection. For this example, the password isSecret123456.
+You logged intomspVM2with userazureuser. Use the following commands to change to the root user and update the file ownership of/tmp/cluster.jarand initialize the folder for domain configuration:
+mspVM2
+azureuser
+sudo su
+
+chown oracle:oracle /tmp/cluster.jar
+
+export DOMAIN_PATH="/u01/domains"
+mkdir -p ${DOMAIN_PATH}
+chown oracle:oracle -R ${DOMAIN_PATH}
+
+sudo su - oracle
+
+cd /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin
+bash unpack.sh -domain=/u01/domains/wlsd -template=/tmp/cluster.jar
+sudo su
+
+chown oracle:oracle /tmp/cluster.jar
+
+export DOMAIN_PATH="/u01/domains"
+mkdir -p ${DOMAIN_PATH}
+chown oracle:oracle -R ${DOMAIN_PATH}
+
+sudo su - oracle
+
+cd /u01/app/wls/install/oracle/middleware/oracle_home/oracle_common/common/bin
+bash unpack.sh -domain=/u01/domains/wlsd -template=/tmp/cluster.jar
+You replicated the domain configuration onmspVM1andmspVM2, and you're ready to start the servers.
+mspVM1
+mspVM2
+Start servers
+The steps in this section direct you to perform the following two tasks:
+Make it so the admin and managed servers start automatically after server reboot.
+Start the servers for immediate use.
+These two tasks aren't easily separated, so the steps for the two tasks are intermixed.
+Go back to the command prompt that connects toadminVM. If you lost it, run the following command to connect to it:
+adminVM
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set ADMINVM_IP="192.168.0.4"
+ssh -i %SSH_KEY% azureuser@%ADMINVM_IP%
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set ADMINVM_IP="192.168.0.4"
+ssh -i %SSH_KEY% azureuser@%ADMINVM_IP%
+If you aren't working with theoracleuser, sign in withoracle:
+oracle
+oracle
+sudo su - oracle
+sudo su - oracle
+The following command persists theadminaccount to/u01/domains/wlsd/servers/admin/security/boot.propertiesto enable automatically starting theadminserver without asking for credentials:
+admin
+admin
+Replace the username and password with yours.
+mkdir -p /u01/domains/wlsd/servers/admin/security
+
+cat <<EOF >/u01/domains/wlsd/servers/admin/security/boot.properties
+username=weblogic
+password=Secret123456
+EOF
+mkdir -p /u01/domains/wlsd/servers/admin/security
+
+cat <<EOF >/u01/domains/wlsd/servers/admin/security/boot.properties
+username=weblogic
+password=Secret123456
+EOF
+Use the following commands to inspect the file. Be sure it has the correct ownership, permissions, and contents.
+ls -la /u01/domains/wlsd/servers/admin/security/boot.properties
+cat /u01/domains/wlsd/servers/admin/security/boot.properties
+ls -la /u01/domains/wlsd/servers/admin/security/boot.properties
+cat /u01/domains/wlsd/servers/admin/security/boot.properties
+The output should look nearly identical to the following example:
+[oracle@adminVM bin]$ ls -la /u01/domains/wlsd/servers/admin/security/boot.properties
+-rw-rw-r--. 1 oracle oracle 40 Nov 28 17:00 /u01/domains/wlsd/servers/admin/security/boot.properties
+[oracle@adminVM bin]$ cat /u01/domains/wlsd/servers/admin/security/boot.properties
+username=weblogic
+password=Secret123456
+[oracle@adminVM bin]$ ls -la /u01/domains/wlsd/servers/admin/security/boot.properties
+-rw-rw-r--. 1 oracle oracle 40 Nov 28 17:00 /u01/domains/wlsd/servers/admin/security/boot.properties
+[oracle@adminVM bin]$ cat /u01/domains/wlsd/servers/admin/security/boot.properties
+username=weblogic
+password=Secret123456
+Create a Linux service for the WebLogic admin server and node manager, to start the process automatically after reboot. For more information, seeUse systemd on Oracle Linux.
+Exit theoracleuser and sign in with therootuser.
+oracle
+root
+exit
+
+sudo su
+exit
+
+sudo su
+Create the Linux service for the node manager:
+cat <<EOF >/etc/systemd/system/wls_nodemanager.service
+[Unit]
+Description=WebLogic nodemanager service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+# Note that the following three parameters should be changed to the correct paths
+# on your own system
+WorkingDirectory=/u01/domains/wlsd
+ExecStart="/u01/domains/wlsd/bin/startNodeManager.sh"
+ExecStop="/u01/domains/wlsd/bin/stopNodeManager.sh"
+User=oracle
+Group=oracle
+KillMode=process
+LimitNOFILE=65535
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+EOF
+cat <<EOF >/etc/systemd/system/wls_nodemanager.service
+[Unit]
+Description=WebLogic nodemanager service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+# Note that the following three parameters should be changed to the correct paths
+# on your own system
+WorkingDirectory=/u01/domains/wlsd
+ExecStart="/u01/domains/wlsd/bin/startNodeManager.sh"
+ExecStop="/u01/domains/wlsd/bin/stopNodeManager.sh"
+User=oracle
+Group=oracle
+KillMode=process
+LimitNOFILE=65535
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+EOF
+Create the Linux service for the admin server:
+cat <<EOF >/etc/systemd/system/wls_admin.service
+[Unit]
+Description=WebLogic Adminserver service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/u01/domains/wlsd
+ExecStart="/u01/domains/wlsd/startWebLogic.sh"
+ExecStop="/u01/domains/wlsd/bin/stopWebLogic.sh"
+User=oracle
+Group=oracle
+KillMode=process
+LimitNOFILE=65535
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat <<EOF >/etc/systemd/system/wls_admin.service
+[Unit]
+Description=WebLogic Adminserver service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/u01/domains/wlsd
+ExecStart="/u01/domains/wlsd/startWebLogic.sh"
+ExecStop="/u01/domains/wlsd/bin/stopWebLogic.sh"
+User=oracle
+Group=oracle
+KillMode=process
+LimitNOFILE=65535
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+You're now ready to start the node manager and admin server onadminVMby using the following commands:
+adminVM
+sudo systemctl enable wls_nodemanager
+sudo systemctl enable wls_admin
+sudo systemctl daemon-reload
+sudo systemctl start wls_nodemanager
+sudo systemctl start wls_admin
+sudo systemctl enable wls_nodemanager
+sudo systemctl enable wls_admin
+sudo systemctl daemon-reload
+sudo systemctl start wls_nodemanager
+sudo systemctl start wls_admin
+Check the admin server state withsudo systemctl status wls_admin -l. The Administration Server should be ready when you find similar logs:
+sudo systemctl status wls_admin -l
+[root@adminVM wlsd]# sudo systemctl status wls_admin -l
+â wls_admin.service - WebLogic Adminserver service
+Loaded: loaded (/etc/systemd/system/wls_admin.service; enabled; vendor preset: disabled)
+Active: active (running) since Mon 2022-09-26 07:47:34 UTC; 54s ago
+Main PID: 26738 (startWebLogic.s)
+    Tasks: 61 (limit: 20654)
+Memory: 649.2M
+
+... ...
+
+Sep 26 07:48:15 adminVM startWebLogic.sh[26802]: <Sep 26, 2022, 7:48:15,411 AM Coordinated Universal Time> <Notice> <WebLogicServer> <BEA-000365> <Server state changed to RUNNING.>
+[root@adminVM wlsd]# sudo systemctl status wls_admin -l
+â wls_admin.service - WebLogic Adminserver service
+Loaded: loaded (/etc/systemd/system/wls_admin.service; enabled; vendor preset: disabled)
+Active: active (running) since Mon 2022-09-26 07:47:34 UTC; 54s ago
+Main PID: 26738 (startWebLogic.s)
+    Tasks: 61 (limit: 20654)
+Memory: 649.2M
+
+... ...
+
+Sep 26 07:48:15 adminVM startWebLogic.sh[26802]: <Sep 26, 2022, 7:48:15,411 AM Coordinated Universal Time> <Notice> <WebLogicServer> <BEA-000365> <Server state changed to RUNNING.>
+PressQto exit the log monitoring mode.
+You can't access the admin server before opening ports7001and5556. Use the following commands to open ports:
+7001
+5556
+sudo firewall-cmd --zone=public --add-port=7001/tcp
+sudo firewall-cmd --zone=public --add-port=5556/tcp
+sudo firewall-cmd --runtime-to-permanent
+sudo systemctl restart firewalld
+sudo firewall-cmd --zone=public --add-port=7001/tcp
+sudo firewall-cmd --zone=public --add-port=5556/tcp
+sudo firewall-cmd --runtime-to-permanent
+sudo systemctl restart firewalld
+At this point, you can access the admin server on the browser ofmyWindowsVMwith the URLhttp://<adminvm-private-ip>:7001/console. Verify that you can view the admin server, but don't sign in yet. If the admin server isn't running, troubleshoot and resolve the problem before proceeding. The admin server isn't accessible outside of Azure.
+myWindowsVM
+http://<adminvm-private-ip>:7001/console
+Go back to the command prompt that connects tomspVM1. If you lost it, use the following command to connect to it:
+mspVM1
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set MSPVM1_IP="192.168.0.6"
+ssh -i %SSH_KEY% azureuser@%MSPVM1_IP%
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set MSPVM1_IP="192.168.0.6"
+ssh -i %SSH_KEY% azureuser@%MSPVM1_IP%
+If you aren't working withoracleuser, sign in withoracle:
+oracle
+oracle
+sudo su - oracle
+sudo su - oracle
+Persist theadminaccount to/u01/domains/wlsd/servers/msp1/security/boot.propertiesto enable automatically startingmsp1without asking for credentials. Replace the username and password with yours.
+admin
+msp1
+mkdir -p /u01/domains/wlsd/servers/msp1/security
+
+cat <<EOF >/u01/domains/wlsd/servers/msp1/security/boot.properties
+username=weblogic
+password=Secret123456
+EOF
+mkdir -p /u01/domains/wlsd/servers/msp1/security
+
+cat <<EOF >/u01/domains/wlsd/servers/msp1/security/boot.properties
+username=weblogic
+password=Secret123456
+EOF
+Now, you create a Linux service for node manager, to start the process automatically on machine reboot. For more information, seeUse systemd on Oracle Linux.
+Exit theoracleuser and sign in with therootuser.
+oracle
+root
+exit
+
+#Skip this command if you are root
+sudo su
+exit
+
+#Skip this command if you are root
+sudo su
+Create the Linux service for the node manager:
+cat <<EOF >/etc/systemd/system/wls_nodemanager.service
+[Unit]
+Description=WebLogic nodemanager service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+# Note that the following three parameters should be changed to the correct paths
+# on your own system
+WorkingDirectory=/u01/domains/wlsd
+ExecStart="/u01/domains/wlsd/bin/startNodeManager.sh"
+ExecStop="/u01/domains/wlsd/bin/stopNodeManager.sh"
+User=oracle
+Group=oracle
+KillMode=process
+LimitNOFILE=65535
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+EOF
+cat <<EOF >/etc/systemd/system/wls_nodemanager.service
+[Unit]
+Description=WebLogic nodemanager service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+# Note that the following three parameters should be changed to the correct paths
+# on your own system
+WorkingDirectory=/u01/domains/wlsd
+ExecStart="/u01/domains/wlsd/bin/startNodeManager.sh"
+ExecStop="/u01/domains/wlsd/bin/stopNodeManager.sh"
+User=oracle
+Group=oracle
+KillMode=process
+LimitNOFILE=65535
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+EOF
+Next, start the node manager.
+sudo systemctl enable wls_nodemanager
+sudo systemctl daemon-reload
+sudo systemctl start wls_nodemanager
+sudo systemctl enable wls_nodemanager
+sudo systemctl daemon-reload
+sudo systemctl start wls_nodemanager
+If the node manager is running successfully, you see logs similar to the following example:
+[root@mspVM1 azureuser]# systemctl status wls_nodemanager -l
+â wls_nodemanager.service - WebLogic nodemanager service
+Loaded: loaded (/etc/systemd/system/wls_nodemanager.service; enabled; vendor preset: disabled)
+Active: active (running) since Tue 2022-09-27 01:23:42 UTC; 19s ago
+Main PID: 107544 (startNodeManage)
+    Tasks: 15 (limit: 20654)
+Memory: 146.7M
+
+... ...
+
+Sep 27 01:23:45 mspVM1 startNodeManager.sh[107592]: <Sep 27, 2022 1:23:45 AM Coordinated Universal Time> <INFO> <Server Implementation Class: weblogic.nodemanager.server.NMServer$ClassicServer.>
+Sep 27 01:23:46 mspVM1 startNodeManager.sh[107592]: <Sep 27, 2022 1:23:46 AM Coordinated Universal Time> <INFO> <Secure socket listener started on port 5556, host /192.168.0.6>
+[root@mspVM1 azureuser]# systemctl status wls_nodemanager -l
+â wls_nodemanager.service - WebLogic nodemanager service
+Loaded: loaded (/etc/systemd/system/wls_nodemanager.service; enabled; vendor preset: disabled)
+Active: active (running) since Tue 2022-09-27 01:23:42 UTC; 19s ago
+Main PID: 107544 (startNodeManage)
+    Tasks: 15 (limit: 20654)
+Memory: 146.7M
+
+... ...
+
+Sep 27 01:23:45 mspVM1 startNodeManager.sh[107592]: <Sep 27, 2022 1:23:45 AM Coordinated Universal Time> <INFO> <Server Implementation Class: weblogic.nodemanager.server.NMServer$ClassicServer.>
+Sep 27 01:23:46 mspVM1 startNodeManager.sh[107592]: <Sep 27, 2022 1:23:46 AM Coordinated Universal Time> <INFO> <Secure socket listener started on port 5556, host /192.168.0.6>
+PressQto exit log monitoring mode.
+You must open port8001to access the application that deployed to the cluster and5556for communication inside the domain. Use the following commands to open ports:
+8001
+5556
+sudo firewall-cmd --zone=public --add-port=8001/tcp
+sudo firewall-cmd --zone=public --add-port=5556/tcp
+sudo firewall-cmd --runtime-to-permanent
+sudo systemctl restart firewalld
+sudo firewall-cmd --zone=public --add-port=8001/tcp
+sudo firewall-cmd --zone=public --add-port=5556/tcp
+sudo firewall-cmd --runtime-to-permanent
+sudo systemctl restart firewalld
+Go back to the command prompt that connects tomspVM2. If you lost it, use the following command to connect to it:
+mspVM2
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set MSPVM2_IP="192.168.0.7"
+ssh -i %SSH_KEY% azureuser@%MSPVM2_IP%
+set SSH_KEY="C:\Users\azureuser\.ssh\wls-vm-key"
+set MSPVM2_IP="192.168.0.7"
+ssh -i %SSH_KEY% azureuser@%MSPVM2_IP%
+If you aren't working with theoracleuser, sign in withoracle:
+oracle
+oracle
+sudo su - oracle
+sudo su - oracle
+Persist theadminaccount to/u01/domains/wlsd/servers/msp2/security/boot.propertiesto enable automatically startingmsp2without asking for credentials. Replace the username and password with yours.
+admin
+msp2
+mkdir -p /u01/domains/wlsd/servers/msp2/security
+
+cat <<EOF >/u01/domains/wlsd/servers/msp2/security/boot.properties
+username=weblogic
+password=Secret123456
+EOF
+mkdir -p /u01/domains/wlsd/servers/msp2/security
+
+cat <<EOF >/u01/domains/wlsd/servers/msp2/security/boot.properties
+username=weblogic
+password=Secret123456
+EOF
+Next, create a Linux service for the node manager.
+Exit theoracleuser and sign in with therootuser.
+oracle
+root
+exit
+
+#SKip this command if you are in root
+sudo su
+exit
+
+#SKip this command if you are in root
+sudo su
+Create the Linux service for the node manager:
+cat <<EOF >/etc/systemd/system/wls_nodemanager.service
+[Unit]
+Description=WebLogic nodemanager service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+# Note that the following three parameters should be changed to the correct paths
+# on your own system
+WorkingDirectory=/u01/domains/wlsd
+ExecStart="/u01/domains/wlsd/bin/startNodeManager.sh"
+ExecStop="/u01/domains/wlsd/bin/stopNodeManager.sh"
+User=oracle
+Group=oracle
+KillMode=process
+LimitNOFILE=65535
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+EOF
+cat <<EOF >/etc/systemd/system/wls_nodemanager.service
+[Unit]
+Description=WebLogic nodemanager service
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+# Note that the following three parameters should be changed to the correct paths
+# on your own system
+WorkingDirectory=/u01/domains/wlsd
+ExecStart="/u01/domains/wlsd/bin/startNodeManager.sh"
+ExecStop="/u01/domains/wlsd/bin/stopNodeManager.sh"
+User=oracle
+Group=oracle
+KillMode=process
+LimitNOFILE=65535
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+EOF
+Start the node manager.
+sudo systemctl enable wls_nodemanager
+sudo systemctl daemon-reload
+sudo systemctl start wls_nodemanager
+sudo systemctl enable wls_nodemanager
+sudo systemctl daemon-reload
+sudo systemctl start wls_nodemanager
+If the node manager is running successfully, you see logs similar to the following example:
+[root@mspVM2 azureuser]# systemctl status wls_nodemanager -l
+â wls_nodemanager.service - WebLogic nodemanager service
+Loaded: loaded (/etc/systemd/system/wls_nodemanager.service; enabled; vendor preset: disabled)
+Active: active (running) since Tue 2022-09-27 01:23:42 UTC; 19s ago
+Main PID: 107544 (startNodeManage)
+    Tasks: 15 (limit: 20654)
+Memory: 146.7M
+
+... ...
+
+Sep 27 01:23:45 mspVM2 startNodeManager.sh[107592]: <Sep 27, 2022 1:23:45 AM Coordinated Universal Time> <INFO> <Server Implementation Class: weblogic.nodemanager.server.NMServer$ClassicServer.>
+Sep 27 01:23:46 mspVM2 startNodeManager.sh[107592]: <Sep 27, 2022 1:23:46 AM Coordinated Universal Time> <INFO> <Secure socket listener started on port 5556, host /192.168.0.6>
+[root@mspVM2 azureuser]# systemctl status wls_nodemanager -l
+â wls_nodemanager.service - WebLogic nodemanager service
+Loaded: loaded (/etc/systemd/system/wls_nodemanager.service; enabled; vendor preset: disabled)
+Active: active (running) since Tue 2022-09-27 01:23:42 UTC; 19s ago
+Main PID: 107544 (startNodeManage)
+    Tasks: 15 (limit: 20654)
+Memory: 146.7M
+
+... ...
+
+Sep 27 01:23:45 mspVM2 startNodeManager.sh[107592]: <Sep 27, 2022 1:23:45 AM Coordinated Universal Time> <INFO> <Server Implementation Class: weblogic.nodemanager.server.NMServer$ClassicServer.>
+Sep 27 01:23:46 mspVM2 startNodeManager.sh[107592]: <Sep 27, 2022 1:23:46 AM Coordinated Universal Time> <INFO> <Secure socket listener started on port 5556, host /192.168.0.6>
+PressQto exit log monitoring mode.
+Open port8001and5556.
+8001
+5556
+sudo firewall-cmd --zone=public --add-port=8001/tcp
+sudo firewall-cmd --zone=public --add-port=5556/tcp
+sudo firewall-cmd --runtime-to-permanent
+sudo systemctl restart firewalld
+sudo firewall-cmd --zone=public --add-port=8001/tcp
+sudo firewall-cmd --zone=public --add-port=5556/tcp
+sudo firewall-cmd --runtime-to-permanent
+sudo systemctl restart firewalld
+Now, open the Administration Console portal from a browser in your Windows machinemyWindowsVM, and use the following steps to start the managed servers:
+myWindowsVM
+Sign in to the Administration Console portal with your admin account and password. The URL ishttp://<adminvm-private-ip>:7001/console/. In this example, the admin account and password areweblogic/Secret123456. You'll find the state of managed servers areShutdown.
+http://<adminvm-private-ip>:7001/console/
+weblogic/Secret123456
+Under theDomain Structure, selectEnvironments,Servers, andControl, selectmsp1andmsp2, and then selectStart.
+msp1
+msp2
+You may be be prompted to confirm starting the servers. If so, selectYes. You'll see the message "A request has been sent to the Node Manager to start the selected servers."
+You can select the "refresh" icon at the top of the table to start or stop the dynamic refresh of the data in that table. This icon is shown in the next screenshot.
+You'll find the servers are up soon.
+
+Clean up the Windows machine
+You completed the WebLogic Server cluster configuration. If desired, remove the Windows machine with the following commands. Alternatively, you could shut down the Windows machinemyWindowsVMand continue to use it as a jump box for ongoing cluster maintenance tasks.
+myWindowsVM
+export WINDOWSVM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myWindowsVM \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export WINDOWSVM_NSG_ID=$(az network nic show \
+    --ids ${WINDOWSVM_NIC_ID} \
+    --query networkSecurityGroup.id \
+    --output tsv)
+export WINDOWSVM_DISK_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myWindowsVM \
+    --query storageProfile.osDisk.managedDisk.id \
+    --output tsv)
+export WINDOWSVM_PUBLIC_IP=$(az network public-ip list \
+    -g ${RESOURCE_GROUP_NAME} --query [0].id \
+    --output tsv)
+
+echo "deleting myWindowsVM"
+az vm delete --resource-group ${RESOURCE_GROUP_NAME} --name myWindowsVM --yes
+echo "deleting nic ${WINDOWSVM_NIC_ID}"
+az network nic delete --ids ${WINDOWSVM_NIC_ID}
+echo "deleting public-ip ${WINDOWSVM_PUBLIC_IP}"
+az network public-ip delete --ids ${WINDOWSVM_PUBLIC_IP}
+echo "deleting disk ${WINDOWSVM_DISK_ID}"
+az disk delete --yes --ids ${WINDOWSVM_DISK_ID}
+echo "deleting nsg ${WINDOWSVM_NSG_ID}"
+az network nsg delete --ids ${WINDOWSVM_NSG_ID}
+export WINDOWSVM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myWindowsVM \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export WINDOWSVM_NSG_ID=$(az network nic show \
+    --ids ${WINDOWSVM_NIC_ID} \
+    --query networkSecurityGroup.id \
+    --output tsv)
+export WINDOWSVM_DISK_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myWindowsVM \
+    --query storageProfile.osDisk.managedDisk.id \
+    --output tsv)
+export WINDOWSVM_PUBLIC_IP=$(az network public-ip list \
+    -g ${RESOURCE_GROUP_NAME} --query [0].id \
+    --output tsv)
+
+echo "deleting myWindowsVM"
+az vm delete --resource-group ${RESOURCE_GROUP_NAME} --name myWindowsVM --yes
+echo "deleting nic ${WINDOWSVM_NIC_ID}"
+az network nic delete --ids ${WINDOWSVM_NIC_ID}
+echo "deleting public-ip ${WINDOWSVM_PUBLIC_IP}"
+az network public-ip delete --ids ${WINDOWSVM_PUBLIC_IP}
+echo "deleting disk ${WINDOWSVM_DISK_ID}"
+az disk delete --yes --ids ${WINDOWSVM_DISK_ID}
+echo "deleting nsg ${WINDOWSVM_NSG_ID}"
+az network nsg delete --ids ${WINDOWSVM_NSG_ID}
+The Marketplace image that you use to create the VMs isMicrosoftWindowsServer:WindowsServer:2022-datacenter-azure-edition:latest.
+MicrosoftWindowsServer:WindowsServer:2022-datacenter-azure-edition:latest
+Note
+You can query all the available Windows Server images by usingaz vm image list, as shown in the following command:az vm image list --offer WindowsServer --all --output table. For more information, seeComparison of Standard, Datacenter, and Datacenter: Azure Edition editions of Windows Server 2022.
+az vm image list --offer WindowsServer --all --output table
+Create a Windows Server machine
+Next, you create a basic VM, install all the required tools on it, take a snapshot from it, and create replicas based on the snapshot.
+Create the basic VM usingaz vm create. You run the WebLogic Administration Server on it.
+The following example creates a Windows Server 2022 Datacenter Azure Edition machine namedadminVM. This example usesazureuserfor an administrative user name andSecret123456for the password.
+adminVM
+azureuser
+Secret123456
+az vm create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --availability-set myAvailabilitySet \
+    --image MicrosoftWindowsServer:WindowsServer:2022-datacenter-azure-edition:latest \
+    --size Standard_B2S \
+    --public-ip-sku Standard \
+    --vnet-name myVNet \
+    --subnet mySubnet \
+    --admin-username azureuser \
+    --admin-password Secret123456
+az vm create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --availability-set myAvailabilitySet \
+    --image MicrosoftWindowsServer:WindowsServer:2022-datacenter-azure-edition:latest \
+    --size Standard_B2S \
+    --public-ip-sku Standard \
+    --vnet-name myVNet \
+    --subnet mySubnet \
+    --admin-username azureuser \
+    --admin-password Secret123456
+It takes a few minutes to create the VM and supporting resources.
+After the deployment completes, connect to the machine. For a detailed guide on remote connection, seeHow to connect using Remote Desktop and sign on to an Azure virtual machine running Windows.
+After you connect, search for and openWindows Defender Firewall. SelectTurn Windows Defender Firewall on or offand selectTurn off Windows Defender Firewallfor both private and public network settings. SelectOK. CloseWindows Defender Firewall. Because numerous ports must be opened during the configuration, this step greatly simplifies the process of setting up the cluster.
+After the configuration is complete, lock down the WebLogic Server by following an authoritative guide on the topic, such asSecuring a Production Environment for Oracle WebLogic Server.
+Note
+To stand up the WebLogic Server cluster, open the ports to access Administration Server, Managed Servers, and form the cluster. This tutorial turns offWindows Defender Firewallto enable the required ports. If you don't want to turn off the firewall, make sure those ports are available inside the private virtual network:7001for Administration Server,8001for Managed Servers, and5556for Node Manager.
+7001
+8001
+5556
+Next, you install the required tools with the graphical installer. The following sections guide you to install Oracle JDK 11 and Oracle WebLogic 14c Enterprise Edition.
+Download Oracle JDK 11 and Oracle WebLogic 14c
+Oracle WebLogic Server 14c (14.1.1.0.0) is certified for use with JDK 11. Supported Oracle WebLogic Server 14c (14.1.1.0.0) clients are certified for use with JDK 11.0.6. For more information, seeJDK 11 Certification.
+To download the Oracle JDK 11 and Oracle WebLogic 14c Windows installer, follow these steps:
+Connect toadminVMif needed, and open the Microsoft Edge browser.
+Connect toadminVMif needed, and open the Microsoft Edge browser.
+adminVM
+Navigate to theOracle JDK 11 downloads page. Select theWindows x64 Installer, accept the Oracle License Agreement, and download EXE file. You get a file name similar tojdk-11.*_windows-x64_bin.exe.
+Navigate to theOracle JDK 11 downloads page. Select theWindows x64 Installer, accept the Oracle License Agreement, and download EXE file. You get a file name similar tojdk-11.*_windows-x64_bin.exe.
+Navigate to theOracle Fusion Middleware Software downloads page. Select theGeneric Installer, and accept the Oracle License Agreement and download the ZIP archive. You get a file name similar tofmw_14.*_wls_lite_Disk1_1of1.zip. Pay attention to the support lifetime of the WebLogic Server version you download. For more information, see theOracle Support Lifetime Policy.
+Navigate to theOracle Fusion Middleware Software downloads page. Select theGeneric Installer, and accept the Oracle License Agreement and download the ZIP archive. You get a file name similar tofmw_14.*_wls_lite_Disk1_1of1.zip. Pay attention to the support lifetime of the WebLogic Server version you download. For more information, see theOracle Support Lifetime Policy.
+Install Oracle JDK 11
+This section shows you how to install Oracle JDK 11 on Windows Server.
+Open the download folder that contains JDK installer. Here the installer name isjdk-11.0.16_windows-x64_bin.exe. Right click the file and selectRun as administrator. Install the JDK to the default folder **C:\Program Files\Java\jdk-11.0.16**.
+After the installation finishes, you can validate its version in a command prompt by running the commandjava -version, with output similar to the following example:
+java -version
+java version "11.0.16" 2022-07-19 LTS
+Java(TM) SE Runtime Environment 18.9 (build 11.0.16+11-LTS-199)
+Java HotSpot(TM) 64-Bit Server VM 18.9 (build 11.0.16+11-LTS-199, mixed mode)
+java version "11.0.16" 2022-07-19 LTS
+Java(TM) SE Runtime Environment 18.9 (build 11.0.16+11-LTS-199)
+Java HotSpot(TM) 64-Bit Server VM 18.9 (build 11.0.16+11-LTS-199, mixed mode)
+Install Oracle WebLogic Server 14c Enterprise Edition
+This section shows you how to install WebLogic Server 14c on Windows Server.
+Open the download folder that contains WebLogic Server installer ZIP file. Here the file name isfmw_14.1.1.0.0_wls_lite_Disk1_1of1.zip. Right click the file and selectExtract allto the default path.
+Open a command prompt, then use the following commands to install WebLogic Server:
+set WLS_VERSION_PREFIX=fmw_14.1.1.0.0_wls_lite
+java -jar C:\Users\azureuser\Downloads\%WLS_VERSION_PREFIX%_Disk1_1of1\%WLS_VERSION_PREFIX%_wls_lite_generic.jar
+set WLS_VERSION_PREFIX=fmw_14.1.1.0.0_wls_lite
+java -jar C:\Users\azureuser\Downloads\%WLS_VERSION_PREFIX%_Disk1_1of1\%WLS_VERSION_PREFIX%_wls_lite_generic.jar
+The command launches the WebLogic Server installer, as shown in the following screenshot:
+
+SelectNext. AllowSkip Auto Updatesto remain selected and selectNext. SetOracle HometoC:\Oracle\Middleware\Oracle_Home, which should be the default value. SelectNext.
+
+Select installation typeWebLogic Server.
+
+SelectNext. You see operating system warnings in thePrerequisite Checkspage. Windows Server 2022 OS versions are supported on all Windows Server editions. To fix the warnings, you need to applyPatch 34500720after the installation.
+
+SelectNext, thenInstall. You see the installation progress as shown in the following screenshot:
+
+All of the listed installs should complete without error. Select theNextbutton. You see theInstallation Completepage. Unselect any actions in theNext Stepssection. You perform those steps after all the machines are ready.
+
+SelectFinished. You finished installing Oracle WebLogic 14c and its dependencies onadminVM. Next, you create snapshot ofadminVMand prepare machines for two managed severs.
+adminVM
+adminVM
+Note
+For Oracle Weblogic Server Critical Patch, download the patches fromMy Oracle Supportand apply them following "Patch an existing installation" inInstall Patch and Upgrade. Make sure you've patchedadminVMbefore taking a snapshot from it's OS disk. If you run into problems unzipping the patch file, see thisMyOracleSupport document. You can skip this step for experimentation, but do not go to production with an unpatched WLS.
+adminVM
+Create machines for managed servers
+You installed Oracle JDK 11 and Oracle WebLogic Server 14c Enterprise Edition onadminVM, which runs the WebLogic Administration Server. You still need to prepare machines to run two managed servers.
+adminVM
+This section introduces an approach to prepare machines with the snapshot ofadminVM. You create the machines from the Azure portal.
+adminVM
+StopadminVM. OpenadminVMfrom the Azure portal, then selectStopto stop the machine. Make sure the machine is stopped completely before doing the next step.
+StopadminVM. OpenadminVMfrom the Azure portal, then selectStopto stop the machine. Make sure the machine is stopped completely before doing the next step.
+adminVM
+adminVM
+Use the following steps to take a snapshot of theadminVMOS disk:OpenadminVMfrom the Azure portal. UnderSettings, selectDisks, thenOS Disk. Select the OS disk starting withadminVM_OsDisk_.SelectCreate snapshot. UnderInstance details, fill inNamewithsnapshotAdminVMOsDisk.SelectReview and createthenCreate. It takes several seconds to take the snapshot.
+Use the following steps to take a snapshot of theadminVMOS disk:
+adminVM
+OpenadminVMfrom the Azure portal. UnderSettings, selectDisks, thenOS Disk. Select the OS disk starting withadminVM_OsDisk_.
+adminVM
+SelectCreate snapshot. UnderInstance details, fill inNamewithsnapshotAdminVMOsDisk.
+SelectReview and createthenCreate. It takes several seconds to take the snapshot.
+Use the following steps to createmspVM1:First, create the OS disk formspVM1. Open the snapshot you created in previous step,snapshotAdminVMOsDisk. SelectCreate disk. UnderDisk details, fill inDisk namewithmspVM1_Os_Disk_1. SelectReview and create, thenCreate. It takes several seconds. When the process is complete, selectGo to resource.Create the virtual machinemspVM1. Open the OS disk you created previously. In this example, its name ismspVM1_Os_Disk_1. SelectCreate VM. UnderInstance details, fill inVirtual machine namewithmspVM1. SelectReview and createthenCreate. Ensure you have no errors before proceeding. The process takes several minutes.The machine is created from the snapshot ofadminVM, so it has the same computer name asadminVM. To change computer name tomspVM1, first remote connect to the machine. The user name and password are the same as withadminVM. Open a PowerShell terminal, and run the following command:Rename-Computer -NewName mspvm1 -Restart
+Use the following steps to createmspVM1:
+mspVM1
+First, create the OS disk formspVM1. Open the snapshot you created in previous step,snapshotAdminVMOsDisk. SelectCreate disk. UnderDisk details, fill inDisk namewithmspVM1_Os_Disk_1. SelectReview and create, thenCreate. It takes several seconds. When the process is complete, selectGo to resource.
+First, create the OS disk formspVM1. Open the snapshot you created in previous step,snapshotAdminVMOsDisk. SelectCreate disk. UnderDisk details, fill inDisk namewithmspVM1_Os_Disk_1. SelectReview and create, thenCreate. It takes several seconds. When the process is complete, selectGo to resource.
+mspVM1
+Create the virtual machinemspVM1. Open the OS disk you created previously. In this example, its name ismspVM1_Os_Disk_1. SelectCreate VM. UnderInstance details, fill inVirtual machine namewithmspVM1. SelectReview and createthenCreate. Ensure you have no errors before proceeding. The process takes several minutes.
+Create the virtual machinemspVM1. Open the OS disk you created previously. In this example, its name ismspVM1_Os_Disk_1. SelectCreate VM. UnderInstance details, fill inVirtual machine namewithmspVM1. SelectReview and createthenCreate. Ensure you have no errors before proceeding. The process takes several minutes.
+mspVM1
+mspVM1_Os_Disk_1
+The machine is created from the snapshot ofadminVM, so it has the same computer name asadminVM. To change computer name tomspVM1, first remote connect to the machine. The user name and password are the same as withadminVM. Open a PowerShell terminal, and run the following command:Rename-Computer -NewName mspvm1 -Restart
+The machine is created from the snapshot ofadminVM, so it has the same computer name asadminVM. To change computer name tomspVM1, first remote connect to the machine. The user name and password are the same as withadminVM. Open a PowerShell terminal, and run the following command:
+adminVM
+adminVM
+mspVM1
+adminVM
+Rename-Computer -NewName mspvm1 -Restart
+Rename-Computer -NewName mspvm1 -Restart
+Use the following steps to createmspVM2:Create the OS disk formspVM2. Open the snapshot you created previously. In this example, its name issnapshotAdminVMOsDisk. If you can't find the disk, search forsnapshotAdminVMOsDiskin theSearch resources, services and docs. SelectCreate disk. UnderDisk details, fill inNamewithmspVM2_Os_Disk_1. SelectReview and create, thenCreate. It takes several seconds. When the process is complete, selectGo to resource.Create virtual machinemspVM2. Open the OS disk you created previously,mspVM2_Os_Disk_1ï¼ selectCreate VM. UnderInstance details, fill inVirtual machine namewithmspVM2. SelectReview + createthenCreate. It takes several minutes.Remote connect to the machine. The user name and password are the same as withadminVM. Open a PowerShell terminal. Use the following command to change the computer name:Rename-Computer -NewName mspvm2 -Restart
+Use the following steps to createmspVM2:
+mspVM2
+Create the OS disk formspVM2. Open the snapshot you created previously. In this example, its name issnapshotAdminVMOsDisk. If you can't find the disk, search forsnapshotAdminVMOsDiskin theSearch resources, services and docs. SelectCreate disk. UnderDisk details, fill inNamewithmspVM2_Os_Disk_1. SelectReview and create, thenCreate. It takes several seconds. When the process is complete, selectGo to resource.
+Create the OS disk formspVM2. Open the snapshot you created previously. In this example, its name issnapshotAdminVMOsDisk. If you can't find the disk, search forsnapshotAdminVMOsDiskin theSearch resources, services and docs. SelectCreate disk. UnderDisk details, fill inNamewithmspVM2_Os_Disk_1. SelectReview and create, thenCreate. It takes several seconds. When the process is complete, selectGo to resource.
+mspVM2
+snapshotAdminVMOsDisk
+Create virtual machinemspVM2. Open the OS disk you created previously,mspVM2_Os_Disk_1ï¼ selectCreate VM. UnderInstance details, fill inVirtual machine namewithmspVM2. SelectReview + createthenCreate. It takes several minutes.
+Create virtual machinemspVM2. Open the OS disk you created previously,mspVM2_Os_Disk_1ï¼ selectCreate VM. UnderInstance details, fill inVirtual machine namewithmspVM2. SelectReview + createthenCreate. It takes several minutes.
+mspVM2
+mspVM2_Os_Disk_1
+Remote connect to the machine. The user name and password are the same as withadminVM. Open a PowerShell terminal. Use the following command to change the computer name:Rename-Computer -NewName mspvm2 -Restart
+Remote connect to the machine. The user name and password are the same as withadminVM. Open a PowerShell terminal. Use the following command to change the computer name:
+adminVM
+Rename-Computer -NewName mspvm2 -Restart
+Rename-Computer -NewName mspvm2 -Restart
+Use theaz vm startcommand to startadminVM.az vm start --resource-group ${RESOURCE_GROUP_NAME} --name adminVM
+Use theaz vm startcommand to startadminVM.
+adminVM
+az vm start --resource-group ${RESOURCE_GROUP_NAME} --name adminVM
+az vm start --resource-group ${RESOURCE_GROUP_NAME} --name adminVM
+Use the following commands to get and show the private IP addresses, which you use in later sections:
+export ADMINVM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export ADMINVM_IP=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+export MSPVM1_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM1 \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export MSPVM1_IP=$(az network nic show \
+    --ids ${MSPVM1_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+export MSPVM2_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM2 \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export MSPVM2_IP=$(az network nic show \
+    --ids ${MSPVM2_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+echo "Private IP of adminVM: ${ADMINVM_IP}"
+echo "Private IP of mspVM1: ${MSPVM1_IP}"
+echo "Private IP of mspVM2: ${MSPVM2_IP}"
+export ADMINVM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export ADMINVM_IP=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+export MSPVM1_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM1 \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export MSPVM1_IP=$(az network nic show \
+    --ids ${MSPVM1_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+export MSPVM2_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM2 \
+    --query networkProfile.networkInterfaces'[0]'.id \
+    --output tsv)
+export MSPVM2_IP=$(az network nic show \
+    --ids ${MSPVM2_NIC_ID} \
+    --query ipConfigurations'[0]'.privateIPAddress \
+    --output tsv)
+echo "Private IP of adminVM: ${ADMINVM_IP}"
+echo "Private IP of mspVM1: ${MSPVM1_IP}"
+echo "Private IP of mspVM2: ${MSPVM2_IP}"
+Now, all the machines are ready. Next, you configure a WebLogic cluster.
+Configure the WebLogic Server domain and cluster
+A WebLogic Server domain is a logically related group of WebLogic Server instances, and the resources running on and connected to them, that can be managed as a single administrative unit. For more information, seeWebLogic Server Domains.
+The foundation of high availability in WebLogic Server is the cluster. A WebLogic Server cluster is a group of WebLogic Server instances running simultaneously and working together to provide increased scalability and reliability. For more information, seeOracle WebLogic Cluster.
+There are two kinds of cluster, as described in the following list. For more information, seeAbout Dynamic Clusters.
+Dynamic cluster: A cluster that contains one or more generated (dynamic) server instances that are based on a single shared server template. When you create a dynamic cluster, the dynamic servers are preconfigured and automatically generated for you, enabling you to easily scale up the number of server instances in your dynamic cluster when you need another server capacity. You can start the dynamic servers without having to first manually configure and add them to the cluster.
+Configured cluster: A cluster in which you manually configure and add each server instance. You have to configure and add new server instance to increase server capacity.
+To show you how to form a WebLogic cluster, this tutorial guides you through the process of creating a configured cluster.
+This section shows the steps to create a new WebLogic Server domain onadminVM.
+adminVM
+Connect toadminVM. Open a command prompt, then use the following commands to start the Oracle Configuration Wizard:
+adminVM
+cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+config.cmd
+cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+config.cmd
+The Oracle Configuration Wizard directs you to configure the domain. The following page asks for domain type and location. SelectCreate a new domainand set domain location toC:\domains\wlsd. The domain configuration is saved to this folder.
+
+SelectNext, selectCreate Domain Using Product Templates, and keep the default selected template, as shown in the following screenshot:
+
+SelectNext, then input theAdministration Accountname asweblogicand the password asSecret123456, as shown in the following screenshot:
+
+SelectNext. For domain mode, selectProduction; for JDK, keep the default option.
+
+SelectNext. For advanced configurations, selectAdministration Server,Node Manager, andTopology.
+
+SelectNext, fill in the administrationServer Namewithadmin. Fill in theListen IP Addresswith the private IP for theadminVMyou obtained previously. In this example, the value is192.168.0.4.
+adminVM
+192.168.0.4
+
+SelectNext. ForNode Manager Type, selectPer Domain Custom Location, and fill in the location withC:\domains\wlsd\nodemanager. This location should be filled in as the default. ForNode Manager Credentials, the username isweblogicand the password isSecret123456.
+
+SelectNext. For managed servers, add the following items:
+msp1
+mspVM1
+8001
+msp2
+mspVM2
+8001
+
+SelectNext. Create a cluster with namecluster1. You can leave theCluster Address,Frontend Host, and other values blank.
+cluster1
+
+SelectNext. Don't change the values forServer TemplatesorDynamic Servers.
+ForAssign Servers to Clusters, assign bothmsp1andmsp2tocluster1.
+msp1
+msp2
+cluster1
+
+SelectNext. Add machinesadminVM,mspVM1, andmspVM2.
+adminVM
+mspVM1
+mspVM2
+mspVM1
+mspVM1
+5556
+mspVM2
+mspVM2
+5556
+adminVM
+adminVM
+5556
+
+SelectNext. ForAssign Servers to Machines, assign serveradmintoadminVM,msp1tomspVM1, andmsp2tomspVM2.
+admin
+adminVM
+msp1
+mspVM1
+msp2
+mspVM2
+
+SelectNext. You see theConfiguration Summary, as shown in the following screenshot:
+
+Carefully examine the summary to verify everything looks as expected. SelectCreate. TheConfiguration Progresspage shows the progress. All the listed items should be configured successfully.
+
+SelectNext. Finally, the URL of the Administration Server is shown. The server isn't yet running, and you don't need this URL anyway, so selectFinish.
+
+You finished configuring thewlsddomain with a clustercluster1including two managed servers.
+wlsd
+cluster1
+This tutorial uses the WebLogic Server pack and unpack command to extend the domain. For more information, seeOverview of the Pack and Unpack Commands. Use the following steps to create the replicas:
+First, pack the domain configuration onadminVMby following these instructions:Remote connect to the machine and run the following command:cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+pack.cmd -domain=C:\domains\wlsd -managed=true -template=C:\Temp\cluster.jar -template_name="wlsd"You see output similar to the following example if the command completes successfully:C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin>pack.cmd -domain=C:\domains\wlsd -managed=true -template=C:\Temp\cluster.jar -template_name="wlsd"
+<< read domain from "C:/domains/wlsd"
+>>  succeed: read domain from "C:/domains/wlsd"
+<< set config option Managed to "true"
+>>  succeed: set config option Managed to "true"
+<< write template to "C:/Temp/cluster.jar"
+..............................
+>>  succeed: write template to "C:/Temp/cluster.jar"
+<< close template
+>>  succeed: close templateThen, copyC:\Temp\cluster.jartomspVM1andmspVM2and save to the same path.
+First, pack the domain configuration onadminVMby following these instructions:
+adminVM
+Remote connect to the machine and run the following command:
+cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+pack.cmd -domain=C:\domains\wlsd -managed=true -template=C:\Temp\cluster.jar -template_name="wlsd"
+cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+pack.cmd -domain=C:\domains\wlsd -managed=true -template=C:\Temp\cluster.jar -template_name="wlsd"
+You see output similar to the following example if the command completes successfully:
+C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin>pack.cmd -domain=C:\domains\wlsd -managed=true -template=C:\Temp\cluster.jar -template_name="wlsd"
+<< read domain from "C:/domains/wlsd"
+>>  succeed: read domain from "C:/domains/wlsd"
+<< set config option Managed to "true"
+>>  succeed: set config option Managed to "true"
+<< write template to "C:/Temp/cluster.jar"
+..............................
+>>  succeed: write template to "C:/Temp/cluster.jar"
+<< close template
+>>  succeed: close template
+C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin>pack.cmd -domain=C:\domains\wlsd -managed=true -template=C:\Temp\cluster.jar -template_name="wlsd"
+<< read domain from "C:/domains/wlsd"
+>>  succeed: read domain from "C:/domains/wlsd"
+<< set config option Managed to "true"
+>>  succeed: set config option Managed to "true"
+<< write template to "C:/Temp/cluster.jar"
+..............................
+>>  succeed: write template to "C:/Temp/cluster.jar"
+<< close template
+>>  succeed: close template
+Then, copyC:\Temp\cluster.jartomspVM1andmspVM2and save to the same path.
+mspVM1
+mspVM2
+Next, apply the domain configuration tomspVM1.Remote connect to the machine and run the following command:cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+unpack.cmd -domain=C:\domains\wlsd -template=C:\Temp\cluster.jarYou see output similar to the following example if the command completes successfully:C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin>unpack.cmd -domain=C:\domains\wlsd -template=C:\Temp\cluster.jar
+<< read template from "C:/Temp/cluster.jar"
+>>  succeed: read template from "C:/Temp/cluster.jar"
+<< set config option DomainName to "wlsd"
+>>  succeed: set config option DomainName to "wlsd"
+>>  validateConfig "KeyStorePasswords"
+>>  succeed: validateConfig "KeyStorePasswords"
+<< write Domain to "C:\domains\wlsd"
+..................................................
+>>  succeed: write Domain to "C:\domains\wlsd"
+<< close template
+>>  succeed: close templateNext, rename the configuration fileconfig_bootstrap.xmltoconfig.xml. In the command prompt, run the following commands:cd C:\domains\wlsd\config
+ren config_bootstrap.xml config.xml
+Next, apply the domain configuration tomspVM1.
+mspVM1
+Remote connect to the machine and run the following command:
+cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+unpack.cmd -domain=C:\domains\wlsd -template=C:\Temp\cluster.jar
+cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+unpack.cmd -domain=C:\domains\wlsd -template=C:\Temp\cluster.jar
+You see output similar to the following example if the command completes successfully:
+C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin>unpack.cmd -domain=C:\domains\wlsd -template=C:\Temp\cluster.jar
+<< read template from "C:/Temp/cluster.jar"
+>>  succeed: read template from "C:/Temp/cluster.jar"
+<< set config option DomainName to "wlsd"
+>>  succeed: set config option DomainName to "wlsd"
+>>  validateConfig "KeyStorePasswords"
+>>  succeed: validateConfig "KeyStorePasswords"
+<< write Domain to "C:\domains\wlsd"
+..................................................
+>>  succeed: write Domain to "C:\domains\wlsd"
+<< close template
+>>  succeed: close template
+C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin>unpack.cmd -domain=C:\domains\wlsd -template=C:\Temp\cluster.jar
+<< read template from "C:/Temp/cluster.jar"
+>>  succeed: read template from "C:/Temp/cluster.jar"
+<< set config option DomainName to "wlsd"
+>>  succeed: set config option DomainName to "wlsd"
+>>  validateConfig "KeyStorePasswords"
+>>  succeed: validateConfig "KeyStorePasswords"
+<< write Domain to "C:\domains\wlsd"
+..................................................
+>>  succeed: write Domain to "C:\domains\wlsd"
+<< close template
+>>  succeed: close template
+Next, rename the configuration fileconfig_bootstrap.xmltoconfig.xml. In the command prompt, run the following commands:
+cd C:\domains\wlsd\config
+ren config_bootstrap.xml config.xml
+cd C:\domains\wlsd\config
+ren config_bootstrap.xml config.xml
+Next, apply the domain configuration tomspVM2.Remote connect to the machine and run the following command:cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+unpack.cmd -domain=C:\domains\wlsd -template=C:\Temp\cluster.jarThen, rename the configuration fileconfig_bootstrap.xmltoconfig.xml:cd C:\domains\wlsd\config
+ren config_bootstrap.xml config.xml
+Next, apply the domain configuration tomspVM2.
+mspVM2
+Remote connect to the machine and run the following command:
+cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+unpack.cmd -domain=C:\domains\wlsd -template=C:\Temp\cluster.jar
+cd C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin
+unpack.cmd -domain=C:\domains\wlsd -template=C:\Temp\cluster.jar
+Then, rename the configuration fileconfig_bootstrap.xmltoconfig.xml:
+cd C:\domains\wlsd\config
+ren config_bootstrap.xml config.xml
+cd C:\domains\wlsd\config
+ren config_bootstrap.xml config.xml
+Note
+The unpack command generates theconfig_bootstrap.xmlfile based on theconfig.xmlfile in the template, which may cause errorjava.io.FileNotFoundException: C:\domains\wlsd\.\config\config.xml (The system cannot find the file specified)when starting the managed server. This tutorial renamesconfig_bootstrap.xmltoconfig.xmlto avoid this problem.
+java.io.FileNotFoundException: C:\domains\wlsd\.\config\config.xml (The system cannot find the file specified)
+You replicated the domain configuration onmspVM1andmspVM2, so you're ready to start the servers.
+mspVM1
+mspVM2
+Set up the WebLogic Server as a Windows service
+This section uses a Windows service to configure Oracle WebLogic Server to start automatically when you boot a Windows host computer. For more information, seeSetting Up a WebLogic Server Instance as a Windows Service.
+Note
+This section doesn't enable graceful shutdowns. If you use the Microsoft Management Console to stop a server instance, it kills the server's Java Virtual Machine (JVM). If you kill the JVM, the server immediately stops all processing. To set up graceful shutdowns, seeEnabling Graceful Shutdowns.
+You're now ready to start the Administration Server. Use the following instructions to create a Windows service to start the Administration Server:
+Remote connect toadminVM. In the command prompt, change to the directoryC:\domains\wlsd. EnterstartWebLogic.cmd. For the credentials of the admin account, enterweblogicfor the username andSecret123456for the password. If the server is running, it prints a line to standard out that is similar to the following output:
+adminVM
+... ...
+Enter username to boot WebLogic server:weblogic
+Enter password to boot WebLogic server:Secret123456
+
+... ...
+<Oct 18, 2022, 6:48:56,997 AM Coordinated Universal Time> <Notice> <WebLogicServer> <BEA-000365> <Server state changed to RUNNING.>
+... ...
+Enter username to boot WebLogic server:weblogic
+Enter password to boot WebLogic server:Secret123456
+
+... ...
+<Oct 18, 2022, 6:48:56,997 AM Coordinated Universal Time> <Notice> <WebLogicServer> <BEA-000365> <Server state changed to RUNNING.>
+Create a Boot Identity fileC:\domains\wlsd\servers\admin\security\boot.propertiesand save the admin account user name and password to the file. For more information, seeBoot Identity Files. Paste the following text into a command prompt:
+MKDIR C:\domains\wlsd\servers\admin\security
+TYPE CON > C:\domains\wlsd\servers\admin\security\boot.properties
+username=weblogic
+password=Secret123456
+MKDIR C:\domains\wlsd\servers\admin\security
+TYPE CON > C:\domains\wlsd\servers\admin\security\boot.properties
+username=weblogic
+password=Secret123456
+PressEnter,Ctrl+Z,Enter.
+Next, create a Windows service for the Administration Server. Paste the following text into a command prompt. PressEnter,Ctrl+Z,Enter.
+TYPE CON > C:\domains\wlsd\autoStartup.cmd
+echo off
+SETLOCAL
+set MW_HOME=C:\Oracle\Middleware\Oracle_Home
+set DOMAIN_NAME=wlsd
+set USERDOMAIN_HOME=C:\domains\wlsd
+set SERVER_NAME=admin
+set WL_HOME=C:\Oracle\Middleware\Oracle_Home\wlserver
+set DOMAIN_PRODUCTION_MODE=true
+call "C:\domains\wlsd\bin\setDomainEnv.cmd"
+call "C:\Oracle\Middleware\Oracle_Home\wlserver\server\bin\installSvc.cmd"
+ENDLOCAL
+TYPE CON > C:\domains\wlsd\autoStartup.cmd
+echo off
+SETLOCAL
+set MW_HOME=C:\Oracle\Middleware\Oracle_Home
+set DOMAIN_NAME=wlsd
+set USERDOMAIN_HOME=C:\domains\wlsd
+set SERVER_NAME=admin
+set WL_HOME=C:\Oracle\Middleware\Oracle_Home\wlserver
+set DOMAIN_PRODUCTION_MODE=true
+call "C:\domains\wlsd\bin\setDomainEnv.cmd"
+call "C:\Oracle\Middleware\Oracle_Home\wlserver\server\bin\installSvc.cmd"
+ENDLOCAL
+Run the newly created file. EnterC:\domains\wlsd\autoStartup.cmd. The command prompt runs the script as a batch file.
+If the script runs successfully, it creates a Windows service namedwlsd_adminand prints a line to standard out that is similar to the following output:
+wlsd_admin
+... ...
+wlsvc wlsd_admin installed.
+... ...
+wlsvc wlsd_admin installed.
+This example uses node manager to control managed servers. Create a Windows service for node manager onadminVM.
+adminVM
+In the command prompt, change to the directoryC:\domains\wlsd\bin. EnterinstallNodeMgrSvc.cmd. If the service is created successfully, it prints a line to standard out that is similar to the following output:
+... ...
+Oracle Weblogic wlsd NodeManager (C_Oracle_MIDDLE~1_ORACLE~1_wlserver) installed.
+... ...
+Oracle Weblogic wlsd NodeManager (C_Oracle_MIDDLE~1_ORACLE~1_wlserver) installed.
+Finally, restart the machine to activate the Windows services.
+Next, set up the node manager as a Windows service onmspVM1andmspVM2.
+mspVM1
+mspVM2
+Remote connect tomspVM1andmspVM2, open a command prompt, and then change to directoryC:\domains\wlsd\bin. EnterinstallNodeMgrSvc.cmd. If the service is created successfully, it prints a line to standard out that is similar to the following output:
+mspVM1
+mspVM2
+... ...
+Oracle Weblogic wlsd NodeManager (C_Oracle_MIDDLE~1_ORACLE~1_wlserver) installed.
+... ...
+Oracle Weblogic wlsd NodeManager (C_Oracle_MIDDLE~1_ORACLE~1_wlserver) installed.
+RestartmspVM1andmspVM2to start the node manager.
+mspVM1
+mspVM2
+Next, start the managed server from the Administration Console portal. Open a browser onadminVMand use the following steps to start the server:
+adminVM
+Sign in to the Administration Console portal with your admin account and password. The URL ishttp://<adminvm-private-ip>:7001/console/. In this example, the admin account and password areweblogic/Secret123456. You'll find the state of managed servers areShutdown.
+http://<adminvm-private-ip>:7001/console/
+weblogic/Secret123456
+Under theDomain Structure, selectEnvironments,Servers, andControl, selectmsp1andmsp2, and then selectStart.
+msp1
+msp2
+You may be be prompted to confirm starting the servers. If so, selectYes. You'll see the message "A request has been sent to the Node Manager to start the selected servers."
+You can select the "refresh" icon at the top of the table to start or stop the dynamic refresh of the data in that table. This icon is shown in the next screenshot.
+You'll find the servers are up soon.
+
+The steps in this section show how to create a Windows service for each of the managed servers. This service starts the managed server automatically when the machine is rebooted.
+Use the following instructions to set upmsp1as a Windows service:Remote connect tomspVM1. Open a command prompt and paste the following text, replacingADMIN_URLwith the actual value. PressEnter,Ctrl+Z,Enter.TYPE CON > C:\domains\wlsd\autoStartup.cmd
+echo off
+SETLOCAL
+set MW_HOME=C:\Oracle\Middleware\Oracle_Home
+set DOMAIN_NAME=wlsd
+set USERDOMAIN_HOME=C:\domains\wlsd
+set SERVER_NAME=msp1
+set ADMIN_URL=http://192.168.0.4:7001
+set WL_HOME=C:\Oracle\Middleware\Oracle_Home\wlserver
+set DOMAIN_PRODUCTION_MODE=true
+call "C:\domains\wlsd\bin\setDomainEnv.cmd"
+call "C:\Oracle\Middleware\Oracle_Home\wlserver\server\bin\installSvc.cmd"
+ENDLOCALEnterC:\domains\wlsd\autoStartup.cmd. The command prompt runs the script as a batch file.Create a Boot Identity fileC:\domains\wlsd\servers\msp1\security\boot.propertiesand save the admin account user name and password to the file.Paste the following text into a command prompt:MKDIR C:\domains\wlsd\servers\msp1\security
+TYPE CON > C:\domains\wlsd\servers\msp1\security\boot.properties
+username=weblogic
+password=Secret123456PressEnter,Ctrl+Z,Enter.
+Use the following instructions to set upmsp1as a Windows service:
+msp1
+Remote connect tomspVM1. Open a command prompt and paste the following text, replacingADMIN_URLwith the actual value. PressEnter,Ctrl+Z,Enter.
+mspVM1
+ADMIN_URL
+TYPE CON > C:\domains\wlsd\autoStartup.cmd
+echo off
+SETLOCAL
+set MW_HOME=C:\Oracle\Middleware\Oracle_Home
+set DOMAIN_NAME=wlsd
+set USERDOMAIN_HOME=C:\domains\wlsd
+set SERVER_NAME=msp1
+set ADMIN_URL=http://192.168.0.4:7001
+set WL_HOME=C:\Oracle\Middleware\Oracle_Home\wlserver
+set DOMAIN_PRODUCTION_MODE=true
+call "C:\domains\wlsd\bin\setDomainEnv.cmd"
+call "C:\Oracle\Middleware\Oracle_Home\wlserver\server\bin\installSvc.cmd"
+ENDLOCAL
+TYPE CON > C:\domains\wlsd\autoStartup.cmd
+echo off
+SETLOCAL
+set MW_HOME=C:\Oracle\Middleware\Oracle_Home
+set DOMAIN_NAME=wlsd
+set USERDOMAIN_HOME=C:\domains\wlsd
+set SERVER_NAME=msp1
+set ADMIN_URL=http://192.168.0.4:7001
+set WL_HOME=C:\Oracle\Middleware\Oracle_Home\wlserver
+set DOMAIN_PRODUCTION_MODE=true
+call "C:\domains\wlsd\bin\setDomainEnv.cmd"
+call "C:\Oracle\Middleware\Oracle_Home\wlserver\server\bin\installSvc.cmd"
+ENDLOCAL
+EnterC:\domains\wlsd\autoStartup.cmd. The command prompt runs the script as a batch file.
+Create a Boot Identity fileC:\domains\wlsd\servers\msp1\security\boot.propertiesand save the admin account user name and password to the file.
+Paste the following text into a command prompt:
+MKDIR C:\domains\wlsd\servers\msp1\security
+TYPE CON > C:\domains\wlsd\servers\msp1\security\boot.properties
+username=weblogic
+password=Secret123456
+MKDIR C:\domains\wlsd\servers\msp1\security
+TYPE CON > C:\domains\wlsd\servers\msp1\security\boot.properties
+username=weblogic
+password=Secret123456
+PressEnter,Ctrl+Z,Enter.
+Set upmsp2as a Windows serviceRemote connect tomspVM2. Open a command prompt and paste the following text, replacingADMIN_URLwith the actual value. PressEnter,Ctrl+Z,Enter.TYPE CON > C:\domains\wlsd\autoStartup.cmd
+echo off
+SETLOCAL
+set MW_HOME=C:\Oracle\Middleware\Oracle_Home
+set DOMAIN_NAME=wlsd
+set USERDOMAIN_HOME=C:\domains\wlsd
+set SERVER_NAME=msp2
+set ADMIN_URL=http://192.168.0.4:7001
+set WL_HOME=C:\Oracle\Middleware\Oracle_Home\wlserver
+set DOMAIN_PRODUCTION_MODE=true
+call "C:\domains\wlsd\bin\setDomainEnv.cmd"
+call "C:\Oracle\Middleware\Oracle_Home\wlserver\server\bin\installSvc.cmd"
+ENDLOCALEnterC:\domains\wlsd\autoStartup.cmd. The command prompt runs the script as a batch file.Create a Boot Identity fileC:\domains\wlsd\servers\msp1\security\boot.propertiesand save the admin account user name and password to the file.Paste the following text into a command prompt:MKDIR C:\domains\wlsd\servers\msp2\security
+TYPE CON > C:\domains\wlsd\servers\msp2\security\boot.properties
+username=weblogic
+password=Secret123456PressEnter,Ctrl+Z,Enter.
+Set upmsp2as a Windows service
+msp2
+Remote connect tomspVM2. Open a command prompt and paste the following text, replacingADMIN_URLwith the actual value. PressEnter,Ctrl+Z,Enter.
+mspVM2
+ADMIN_URL
+TYPE CON > C:\domains\wlsd\autoStartup.cmd
+echo off
+SETLOCAL
+set MW_HOME=C:\Oracle\Middleware\Oracle_Home
+set DOMAIN_NAME=wlsd
+set USERDOMAIN_HOME=C:\domains\wlsd
+set SERVER_NAME=msp2
+set ADMIN_URL=http://192.168.0.4:7001
+set WL_HOME=C:\Oracle\Middleware\Oracle_Home\wlserver
+set DOMAIN_PRODUCTION_MODE=true
+call "C:\domains\wlsd\bin\setDomainEnv.cmd"
+call "C:\Oracle\Middleware\Oracle_Home\wlserver\server\bin\installSvc.cmd"
+ENDLOCAL
+TYPE CON > C:\domains\wlsd\autoStartup.cmd
+echo off
+SETLOCAL
+set MW_HOME=C:\Oracle\Middleware\Oracle_Home
+set DOMAIN_NAME=wlsd
+set USERDOMAIN_HOME=C:\domains\wlsd
+set SERVER_NAME=msp2
+set ADMIN_URL=http://192.168.0.4:7001
+set WL_HOME=C:\Oracle\Middleware\Oracle_Home\wlserver
+set DOMAIN_PRODUCTION_MODE=true
+call "C:\domains\wlsd\bin\setDomainEnv.cmd"
+call "C:\Oracle\Middleware\Oracle_Home\wlserver\server\bin\installSvc.cmd"
+ENDLOCAL
+EnterC:\domains\wlsd\autoStartup.cmd. The command prompt runs the script as a batch file.
+Create a Boot Identity fileC:\domains\wlsd\servers\msp1\security\boot.propertiesand save the admin account user name and password to the file.
+Paste the following text into a command prompt:
+MKDIR C:\domains\wlsd\servers\msp2\security
+TYPE CON > C:\domains\wlsd\servers\msp2\security\boot.properties
+username=weblogic
+password=Secret123456
+MKDIR C:\domains\wlsd\servers\msp2\security
+TYPE CON > C:\domains\wlsd\servers\msp2\security\boot.properties
+username=weblogic
+password=Secret123456
+PressEnter,Ctrl+Z,Enter.
+Now, the managed servers start up automatically when the machine restarts.
+Remove the public IPs
+In order to remote connect to the Windows Server machines, all of them are assigned a public IP address. Now that the configuration is done, there's no need to keep the public IP address. For security, remove the public IP addresses fromadminVM,mspVM1, andmspVM2, as shown in the following example. For more information, seeDissociate a public IP address from an Azure VM.
+adminVM
+mspVM1
+mspVM2
+export ADMINVM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export ADMINVM_NIC_NAME=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query name \
+    --output tsv)
+export ADMINVM_NIC_IP_CONFIG=$(az network nic show \
+    --ids $ADMINVM_NIC_ID \
+    --query ipConfigurations[0].name \
+    --output tsv)
+export ADMINVM_PUBLIC_IP=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query ipConfigurations[0].publicIpAddress.id \
+    --output tsv)
+export ADMINVM_NSG_ID=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query networkSecurityGroup.id \
+    --output tsv)
+
+az network nic ip-config update \
+    --name ${ADMINVM_NIC_IP_CONFIG} \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --nic-name ${ADMINVM_NIC_NAME} \
+    --remove PublicIpAddress
+az network public-ip delete --ids ${ADMINVM_PUBLIC_IP}
+az network nic update \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name ${ADMINVM_NIC_NAME} \
+    --remove networkSecurityGroup
+az network nsg delete --ids ${ADMINVM_NSG_ID}
+
+export MSPVM1VM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM1 \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export MSPVM1VM_NIC_NAME=$(az network nic show \
+    --ids ${MSPVM1VM_NIC_ID} \
+    --query name \
+    --output tsv)
+export MSPVM1VM_NIC_IP_CONFIG=$(az network nic show \
+    --ids ${MSPVM1VM_NIC_ID} \
+    --query ipConfigurations[0].name \
+    --output tsv)
+export MSPVM1VM_PUBLIC_IP=$(az network nic show \
+    --ids ${MSPVM1VM_NIC_ID} \
+    --query ipConfigurations[0].publicIpAddress.id \
+    --output tsv)
+export MSPVM1VM_NSG_ID=$(az network nic show \
+    --ids ${MSPVM1VM_NIC_ID} \
+    --query networkSecurityGroup.id \
+    --output tsv)
+
+az network nic ip-config update \
+    --name ${MSPVM1VM_NIC_IP_CONFIG} \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --nic-name ${MSPVM1VM_NIC_NAME} \
+    --remove PublicIpAddress
+az network public-ip delete --ids ${MSPVM1VM_PUBLIC_IP}
+az network nic update \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name ${MSPVM1VM_NIC_NAME} \
+    --remove networkSecurityGroup
+az network nsg delete --ids ${MSPVM1VM_NSG_ID}
+
+export MSPVM2VM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM2 \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export MSPVM2VM_NIC_NAME=$(az network nic show \
+    --ids ${MSPVM2VM_NIC_ID} \
+    --query name \
+    --output tsv)
+export MSPVM2VM_NIC_IP_CONFIG=$(az network nic show \
+    --ids ${MSPVM2VM_NIC_ID} \
+    --query ipConfigurations[0].name \
+    --output tsv)
+export MSPVM2VM_PUBLIC_IP=$(az network nic show \
+    --ids ${MSPVM2VM_NIC_ID} \
+    --query ipConfigurations[0].publicIpAddress.id \
+    --output tsv)
+export MSPVM2VM_NSG_ID=$(az network nic show \
+    --ids ${MSPVM2VM_NIC_ID} \
+    --query networkSecurityGroup.id \
+    --output tsv)
+
+az network nic ip-config update \
+    --name ${MSPVM2VM_NIC_IP_CONFIG} \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --nic-name ${MSPVM2VM_NIC_NAME} \
+    --remove PublicIpAddress
+az network public-ip delete --ids ${MSPVM2VM_PUBLIC_IP}
+az network nic update \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name ${MSPVM2VM_NIC_NAME} \
+    --remove networkSecurityGroup
+az network nsg delete --ids ${MSPVM2VM_NSG_ID}
+export ADMINVM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export ADMINVM_NIC_NAME=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query name \
+    --output tsv)
+export ADMINVM_NIC_IP_CONFIG=$(az network nic show \
+    --ids $ADMINVM_NIC_ID \
+    --query ipConfigurations[0].name \
+    --output tsv)
+export ADMINVM_PUBLIC_IP=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query ipConfigurations[0].publicIpAddress.id \
+    --output tsv)
+export ADMINVM_NSG_ID=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query networkSecurityGroup.id \
+    --output tsv)
+
+az network nic ip-config update \
+    --name ${ADMINVM_NIC_IP_CONFIG} \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --nic-name ${ADMINVM_NIC_NAME} \
+    --remove PublicIpAddress
+az network public-ip delete --ids ${ADMINVM_PUBLIC_IP}
+az network nic update \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name ${ADMINVM_NIC_NAME} \
+    --remove networkSecurityGroup
+az network nsg delete --ids ${ADMINVM_NSG_ID}
+
+export MSPVM1VM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM1 \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export MSPVM1VM_NIC_NAME=$(az network nic show \
+    --ids ${MSPVM1VM_NIC_ID} \
+    --query name \
+    --output tsv)
+export MSPVM1VM_NIC_IP_CONFIG=$(az network nic show \
+    --ids ${MSPVM1VM_NIC_ID} \
+    --query ipConfigurations[0].name \
+    --output tsv)
+export MSPVM1VM_PUBLIC_IP=$(az network nic show \
+    --ids ${MSPVM1VM_NIC_ID} \
+    --query ipConfigurations[0].publicIpAddress.id \
+    --output tsv)
+export MSPVM1VM_NSG_ID=$(az network nic show \
+    --ids ${MSPVM1VM_NIC_ID} \
+    --query networkSecurityGroup.id \
+    --output tsv)
+
+az network nic ip-config update \
+    --name ${MSPVM1VM_NIC_IP_CONFIG} \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --nic-name ${MSPVM1VM_NIC_NAME} \
+    --remove PublicIpAddress
+az network public-ip delete --ids ${MSPVM1VM_PUBLIC_IP}
+az network nic update \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name ${MSPVM1VM_NIC_NAME} \
+    --remove networkSecurityGroup
+az network nsg delete --ids ${MSPVM1VM_NSG_ID}
+
+export MSPVM2VM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM2 \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export MSPVM2VM_NIC_NAME=$(az network nic show \
+    --ids ${MSPVM2VM_NIC_ID} \
+    --query name \
+    --output tsv)
+export MSPVM2VM_NIC_IP_CONFIG=$(az network nic show \
+    --ids ${MSPVM2VM_NIC_ID} \
+    --query ipConfigurations[0].name \
+    --output tsv)
+export MSPVM2VM_PUBLIC_IP=$(az network nic show \
+    --ids ${MSPVM2VM_NIC_ID} \
+    --query ipConfigurations[0].publicIpAddress.id \
+    --output tsv)
+export MSPVM2VM_NSG_ID=$(az network nic show \
+    --ids ${MSPVM2VM_NIC_ID} \
+    --query networkSecurityGroup.id \
+    --output tsv)
+
+az network nic ip-config update \
+    --name ${MSPVM2VM_NIC_IP_CONFIG} \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --nic-name ${MSPVM2VM_NIC_NAME} \
+    --remove PublicIpAddress
+az network public-ip delete --ids ${MSPVM2VM_PUBLIC_IP}
+az network nic update \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name ${MSPVM2VM_NIC_NAME} \
+    --remove networkSecurityGroup
+az network nsg delete --ids ${MSPVM2VM_NSG_ID}
+Expose WebLogic Server with Azure Application Gateway
+Now that you created the WebLogic Server (WLS) cluster on either Windows or GNU/Linux virtual machines, this section walks you through the process of exposing WebLogic Server to the internet with Azure Application Gateway.
+Create the Azure Application Gateway
+To expose WebLogic Server to the internet, a public IP address is required. Create the public IP address and then associate an Azure Application gateway with it. Useaz network public-ip createto create it, as shown in the following example:
+az network public-ip create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myAGPublicIPAddress \
+    --allocation-method Static \
+    --sku Standard
+az network public-ip create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myAGPublicIPAddress \
+    --allocation-method Static \
+    --sku Standard
+You add the backend servers to Application Gateway backend pool. Query backend IP addresses using the following commands:
+export ADMINVM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export ADMINVM_IP=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query ipConfigurations[0].privateIPAddress \
+    --output tsv)
+export MSPVM1_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM1 \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export MSPVM1_IP=$(az network nic show \
+    --ids ${MSPVM1_NIC_ID} \
+    --query ipConfigurations[0].privateIPAddress \
+    --output tsv)
+export MSPVM2_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM2 \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export MSPVM2_IP=$(az network nic show \
+    --ids ${MSPVM2_NIC_ID} \
+    --query ipConfigurations[0].privateIPAddress \
+    --output tsv)
+export ADMINVM_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name adminVM \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export ADMINVM_IP=$(az network nic show \
+    --ids ${ADMINVM_NIC_ID} \
+    --query ipConfigurations[0].privateIPAddress \
+    --output tsv)
+export MSPVM1_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM1 \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export MSPVM1_IP=$(az network nic show \
+    --ids ${MSPVM1_NIC_ID} \
+    --query ipConfigurations[0].privateIPAddress \
+    --output tsv)
+export MSPVM2_NIC_ID=$(az vm show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name mspVM2 \
+    --query networkProfile.networkInterfaces[0].id \
+    --output tsv)
+export MSPVM2_IP=$(az network nic show \
+    --ids ${MSPVM2_NIC_ID} \
+    --query ipConfigurations[0].privateIPAddress \
+    --output tsv)
+Next, create an Azure Application Gateway. The following example creates an application gateway with managed servers in the default backend pool:
+az network application-gateway create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myAppGateway \
+    --public-ip-address myAGPublicIPAddress \
+    --location eastus \
+    --capacity 2 \
+    --http-settings-port 80 \
+    --http-settings-protocol Http \
+    --frontend-port 80 \
+    --sku Standard_V2 \
+    --subnet wlsVMGateway \
+    --vnet-name myVNet \
+    --priority 1001 \
+    --servers ${MSPVM1_IP} ${MSPVM2_IP}
+az network application-gateway create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myAppGateway \
+    --public-ip-address myAGPublicIPAddress \
+    --location eastus \
+    --capacity 2 \
+    --http-settings-port 80 \
+    --http-settings-protocol Http \
+    --frontend-port 80 \
+    --sku Standard_V2 \
+    --subnet wlsVMGateway \
+    --vnet-name myVNet \
+    --priority 1001 \
+    --servers ${MSPVM1_IP} ${MSPVM2_IP}
+The managed servers expose their workloads with port8001. Use the following commands to update theappGatewayBackendHttpSettingsby specifying backend port8001and creating a probe for it:
+8001
+appGatewayBackendHttpSettings
+8001
+az network application-gateway probe create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --gateway-name myAppGateway \
+    --name clusterProbe \
+    --protocol http \
+    --host 127.0.0.1 \
+    --path /weblogic/ready
+
+az network application-gateway http-settings update \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --gateway-name myAppGateway \
+    --name appGatewayBackendHttpSettings \
+    --port 8001 \
+    --probe clusterProbe
+az network application-gateway probe create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --gateway-name myAppGateway \
+    --name clusterProbe \
+    --protocol http \
+    --host 127.0.0.1 \
+    --path /weblogic/ready
+
+az network application-gateway http-settings update \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --gateway-name myAppGateway \
+    --name appGatewayBackendHttpSettings \
+    --port 8001 \
+    --probe clusterProbe
+The next commands provision a basic rulerule1. This example adds a path to the Administration Server. First, use the following commands to create a URL path map:
+rule1
+az network application-gateway address-pool create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --gateway-name myAppGateway \
+    --name adminServerAddressPool \
+    --servers ${ADMINVM_IP}
+
+az network application-gateway probe create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --gateway-name myAppGateway \
+    --name adminProbe \
+    --protocol http \
+    --host 127.0.0.1 \
+    --path /weblogic/ready
+
+az network application-gateway http-settings create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --gateway-name myAppGateway \
+    --name adminBackendSettings \
+    --port 7001 \
+    --protocol Http \
+    --probe adminProbe
+
+az network application-gateway url-path-map create \
+    --gateway-name myAppGateway \
+    --name urlpathmap \
+    --paths /console/* \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --address-pool adminServerAddressPool \
+    --default-address-pool appGatewayBackendPool \
+    --default-http-settings appGatewayBackendHttpSettings \
+    --http-settings adminBackendSettings \
+    --rule-name consolePathRule
+az network application-gateway address-pool create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --gateway-name myAppGateway \
+    --name adminServerAddressPool \
+    --servers ${ADMINVM_IP}
+
+az network application-gateway probe create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --gateway-name myAppGateway \
+    --name adminProbe \
+    --protocol http \
+    --host 127.0.0.1 \
+    --path /weblogic/ready
+
+az network application-gateway http-settings create \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --gateway-name myAppGateway \
+    --name adminBackendSettings \
+    --port 7001 \
+    --protocol Http \
+    --probe adminProbe
+
+az network application-gateway url-path-map create \
+    --gateway-name myAppGateway \
+    --name urlpathmap \
+    --paths /console/* \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --address-pool adminServerAddressPool \
+    --default-address-pool appGatewayBackendPool \
+    --default-http-settings appGatewayBackendHttpSettings \
+    --http-settings adminBackendSettings \
+    --rule-name consolePathRule
+Next, useaz network application-gateway rule updateto update the rule type to bePathBasedRouting.
+PathBasedRouting
+az network application-gateway rule update \
+    --gateway-name myAppGateway \
+    --name rule1 \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --http-listener appGatewayHttpListener \
+    --rule-type PathBasedRouting \
+    --url-path-map urlpathmap \
+    --priority 1001 \
+    --address-pool appGatewayBackendPool \
+    --http-settings appGatewayBackendHttpSettings
+az network application-gateway rule update \
+    --gateway-name myAppGateway \
+    --name rule1 \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --http-listener appGatewayHttpListener \
+    --rule-type PathBasedRouting \
+    --url-path-map urlpathmap \
+    --priority 1001 \
+    --address-pool appGatewayBackendPool \
+    --http-settings appGatewayBackendHttpSettings
+You're now able to access the Administration Server with the URLhttp://<gateway-public-ip-address>/console/. Run the following commands to get the URL:
+http://<gateway-public-ip-address>/console/
+export APPGATEWAY_IP=$(az network public-ip show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myAGPublicIPAddress \
+    --query [ipAddress] \
+    --output tsv)
+echo "admin console URL is http://${APPGATEWAY_IP}/console/"
+export APPGATEWAY_IP=$(az network public-ip show \
+    --resource-group ${RESOURCE_GROUP_NAME} \
+    --name myAGPublicIPAddress \
+    --query [ipAddress] \
+    --output tsv)
+echo "admin console URL is http://${APPGATEWAY_IP}/console/"
+Verify that you can sign into the Administration Server console. If you can't, troubleshoot and resolve the problem before proceeding.
+Note
+This example sets up simple access to the WebLogic servers with HTTP. If you want secure access, configure TLS/SSL termination by follow the instructions inEnd to end TLS with Application Gateway.
+This example exposes the Administration Server console via the Application Gateway. Don't do this in a production environment.
+Deploy a sample application
+This section shows you how to deploy an application to the WebLogic Server cluster. First, downloadtestwebapp.warfrom Oracle and save the file to your local filesystem. Then, use the following steps to deploy the application:
+Open a web browser.
+Navigate to the Administration Console portal with the URLhttp://<gateway-public-ip-address>/console/, then sign in with your admin account and password. In this example, they'reweblogic/Secret123456.
+http://<gateway-public-ip-address>/console/
+weblogic/Secret123456
+Under theChange Center, if such a button exists, selectLock and Edit. If this button doesn't exist, verify that some text such as "Future changes will automatically be activated as you modify, add or delete items in this domain" exists underChange Center.
+UnderDomain Structure, selectDeployments. If you see an error message similar toUnexpected error encountered while obtaining monitoring information for applications., you can safely ignore it. SelectConfigurationthenInstall. Nestled within the text is a hyperlink with the textUpload your files. Select it. SelectChoose file, then select thetestwebapp.warbuilt in the preceding step. SelectNextthenNext.
+Unexpected error encountered while obtaining monitoring information for applications.
+Ensure thatInstall this deployment as an applicationis selected. SelectNext.
+UnderAvailable targets for testwebapp, select deployment targetcluster1, selectNext, then selectFinish.
+cluster1
+Under theChange Center, if such a button exists, selectActivate Changes. You must complete this step. Failure to complete this step causes the changes you made to not take effect. If this button doesn't exist, verify that some text such asFuture changes will automatically be activated as you modify, add or delete items in this domainexists underChange Center.
+Future changes will automatically be activated as you modify, add or delete items in this domain
+UnderDomain Structure, selectDeploymentsthenControl. Selecttestwebappthen selectStart,Servicing all requests.
+SelectYes.
+You see a message sayingStart requests have been sent to the selected deployments.The status of the application must beActive.
+Start requests have been sent to the selected deployments.
+Test the WebLogic Server cluster configuration
+You finished configuring the WebLogic Server cluster and deploying the Java application to it. Use the following steps to access the application to validate all the settings:
+Open a web browser.
+Navigate to the application with the URLhttp://<gateway-public-ip-address>/testwebapp/.
+http://<gateway-public-ip-address>/testwebapp/
+Clean up resources
+Delete the resource group with the following command:
+az group delete --name ${RESOURCE_GROUP_NAME} --yes --no-wait
+az group delete --name ${RESOURCE_GROUP_NAME} --yes --no-wait
+Next steps
+Continue to explore options to run WebLogic Server on Azure.
+WebLogic Server on Azure Virtual Machines
+WebLogic Server on Azure Kubernetes Service
+For more information about Oracle WebLogic offers, seeOracle WebLogic Server on Azure. These offers are allBring-Your-Own-License. They assume you already have the appropriate licenses with Oracle and are properly licensed to run offers in Azure.
+Feedback
+Was this page helpful?
+Additional resources

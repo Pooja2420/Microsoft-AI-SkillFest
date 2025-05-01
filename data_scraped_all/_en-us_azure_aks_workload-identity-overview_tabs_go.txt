@@ -1,0 +1,325 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use Microsoft Entra Workload ID with Azure Kubernetes Service (AKS)
+Article
+2024-08-01
+18 contributors
+In this article
+Workloads deployed on an Azure Kubernetes Services (AKS) cluster require Microsoft Entra application credentials or managed identities to access Microsoft Entra protected resources, such as Azure Key Vault and Microsoft Graph. Microsoft Entra Workload ID integrates with the capabilities native to Kubernetes to federate with external identity providers.
+Microsoft Entra Workload IDusesService Account Token Volume Projection(that is, a service account), to enable pods to use a Kubernetes identity. A Kubernetes token is issued andOIDC federationenables Kubernetes applications to access Azure resources securely with Microsoft Entra ID, based on annotated service accounts.
+Microsoft Entra Workload ID works especially well with theAzure Identity client librariesor theMicrosoft Authentication Library(MSAL) collection, together withapplication registration. Your workload can use any of these libraries to seamlessly authenticate and access Azure cloud resources.
+This article helps you to understand Microsoft Entra Workload ID, and reviews the options available to plan your project strategy and potential migration from Microsoft Entra pod-managed identity.
+Note
+You can useService Connectorto help you configure some steps automatically. See also:What is Service Connector?
+Dependencies
+AKS supports Microsoft Entra Workload ID on version 1.22 and higher.
+The Azure CLI version 2.47.0 or later. Runaz --versionto find the version, and runaz upgradeto upgrade the version. If you need to install or upgrade, seeInstall Azure CLI.
+az --version
+az upgrade
+Azure Identity client libraries
+In the Azure Identity client libraries, choose one of the following approaches:
+UseDefaultAzureCredential, which attempts to use theWorkloadIdentityCredential.
+DefaultAzureCredential
+WorkloadIdentityCredential
+Create aChainedTokenCredentialinstance that includesWorkloadIdentityCredential.
+ChainedTokenCredential
+WorkloadIdentityCredential
+UseWorkloadIdentityCredentialdirectly.
+WorkloadIdentityCredential
+The following table provides theminimumpackage version required for each language ecosystem's client library.
+In the following code samples,DefaultAzureCredentialis used. This credential type uses the environment variables injected by the Azure Workload Identity mutating webhook to authenticate with Azure Key Vault. To see samples using one of the other approaches, refer to the Ecosystem-specific client library links above.
+DefaultAzureCredential
+.NET
+C++
+Go
+Java
+Node.js
+Python
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
+
+string keyVaultUrl = Environment.GetEnvironmentVariable("KEYVAULT_URL");
+string secretName = Environment.GetEnvironmentVariable("SECRET_NAME");
+
+var client = new SecretClient(
+    new Uri(keyVaultUrl),
+    new DefaultAzureCredential());
+
+KeyVaultSecret secret = await client.GetSecretAsync(secretName);
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
+
+string keyVaultUrl = Environment.GetEnvironmentVariable("KEYVAULT_URL");
+string secretName = Environment.GetEnvironmentVariable("SECRET_NAME");
+
+var client = new SecretClient(
+    new Uri(keyVaultUrl),
+    new DefaultAzureCredential());
+
+KeyVaultSecret secret = await client.GetSecretAsync(secretName);
+#include <cstdlib>
+#include <azure/identity.hpp>
+#include <azure/keyvault/secrets/secret_client.hpp>
+
+using namespace Azure::Identity;
+using namespace Azure::Security::KeyVault::Secrets;
+
+int main()
+{
+  const char* keyVaultUrl = std::getenv("KEYVAULT_URL");
+  const char* secretName = std::getenv("SECRET_NAME");
+  auto credential = std::make_shared<DefaultAzureCredential>();
+
+  SecretClient client(keyVaultUrl, credential);
+  Secret secret = client.GetSecret(secretName).Value;
+
+  return 0;
+}
+#include <cstdlib>
+#include <azure/identity.hpp>
+#include <azure/keyvault/secrets/secret_client.hpp>
+
+using namespace Azure::Identity;
+using namespace Azure::Security::KeyVault::Secrets;
+
+int main()
+{
+  const char* keyVaultUrl = std::getenv("KEYVAULT_URL");
+  const char* secretName = std::getenv("SECRET_NAME");
+  auto credential = std::make_shared<DefaultAzureCredential>();
+
+  SecretClient client(keyVaultUrl, credential);
+  Secret secret = client.GetSecret(secretName).Value;
+
+  return 0;
+}
+package main
+
+import (
+	"context"
+	"os"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
+    "k8s.io/klog/v2"
+)
+
+func main() {
+	keyVaultUrl := os.Getenv("KEYVAULT_URL")
+	secretName := os.Getenv("SECRET_NAME")
+
+	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		klog.Fatal(err)
+	}
+
+	client, err := azsecrets.NewClient(keyVaultUrl, credential, nil)
+	if err != nil {
+		klog.Fatal(err)
+	}
+
+	secret, err := client.GetSecret(context.Background(), secretName, "", nil)
+	if err != nil {
+		klog.ErrorS(err, "failed to get secret", "keyvault", keyVaultUrl, "secretName", secretName)
+		os.Exit(1)
+	}
+}
+package main
+
+import (
+	"context"
+	"os"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
+    "k8s.io/klog/v2"
+)
+
+func main() {
+	keyVaultUrl := os.Getenv("KEYVAULT_URL")
+	secretName := os.Getenv("SECRET_NAME")
+
+	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		klog.Fatal(err)
+	}
+
+	client, err := azsecrets.NewClient(keyVaultUrl, credential, nil)
+	if err != nil {
+		klog.Fatal(err)
+	}
+
+	secret, err := client.GetSecret(context.Background(), secretName, "", nil)
+	if err != nil {
+		klog.ErrorS(err, "failed to get secret", "keyvault", keyVaultUrl, "secretName", secretName)
+		os.Exit(1)
+	}
+}
+import java.util.Map;
+
+import com.azure.security.keyvault.secrets.SecretClient;
+import com.azure.security.keyvault.secrets.SecretClientBuilder;
+import com.azure.security.keyvault.secrets.models.KeyVaultSecret;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.azure.identity.DefaultAzureCredential;
+
+public class App {
+    public static void main(String[] args) {
+        Map<String, String> env = System.getenv();
+        String keyVaultUrl = env.get("KEYVAULT_URL");
+        String secretName = env.get("SECRET_NAME");
+
+        SecretClient client = new SecretClientBuilder()
+                .vaultUrl(keyVaultUrl)
+                .credential(new DefaultAzureCredentialBuilder().build())
+                .buildClient();
+        KeyVaultSecret secret = client.getSecret(secretName);
+    }
+}
+import java.util.Map;
+
+import com.azure.security.keyvault.secrets.SecretClient;
+import com.azure.security.keyvault.secrets.SecretClientBuilder;
+import com.azure.security.keyvault.secrets.models.KeyVaultSecret;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.azure.identity.DefaultAzureCredential;
+
+public class App {
+    public static void main(String[] args) {
+        Map<String, String> env = System.getenv();
+        String keyVaultUrl = env.get("KEYVAULT_URL");
+        String secretName = env.get("SECRET_NAME");
+
+        SecretClient client = new SecretClientBuilder()
+                .vaultUrl(keyVaultUrl)
+                .credential(new DefaultAzureCredentialBuilder().build())
+                .buildClient();
+        KeyVaultSecret secret = client.getSecret(secretName);
+    }
+}
+import { DefaultAzureCredential } from "@azure/identity";
+import { SecretClient } from "@azure/keyvault-secrets";
+
+const main = async () => {
+    const keyVaultUrl = process.env["KEYVAULT_URL"];
+    const secretName = process.env["SECRET_NAME"];
+
+    const credential = new DefaultAzureCredential();
+    const client = new SecretClient(keyVaultUrl, credential);
+
+    const secret = await client.getSecret(secretName);
+}
+
+main().catch((error) => {
+    console.error("An error occurred:", error);
+    process.exit(1);
+});
+import { DefaultAzureCredential } from "@azure/identity";
+import { SecretClient } from "@azure/keyvault-secrets";
+
+const main = async () => {
+    const keyVaultUrl = process.env["KEYVAULT_URL"];
+    const secretName = process.env["SECRET_NAME"];
+
+    const credential = new DefaultAzureCredential();
+    const client = new SecretClient(keyVaultUrl, credential);
+
+    const secret = await client.getSecret(secretName);
+}
+
+main().catch((error) => {
+    console.error("An error occurred:", error);
+    process.exit(1);
+});
+import os
+
+from azure.keyvault.secrets import SecretClient
+from azure.identity import DefaultAzureCredential
+
+def main():
+    keyvault_url = os.getenv('KEYVAULT_URL', '')
+    secret_name = os.getenv('SECRET_NAME', '')
+
+    client = SecretClient(vault_url=keyvault_url, credential=DefaultAzureCredential())
+    secret = client.get_secret(secret_name)
+
+if __name__ == '__main__':
+    main()
+import os
+
+from azure.keyvault.secrets import SecretClient
+from azure.identity import DefaultAzureCredential
+
+def main():
+    keyvault_url = os.getenv('KEYVAULT_URL', '')
+    secret_name = os.getenv('SECRET_NAME', '')
+
+    client = SecretClient(vault_url=keyvault_url, credential=DefaultAzureCredential())
+    secret = client.get_secret(secret_name)
+
+if __name__ == '__main__':
+    main()
+Microsoft Authentication Library (MSAL)
+The following client libraries are theminimumversion required.
+ghcr.io/azure/azure-workload-identity/msal-net:latest
+ghcr.io/azure/azure-workload-identity/msal-go:latest
+ghcr.io/azure/azure-workload-identity/msal-java:latest
+ghcr.io/azure/azure-workload-identity/msal-node:latest
+ghcr.io/azure/azure-workload-identity/msal-python:latest
+Limitations
+You can have a maximum of20 federated identity credentialsper managed identity.
+It takes a few seconds for the federated identity credential to be propagated after being initially added.
+Thevirtual nodesadd on, based on the open source projectVirtual Kubelet, isn't supported.
+Creation of federated identity credentials is not supported on user-assigned managed identities in theseregions.
+How it works
+In this security model, the AKS cluster acts as the token issuer. Microsoft Entra ID uses OpenID Connect to discover public signing keys and verify the authenticity of the service account token before exchanging it for a Microsoft Entra token. Your workload can exchange a service account token projected to its volume for a Microsoft Entra token using the Azure Identity client library or the Microsoft Authentication Library (MSAL).
+
+The following table describes the required OIDC issuer endpoints for Microsoft Entra Workload ID:
+{IssuerURL}/.well-known/openid-configuration
+{IssuerURL}/openid/v1/jwks
+The following diagram summarizes the authentication sequence using OpenID Connect.
+
+Webhook Certificate Auto Rotation
+Similar to other webhook addons, the certificate is rotated by cluster certificateauto rotationoperation.
+Service account labels and annotations
+Microsoft Entra Workload ID supports the following mappings related to a service account:
+One-to-one, where a service account references a Microsoft Entra object.
+Many-to-one, where multiple service accounts reference the same Microsoft Entra object.
+One-to-many, where a service account references multiple Microsoft Entra objects by changing the client ID annotation. For more information, seeHow to federate multiple identities with a Kubernetes service account.
+Note
+If the service account annotations are updated, you must restart the pod for the changes to take effect.
+If you've usedMicrosoft Entra pod-managed identity, think of a service account as an Azure security principal, except that a service account is part of the core Kubernetes API, rather than aCustom Resource Definition(CRD). The following sections describe a list of available labels and annotations that can be used to configure the behavior when exchanging the service account token for a Microsoft Entra access token.
+Service account annotations
+All annotations are optional. If the annotation isn't specified, the default value will be used.
+azure.workload.identity/client-id
+azure.workload.identity/tenant-id
+azure-wi-webhook-config
+azure.workload.identity/service-account-token-expiration
+expirationSeconds
+Pod labels
+Note
+For applications using workload identity, it's required to add the labelazure.workload.identity/use: "true"to the pod spec for AKS to move workload identity to aFail Closescenario to provide a consistent and reliable behavior for pods that need to use workload identity. Otherwise the pods fail after they are restarted.
+azure.workload.identity/use: "true"
+azure.workload.identity/use
+Pod annotations
+All annotations are optional. If the annotation isn't specified, the default value will be used.
+azure.workload.identity/service-account-token-expiration
+expirationSeconds
+azure.workload.identity/skip-containers
+container1;container2
+azure.workload.identity/use: true
+azure.workload.identity/inject-proxy-sidecar
+azure.workload.identity/proxy-sidecar-port
+1Takes precedence if the service account is also annotated.
+How to migrate to Microsoft Entra Workload ID
+On a cluster that is already running a pod-managed identity, you can configure it to use workload identity one of two ways. The first option allows you to use the same configuration that you've implemented for pod-managed identity. You can annotate the service account within the namespace with the identity to enable Microsoft Entra Workload ID and inject the annotations into the pods.
+The second option is to rewrite your application to use the latest version of the Azure Identity client library.
+To help streamline and ease the migration process, we've developed a migration sidecar that converts the IMDS transactions your application makes over toOpenID Connect(OIDC). The migration sidecar isn't intended to be a long-term solution, but a way to get up and running quickly on workload identity. Running the migration sidecar within your application proxies the application IMDS transactions over to OIDC. The alternative approach is to upgrade to a supported version of theAzure Identityclient library, which supports OIDC authentication.
+The following table summarizes our migration or deployment recommendations for workload identity.
+Next steps
+To learn how to set up your pod to authenticate using a workload identity as a migration option, seeModernize application authentication with workload identity.
+SeeDeploy and configure an AKS cluster with workload identity, which helps you deploy an Azure Kubernetes Service cluster and configure a sample application to use a workload identity.
+Azure Kubernetes Service
+
+Additional resources

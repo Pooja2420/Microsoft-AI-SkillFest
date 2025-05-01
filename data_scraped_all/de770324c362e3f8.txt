@@ -1,0 +1,251 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Errors that commonly occur during Classic to Azure Resource Manager migration
+Article
+2025-03-17
+2 contributors
+In this article
+Applies to:âï¸ Linux VMs âï¸ Windows VMs
+Important
+Today, about 90% of IaaS VMs are usingAzure Resource Manager. As of February 28, 2020, classic VMs have been deprecated and will be fully retired on September 6, 2023.Learn moreabout this deprecation andhow it affects you.
+This article catalogs the most common errors and mitigations during the migration of IaaS resources from Azure classic deployment model to the Azure Resource Manager stack.
+List of errors
+a Network Security Group that blocks outbound access to the internet
+If the VNET has on premises DNS servers and DNS connectivity is lostIf you continue to see an unsupported status, you can uninstall the extensions to skip this check and move forward with migration.
+Detailed mitigations
+VM with Data Disk whose physical blob size bytes doesn't match the VM Data Disk logical size bytes.
+This happens when the Data disk logical size can get out of sync with the actual VHD blob size. This can be easily verified using the following commands:
+# Store the VM details in the VM object
+$vm = Get-AzureVM -ServiceName $servicename -Name $vmname
+
+# Display the data disk properties
+# NOTE the data disk LogicalDiskSizeInGB below which is 11GB. Also note the MediaLink Uri of the VHD blob as we'll use this in the next step
+$vm.VM.DataVirtualHardDisks
+
+
+HostCaching         : None
+DiskLabel           : 
+DiskName            : coreosvm-coreosvm-0-201611230636240687
+Lun                 : 0
+LogicalDiskSizeInGB : 11
+MediaLink           : https://contosostorage.blob.core.windows.net/vhds/coreosvm-dd1.vhd
+SourceMediaLink     : 
+IOType              : Standard
+ExtensionData       : 
+
+# Now get the properties of the blob backing the data disk above
+# NOTE the size of the blob is about 15 GB which is different from LogicalDiskSizeInGB above
+$blob = Get-AzStorageblob -Blob "coreosvm-dd1.vhd" -Container vhds 
+
+$blob
+
+ICloudBlob        : Microsoft.WindowsAzure.Storage.Blob.CloudPageBlob
+BlobType          : PageBlob
+Length            : 16106127872
+ContentType       : application/octet-stream
+LastModified      : 11/23/2016 7:16:22 AM +00:00
+SnapshotTime      : 
+ContinuationToken : 
+Context           : Microsoft.WindowsAzure.Commands.Common.Storage.AzureStorageContext
+Name              : coreosvm-dd1.vhd
+# Store the VM details in the VM object
+$vm = Get-AzureVM -ServiceName $servicename -Name $vmname
+
+# Display the data disk properties
+# NOTE the data disk LogicalDiskSizeInGB below which is 11GB. Also note the MediaLink Uri of the VHD blob as we'll use this in the next step
+$vm.VM.DataVirtualHardDisks
+
+
+HostCaching         : None
+DiskLabel           : 
+DiskName            : coreosvm-coreosvm-0-201611230636240687
+Lun                 : 0
+LogicalDiskSizeInGB : 11
+MediaLink           : https://contosostorage.blob.core.windows.net/vhds/coreosvm-dd1.vhd
+SourceMediaLink     : 
+IOType              : Standard
+ExtensionData       : 
+
+# Now get the properties of the blob backing the data disk above
+# NOTE the size of the blob is about 15 GB which is different from LogicalDiskSizeInGB above
+$blob = Get-AzStorageblob -Blob "coreosvm-dd1.vhd" -Container vhds 
+
+$blob
+
+ICloudBlob        : Microsoft.WindowsAzure.Storage.Blob.CloudPageBlob
+BlobType          : PageBlob
+Length            : 16106127872
+ContentType       : application/octet-stream
+LastModified      : 11/23/2016 7:16:22 AM +00:00
+SnapshotTime      : 
+ContinuationToken : 
+Context           : Microsoft.WindowsAzure.Commands.Common.Storage.AzureStorageContext
+Name              : coreosvm-dd1.vhd
+# Convert the blob size in bytes to GB into a variable which we'll use later
+$newSize = [int]($blob.Length / 1GB)
+
+# See the calculated size in GB
+$newSize
+
+15
+
+# Store the disk name of the data disk as we'll use this to identify the disk to be updated
+$diskName = $vm.VM.DataVirtualHardDisks[0].DiskName
+
+# Identify the LUN of the data disk to remove
+$lunToRemove = $vm.VM.DataVirtualHardDisks[0].Lun
+
+# Now remove the data disk from the VM so that the disk isn't leased by the VM and it's size can be updated
+Remove-AzureDataDisk -LUN $lunToRemove -VM $vm | Update-AzureVm -Name $vmname -ServiceName $servicename
+
+OperationDescription OperationId                          OperationStatus
+-------------------- -----------                          ---------------
+Update-AzureVM       213xx1-b44b-1v6n-23gg-591f2a13cd16   Succeeded  
+
+# Verify we have the right disk that's going to be updated
+Get-AzureDisk -DiskName $diskName
+
+AffinityGroup        : 
+AttachedTo           : 
+IsCorrupted          : False
+Label                : 
+Location             : East US
+DiskSizeInGB         : 11
+MediaLink            : https://contosostorage.blob.core.windows.net/vhds/coreosvm-dd1.vhd
+DiskName             : coreosvm-coreosvm-0-201611230636240687
+SourceImageName      : 
+OS                   : 
+IOType               : Standard
+OperationDescription : Get-AzureDisk
+OperationId          : 0c56a2b7-a325-123b-7043-74c27d5a61fd
+OperationStatus      : Succeeded
+
+# Now update the disk to the new size
+Update-AzureDisk -DiskName $diskName -ResizedSizeInGB $newSize -Label $diskName
+
+OperationDescription OperationId                          OperationStatus
+-------------------- -----------                          ---------------
+Update-AzureDisk     cv134b65-1b6n-8908-abuo-ce9e395ac3e7 Succeeded 
+
+# Now verify that the "DiskSizeInGB" property of the disk matches the size of the blob 
+Get-AzureDisk -DiskName $diskName
+
+
+AffinityGroup        : 
+AttachedTo           : 
+IsCorrupted          : False
+Label                : coreosvm-coreosvm-0-201611230636240687
+Location             : East US
+DiskSizeInGB         : 15
+MediaLink            : https://contosostorage.blob.core.windows.net/vhds/coreosvm-dd1.vhd
+DiskName             : coreosvm-coreosvm-0-201611230636240687
+SourceImageName      : 
+OS                   : 
+IOType               : Standard
+OperationDescription : Get-AzureDisk
+OperationId          : 1v53bde5-cv56-5621-9078-16b9c8a0bad2
+OperationStatus      : Succeeded
+
+# Now we'll add the disk back to the VM as a data disk. First we need to get an updated VM object
+$vm = Get-AzureVM -ServiceName $servicename -Name $vmname
+
+Add-AzureDataDisk -Import -DiskName $diskName -LUN 0 -VM $vm -HostCaching ReadWrite | Update-AzureVm -Name $vmname -ServiceName $servicename
+
+OperationDescription OperationId                          OperationStatus
+-------------------- -----------                          ---------------
+Update-AzureVM       b0ad3d4c-4v68-45vb-xxc1-134fd010d0f8 Succeeded
+# Convert the blob size in bytes to GB into a variable which we'll use later
+$newSize = [int]($blob.Length / 1GB)
+
+# See the calculated size in GB
+$newSize
+
+15
+
+# Store the disk name of the data disk as we'll use this to identify the disk to be updated
+$diskName = $vm.VM.DataVirtualHardDisks[0].DiskName
+
+# Identify the LUN of the data disk to remove
+$lunToRemove = $vm.VM.DataVirtualHardDisks[0].Lun
+
+# Now remove the data disk from the VM so that the disk isn't leased by the VM and it's size can be updated
+Remove-AzureDataDisk -LUN $lunToRemove -VM $vm | Update-AzureVm -Name $vmname -ServiceName $servicename
+
+OperationDescription OperationId                          OperationStatus
+-------------------- -----------                          ---------------
+Update-AzureVM       213xx1-b44b-1v6n-23gg-591f2a13cd16   Succeeded  
+
+# Verify we have the right disk that's going to be updated
+Get-AzureDisk -DiskName $diskName
+
+AffinityGroup        : 
+AttachedTo           : 
+IsCorrupted          : False
+Label                : 
+Location             : East US
+DiskSizeInGB         : 11
+MediaLink            : https://contosostorage.blob.core.windows.net/vhds/coreosvm-dd1.vhd
+DiskName             : coreosvm-coreosvm-0-201611230636240687
+SourceImageName      : 
+OS                   : 
+IOType               : Standard
+OperationDescription : Get-AzureDisk
+OperationId          : 0c56a2b7-a325-123b-7043-74c27d5a61fd
+OperationStatus      : Succeeded
+
+# Now update the disk to the new size
+Update-AzureDisk -DiskName $diskName -ResizedSizeInGB $newSize -Label $diskName
+
+OperationDescription OperationId                          OperationStatus
+-------------------- -----------                          ---------------
+Update-AzureDisk     cv134b65-1b6n-8908-abuo-ce9e395ac3e7 Succeeded 
+
+# Now verify that the "DiskSizeInGB" property of the disk matches the size of the blob 
+Get-AzureDisk -DiskName $diskName
+
+
+AffinityGroup        : 
+AttachedTo           : 
+IsCorrupted          : False
+Label                : coreosvm-coreosvm-0-201611230636240687
+Location             : East US
+DiskSizeInGB         : 15
+MediaLink            : https://contosostorage.blob.core.windows.net/vhds/coreosvm-dd1.vhd
+DiskName             : coreosvm-coreosvm-0-201611230636240687
+SourceImageName      : 
+OS                   : 
+IOType               : Standard
+OperationDescription : Get-AzureDisk
+OperationId          : 1v53bde5-cv56-5621-9078-16b9c8a0bad2
+OperationStatus      : Succeeded
+
+# Now we'll add the disk back to the VM as a data disk. First we need to get an updated VM object
+$vm = Get-AzureVM -ServiceName $servicename -Name $vmname
+
+Add-AzureDataDisk -Import -DiskName $diskName -LUN 0 -VM $vm -HostCaching ReadWrite | Update-AzureVm -Name $vmname -ServiceName $servicename
+
+OperationDescription OperationId                          OperationStatus
+-------------------- -----------                          ---------------
+Update-AzureVM       b0ad3d4c-4v68-45vb-xxc1-134fd010d0f8 Succeeded
+Moving a VM to a different subscription after completing migration
+After you complete the migration process, you may want to move the VM to another subscription. However, if you have a secret/certificate on the VM that references a Key Vault resource, the move is currently not supported. The below instructions allow you to work around the issue.
+$vm = Get-AzVM -ResourceGroupName "MyRG" -Name "MyVM"
+Remove-AzVMSecret -VM $vm
+Update-AzVM -ResourceGroupName "MyRG" -VM $vm
+$vm = Get-AzVM -ResourceGroupName "MyRG" -Name "MyVM"
+Remove-AzVMSecret -VM $vm
+Update-AzVM -ResourceGroupName "MyRG" -VM $vm
+az vm update -g "myrg" -n "myvm" --set osProfile.Secrets=[]
+az vm update -g "myrg" -n "myvm" --set osProfile.Secrets=[]
+Next steps
+Overview of platform-supported migration of IaaS resources from classic to Azure Resource Manager
+Technical deep dive on platform-supported migration from classic to Azure Resource Manager
+Planning for migration of IaaS resources from classic to Azure Resource Manager
+Use PowerShell to migrate IaaS resources from classic to Azure Resource Manager
+Use CLI to migrate IaaS resources from classic to Azure Resource Manager
+Community tools for assisting with migration of IaaS resources from classic to Azure Resource Manager
+Review the most frequently asked questions about migrating IaaS resources from classic to Azure Resource Manager
+Feedback
+Was this page helpful?
+Additional resources

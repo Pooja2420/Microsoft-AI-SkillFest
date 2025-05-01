@@ -1,0 +1,768 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Verify Azure Confidential Ledger write transaction receipts
+Article
+2024-08-07
+1 contributor
+In this article
+An Azure Confidential Ledger write transaction receipt represents a cryptographic Merkle proof that the corresponding write transaction has been globally committed by the CCF network. Azure Confidential Ledger users can get a receipt over a committed write transaction at any point in time to verify that the corresponding write operation was successfully recorded into the immutable ledger.
+For more information about Azure Confidential Ledger write transaction receipts, see thededicated article.
+Receipt verification steps
+A write transaction receipt can be verified following a specific set of steps outlined in the following subsections. The same steps are outlined in theCCF Documentation.
+Leaf node computation
+The first step is to compute the SHA-256 hash of the leaf node in the Merkle Tree corresponding to the committed transaction. A leaf node is composed of the ordered concatenation of the following fields that can be found in an Azure Confidential Ledger receipt, underleafComponents:
+leafComponents
+writeSetDigest
+writeSetDigest
+SHA-256 digest ofcommitEvidence
+commitEvidence
+claimsDigestfields
+claimsDigest
+These values need to be concatenated as arrays of bytes: bothwriteSetDigestandclaimsDigestwould need to be converted from strings of hexadecimal digits to arrays of bytes; on the other hand, the hash ofcommitEvidence(as an array of bytes) can be obtained by applying the SHA-256 hash function over the UTF-8 encodedcommitEvidencestring.
+writeSetDigest
+claimsDigest
+commitEvidence
+commitEvidence
+Similarly, the leaf node hash digest can be computed by applying the SHA-256 hash function over the result concatenation of the resulting bytes.
+Root node computation
+The second step is to compute the SHA-256 hash of the root of the Merkle Tree at the time the transaction was committed. The computation is done by iteratively concatenating and hashing the result of the previous iteration (starting from the leaf node hash computed in the previous step) with the ordered nodes' hashes provided in theprooffield of a receipt. Theprooflist is provided as an ordered list and its elements need to be iterated in the given order.
+proof
+proof
+The concatenation needs to be done on the bytes representation with respect to the relative order indicated in the objects provided in theprooffield (eitherleftorright).
+proof
+left
+right
+If the key of the current element inproofisleft, then the result of the previous iteration should be appended to the current element value.
+proof
+left
+If the key of the current element inproofisright, then the result of the previous iteration should be prepended to the current element value.
+proof
+right
+After each concatenation, the SHA-256 function needs to be applied in order to obtain the input for the next iteration. This process follows the standard steps to compute the root node of aMerkle Treedata structure given the required nodes for the computation.
+Verify signature over root node
+The third step is to verify that the cryptographic signature produced over the root node hash is valid using the signing node certificate in the receipt. The verification process follows the standard steps for digital signature verification for messages signed using theElliptic Curve Digital Signature Algorithm (ECDSA). More specifically, the steps are:
+Decode the base64 stringsignatureinto an array of bytes.
+signature
+Extract the ECDSA public key from the signing node certificatecert.
+cert
+Verify that the signature over the root of the Merkle Tree (computed using the instructions in the previous subsection) is authentic using the extracted public key from the previous step. This step effectively corresponds to a standarddigital signatureverification process using ECDSA. There are many libraries in the most popular programming languages that allow verifying an ECDSA signature using a public key certificate over some data (for example, thecryptography libraryfor Python).
+Verify signing node certificate endorsement
+In addition to the previous step, it's also required to verify that the signing node certificate is endorsed (that is, signed) by the current ledger certificate. This step doesn't depend on the other three previous steps and can be carried out independently from the others.
+It's possible that the current service identity that issued the receipt is different from the one that endorsed the signing node (for example, due to a certificate renewal). In this case, it's required to verify the chain of certificates trust from the signing node certificate (that is, thecertfield in the receipt) up to the trusted root Certificate Authority (CA) (that is, the current service identity certificate) through other previous service identities (that is, theserviceEndorsementslist field in the receipt). TheserviceEndorsementslist is provided as an ordered list from the oldest to the latest service identity.
+cert
+serviceEndorsements
+serviceEndorsements
+Certificate endorsement need to be verified for the entire chain and follows the exact same digital signature verification process outlined in the previous subsection. There are popular open-source cryptographic libraries (for example,OpenSSL) that can be typically used to carry out a certificate endorsement step.
+Verify application claims digest
+As an optional step, in case application claims are attached to a receipt, it's possible to compute the claims digest from the exposed claims (following a specific algorithm) and verify that the digest matches theclaimsDigestcontained in the receipt payload. To compute the digest from the exposed claim objects, it's required to iterate through each application claim object in the list and checks itskindfield.
+claimsDigest
+kind
+If the claim object is of kindLedgerEntry, the ledger collection ID (collectionId) and contents (contents) of the claim should be extracted and used to compute their HMAC digests using the secret key (secretKey) specified in the claim object. These two digests are then concatenated and the SHA-256 hash of the concatenation is computed. The protocol (protocol) and the resulting claim data digest are then concatenated and another SHA-256 hash of the concatenation is computed to get the final digest.
+LedgerEntry
+collectionId
+contents
+secretKey
+protocol
+If the claim object is of kindClaimDigest, the claim digest (value) should be extracted, concatenated with the protocol (protocol), and the SHA-256 hash of the concatenation is computed to get the final digest.
+ClaimDigest
+value
+protocol
+After computing each single claim digest, it's necessary to concatenate all the computed digests from each application claim object (in the same order they're presented in the receipt). The concatenation should then be prepended with the number of claims processed. The SHA-256 hash of the previous concatenation produces the final claims digest, which should match theclaimsDigestpresent in the receipt object.
+claimsDigest
+More resources
+For more information about the content of an Azure Confidential Ledger write transaction receipt and explanation of each field, see thededicated article. TheCCF documentationalso contains more information about receipt verification and other related resources at the following links:
+Receipt Verification
+CCF Glossary
+Merkle Tree
+Cryptography
+Certificates
+Application Claims
+User-Defined Claims in Receipts
+Verify write transaction receipts
+Receipt verification utilities
+TheAzure Confidential Ledger client library for Pythonprovides utility functions to verify write transaction receipts and compute the claims digest from a list of application claims. For more information on how to use the Data Plane SDK and the receipt-specific utilities, seethis sectionandthis sample code.
+Setup and prerequisites
+For reference purposes, we provide sample code in Python to fully verify Azure Confidential Ledger write transaction receipts following the steps outlined in the previous section.
+To run the full verification algorithm, the current service network certificate and a write transaction receipt from a running Confidential Ledger resource are required. Refer tothis articlefor details on how to fetch a write transaction receipt and the service certificate from a Confidential Ledger instance.
+Code walkthrough
+The following code can be used to initialize the required objects and run the receipt verification algorithm. A separate utility (verify_receipt) is used to run the full verification algorithm, and accepts the content of thereceiptfield in aGET_RECEIPTresponse as a dictionary and the service certificate as a simple string. The function throws an exception if the receipt isn't valid or if any error was encountered during the processing.
+verify_receipt
+receipt
+GET_RECEIPT
+It's assumed that both the receipt and the service certificate can be loaded from files. Make sure to update both theservice_certificate_file_nameandreceipt_file_nameconstants with the respective files names of the service certificate and receipt you would like to verify.
+service_certificate_file_name
+receipt_file_name
+import json 
+
+# Constants
+service_certificate_file_name = "<your-service-certificate-file>"
+receipt_file_name = "<your-receipt-file>"
+
+# Use the receipt and the service identity to verify the receipt content 
+with open(service_certificate_file_name, "r") as service_certificate_file, open( 
+â¯ â¯ receipt_file_name, "r" 
+) as receipt_file: 
+
+    # Load relevant files content 
+â¯ â¯ receipt = json.loads(receipt_file.read())["receipt"] 
+â¯ â¯ service_certificate_cert = service_certificate_file.read() 
+
+â¯ â¯ try: 
+â¯ â¯ â¯ â¯ verify_receipt(receipt, service_certificate_cert) 
+â¯ â¯ â¯ â¯ print("Receipt verification succeeded") 
+
+â¯ â¯ except Exception as e: 
+â¯ â¯ â¯ â¯ print("Receipt verification failed") 
+
+â¯ â¯ â¯ â¯ # Raise caught exception to look at the error stack
+â¯ â¯ â¯ â¯ raise e
+import json 
+
+# Constants
+service_certificate_file_name = "<your-service-certificate-file>"
+receipt_file_name = "<your-receipt-file>"
+
+# Use the receipt and the service identity to verify the receipt content 
+with open(service_certificate_file_name, "r") as service_certificate_file, open( 
+â¯ â¯ receipt_file_name, "r" 
+) as receipt_file: 
+
+    # Load relevant files content 
+â¯ â¯ receipt = json.loads(receipt_file.read())["receipt"] 
+â¯ â¯ service_certificate_cert = service_certificate_file.read() 
+
+â¯ â¯ try: 
+â¯ â¯ â¯ â¯ verify_receipt(receipt, service_certificate_cert) 
+â¯ â¯ â¯ â¯ print("Receipt verification succeeded") 
+
+â¯ â¯ except Exception as e: 
+â¯ â¯ â¯ â¯ print("Receipt verification failed") 
+
+â¯ â¯ â¯ â¯ # Raise caught exception to look at the error stack
+â¯ â¯ â¯ â¯ raise e
+As the verification process requires some cryptographic and hashing primitives, the following libraries are used to facilitate the computation.
+TheCCF Python library: the module provides a set of tools for receipt verification.
+ThePython cryptography library: a widely used library that includes various cryptographic algorithms and primitives.
+Thehashlib module, part of the Python standard library: a module that provides a common interface for popular hashing algorithms.
+from ccf.receipt import verify, check_endorsements, root 
+from cryptography.x509 import load_pem_x509_certificate, Certificate 
+from hashlib import sha256 
+from typing import Dict, List, Any
+from ccf.receipt import verify, check_endorsements, root 
+from cryptography.x509 import load_pem_x509_certificate, Certificate 
+from hashlib import sha256 
+from typing import Dict, List, Any
+Inside theverify_receiptfunction, we check that the given receipt is valid and contains all the required fields.
+verify_receipt
+# Check that all the fields are present in the receipt 
+assert "cert" in receipt 
+assert "leafComponents" in receipt 
+assert "claimsDigest" in receipt["leafComponents"] 
+assert "commitEvidence" in receipt["leafComponents"] 
+assert "writeSetDigest" in receipt["leafComponents"] 
+assert "proof" in receipt 
+assert "signature" in receipt
+# Check that all the fields are present in the receipt 
+assert "cert" in receipt 
+assert "leafComponents" in receipt 
+assert "claimsDigest" in receipt["leafComponents"] 
+assert "commitEvidence" in receipt["leafComponents"] 
+assert "writeSetDigest" in receipt["leafComponents"] 
+assert "proof" in receipt 
+assert "signature" in receipt
+We initialize the variables that are going to be used in the rest of the program.
+# Set the variables 
+node_cert_pem = receipt["cert"] 
+claims_digest_hex = receipt["leafComponents"]["claimsDigest"] 
+commit_evidence_str = receipt["leafComponents"]["commitEvidence"] 
+write_set_digest_hex = receipt["leafComponents"]["writeSetDigest"] 
+proof_list = receipt["proof"] 
+service_endorsements_certs_pem = receipt.get("serviceEndorsements", [])
+root_node_signature = receipt["signature"]
+# Set the variables 
+node_cert_pem = receipt["cert"] 
+claims_digest_hex = receipt["leafComponents"]["claimsDigest"] 
+commit_evidence_str = receipt["leafComponents"]["commitEvidence"] 
+write_set_digest_hex = receipt["leafComponents"]["writeSetDigest"] 
+proof_list = receipt["proof"] 
+service_endorsements_certs_pem = receipt.get("serviceEndorsements", [])
+root_node_signature = receipt["signature"]
+We can load the PEM certificates for the service identity, the signing node, and the endorsements certificates from previous service identities using the cryptography library.
+# Load service and node PEM certificates 
+service_cert = load_pem_x509_certificate(service_cert_pem.encode()) 
+node_cert = load_pem_x509_certificate(node_cert_pem.encode()) 
+
+# Load service endorsements PEM certificates 
+service_endorsements_certs = [ 
+â¯ â¯ load_pem_x509_certificate(pem.encode()) 
+â¯ â¯ for pem in service_endorsements_certs_pem 
+]
+# Load service and node PEM certificates 
+service_cert = load_pem_x509_certificate(service_cert_pem.encode()) 
+node_cert = load_pem_x509_certificate(node_cert_pem.encode()) 
+
+# Load service endorsements PEM certificates 
+service_endorsements_certs = [ 
+â¯ â¯ load_pem_x509_certificate(pem.encode()) 
+â¯ â¯ for pem in service_endorsements_certs_pem 
+]
+The first step of the verification process is to compute the digest of the leaf node.
+# Compute leaf of the Merkle Tree corresponding to our transaction 
+leaf_node_hex = compute_leaf_node( 
+â¯ â¯ claims_digest_hex, commit_evidence_str, write_set_digest_hex 
+)
+# Compute leaf of the Merkle Tree corresponding to our transaction 
+leaf_node_hex = compute_leaf_node( 
+â¯ â¯ claims_digest_hex, commit_evidence_str, write_set_digest_hex 
+)
+Thecompute_leaf_nodefunction accepts as parameters the leaf components of the receipt (theclaimsDigest, thecommitEvidence, and thewriteSetDigest) and returns the leaf node hash in hexadecimal form.
+compute_leaf_node
+claimsDigest
+commitEvidence
+writeSetDigest
+As detailed previously, we compute the digest ofcommitEvidence(using the SHA-256hashlibfunction). Then, we convert bothwriteSetDigestandclaimsDigestinto arrays of bytes. Finally, we concatenate the three arrays, and we digest the result using the SHA256 function.
+commitEvidence
+hashlib
+writeSetDigest
+claimsDigest
+def compute_leaf_node( 
+â¯ â¯ claims_digest_hex: str, commit_evidence_str: str, write_set_digest_hex: str 
+) -> str: 
+â¯ â¯ """Function to compute the leaf node associated to a transaction 
+â¯ â¯ given its claims digest, commit evidence, and write set digest.""" 
+
+â¯ â¯ # Digest commit evidence string 
+â¯ â¯ commit_evidence_digest = sha256(commit_evidence_str.encode()).digest() 
+
+â¯ â¯ # Convert write set digest to bytes 
+â¯ â¯ write_set_digest = bytes.fromhex(write_set_digest_hex) 
+
+â¯ â¯ # Convert claims digest to bytes 
+â¯ â¯ claims_digest = bytes.fromhex(claims_digest_hex) 
+
+â¯ â¯ # Create leaf node by hashing the concatenation of its three components 
+â¯ â¯ # as bytes objects in the following order: 
+â¯ â¯ # 1. write_set_digest 
+â¯ â¯ # 2. commit_evidence_digest 
+â¯ â¯ # 3. claims_digest 
+â¯ â¯ leaf_node_digest = sha256( 
+â¯ â¯ â¯ â¯ write_set_digest + commit_evidence_digest + claims_digest 
+â¯ â¯ ).digest() 
+
+â¯ â¯ # Convert the result into a string of hexadecimal digits 
+â¯ â¯ return leaf_node_digest.hex()
+def compute_leaf_node( 
+â¯ â¯ claims_digest_hex: str, commit_evidence_str: str, write_set_digest_hex: str 
+) -> str: 
+â¯ â¯ """Function to compute the leaf node associated to a transaction 
+â¯ â¯ given its claims digest, commit evidence, and write set digest.""" 
+
+â¯ â¯ # Digest commit evidence string 
+â¯ â¯ commit_evidence_digest = sha256(commit_evidence_str.encode()).digest() 
+
+â¯ â¯ # Convert write set digest to bytes 
+â¯ â¯ write_set_digest = bytes.fromhex(write_set_digest_hex) 
+
+â¯ â¯ # Convert claims digest to bytes 
+â¯ â¯ claims_digest = bytes.fromhex(claims_digest_hex) 
+
+â¯ â¯ # Create leaf node by hashing the concatenation of its three components 
+â¯ â¯ # as bytes objects in the following order: 
+â¯ â¯ # 1. write_set_digest 
+â¯ â¯ # 2. commit_evidence_digest 
+â¯ â¯ # 3. claims_digest 
+â¯ â¯ leaf_node_digest = sha256( 
+â¯ â¯ â¯ â¯ write_set_digest + commit_evidence_digest + claims_digest 
+â¯ â¯ ).digest() 
+
+â¯ â¯ # Convert the result into a string of hexadecimal digits 
+â¯ â¯ return leaf_node_digest.hex()
+After computing the leaf, we can compute the root of the Merkle tree.
+# Compute root of the Merkle Tree 
+root_node = root(leaf_node_hex, proof_list)
+# Compute root of the Merkle Tree 
+root_node = root(leaf_node_hex, proof_list)
+We use the functionrootprovided as part of the CCF Python library. The function successively concatenates the result of the previous iteration with a new element fromproof, digests the concatenation, and then repeats the step for every element inproofwith the previously computed digest. The concatenation needs to respect the order of the nodes in the Merkle Tree to make sure the root is recomputed correctly.
+root
+proof
+proof
+def root(leaf: str, proof: List[dict]): 
+â¯ â¯ """ 
+â¯ â¯ Recompute root of Merkle tree from a leaf and a proof of the form: 
+â¯ â¯ [{"left": digest}, {"right": digest}, ...] 
+â¯ â¯ """ 
+
+â¯ â¯ current = bytes.fromhex(leaf) 
+
+â¯ â¯ for n in proof: 
+â¯ â¯ â¯ â¯ if "left" in n: 
+â¯ â¯ â¯ â¯ â¯ â¯ current = sha256(bytes.fromhex(n["left"]) + current).digest() 
+â¯ â¯ â¯ â¯ else: 
+â¯ â¯ â¯ â¯ â¯ â¯ current = sha256(current + bytes.fromhex(n["right"])).digest() 
+â¯ â¯ return current.hex()
+def root(leaf: str, proof: List[dict]): 
+â¯ â¯ """ 
+â¯ â¯ Recompute root of Merkle tree from a leaf and a proof of the form: 
+â¯ â¯ [{"left": digest}, {"right": digest}, ...] 
+â¯ â¯ """ 
+
+â¯ â¯ current = bytes.fromhex(leaf) 
+
+â¯ â¯ for n in proof: 
+â¯ â¯ â¯ â¯ if "left" in n: 
+â¯ â¯ â¯ â¯ â¯ â¯ current = sha256(bytes.fromhex(n["left"]) + current).digest() 
+â¯ â¯ â¯ â¯ else: 
+â¯ â¯ â¯ â¯ â¯ â¯ current = sha256(current + bytes.fromhex(n["right"])).digest() 
+â¯ â¯ return current.hex()
+After computing the root node hash, we can verify the signature contained in the receipt over the root to validate that the signature is correct.
+# Verify signature of the signing node over the root of the tree 
+verify(root_node, root_node_signature, node_cert)
+# Verify signature of the signing node over the root of the tree 
+verify(root_node, root_node_signature, node_cert)
+Similarly, the CCF library provides a functionverifyto do this verification. We use the ECDSA public key of the signing node certificate to verify the signature over the root of the tree.
+verify
+def verify(root: str, signature: str, cert: Certificate):
+â¯ â¯ """ 
+â¯ â¯ Verify signature over root of Merkle Tree 
+â¯ â¯ """ 
+
+â¯ â¯ sig = base64.b64decode(signature) 
+â¯ â¯ pk = cert.public_key() 
+â¯ â¯ assert isinstance(pk, ec.EllipticCurvePublicKey) 
+â¯ â¯ pk.verify( 
+â¯ â¯ â¯ â¯ sig, 
+â¯ â¯ â¯ â¯ bytes.fromhex(root), 
+â¯ â¯ â¯ â¯ ec.ECDSA(utils.Prehashed(hashes.SHA256())), 
+â¯ â¯ )
+def verify(root: str, signature: str, cert: Certificate):
+â¯ â¯ """ 
+â¯ â¯ Verify signature over root of Merkle Tree 
+â¯ â¯ """ 
+
+â¯ â¯ sig = base64.b64decode(signature) 
+â¯ â¯ pk = cert.public_key() 
+â¯ â¯ assert isinstance(pk, ec.EllipticCurvePublicKey) 
+â¯ â¯ pk.verify( 
+â¯ â¯ â¯ â¯ sig, 
+â¯ â¯ â¯ â¯ bytes.fromhex(root), 
+â¯ â¯ â¯ â¯ ec.ECDSA(utils.Prehashed(hashes.SHA256())), 
+â¯ â¯ )
+The last step of receipt verification is validating the certificate that was used to sign the root of the Merkle tree.
+# Verify node certificate is endorsed by the service certificates through endorsements 
+check_endorsements(node_cert, service_cert, service_endorsements_certs)
+# Verify node certificate is endorsed by the service certificates through endorsements 
+check_endorsements(node_cert, service_cert, service_endorsements_certs)
+Likewise, we can use the CCF utilitycheck_endorsementsto validate that the service identity endorses the signing node. The certificate chain could be composed of previous service certificates, so we should validate that the endorsement is applied transitively ifserviceEndorsementsisn't an empty list.
+check_endorsements
+serviceEndorsements
+def check_endorsement(endorsee: Certificate, endorser: Certificate): 
+â¯ â¯ """ 
+â¯ â¯ Check endorser has endorsed endorsee 
+â¯ â¯ """ 
+
+â¯ â¯ digest_algo = endorsee.signature_hash_algorithm 
+â¯ â¯ assert digest_algo 
+â¯ â¯ digester = hashes.Hash(digest_algo) 
+â¯ â¯ digester.update(endorsee.tbs_certificate_bytes) 
+â¯ â¯ digest = digester.finalize() 
+â¯ â¯ endorser_pk = endorser.public_key() 
+â¯ â¯ assert isinstance(endorser_pk, ec.EllipticCurvePublicKey) 
+â¯ â¯ endorser_pk.verify( 
+â¯ â¯ â¯ â¯ endorsee.signature, digest, ec.ECDSA(utils.Prehashed(digest_algo)) 
+â¯ â¯ ) 
+
+def check_endorsements( 
+â¯ â¯ node_cert: Certificate, service_cert: Certificate, endorsements: List[Certificate] 
+): 
+â¯ â¯ """ 
+â¯ â¯ Check a node certificate is endorsed by a service certificate, transitively through a list of endorsements. 
+â¯ â¯ """ 
+
+â¯ â¯ cert_i = node_cert 
+â¯ â¯ for endorsement in endorsements: 
+â¯ â¯ â¯ â¯ check_endorsement(cert_i, endorsement) 
+â¯ â¯ â¯ â¯ cert_i = endorsement 
+â¯ â¯ check_endorsement(cert_i, service_cert)
+def check_endorsement(endorsee: Certificate, endorser: Certificate): 
+â¯ â¯ """ 
+â¯ â¯ Check endorser has endorsed endorsee 
+â¯ â¯ """ 
+
+â¯ â¯ digest_algo = endorsee.signature_hash_algorithm 
+â¯ â¯ assert digest_algo 
+â¯ â¯ digester = hashes.Hash(digest_algo) 
+â¯ â¯ digester.update(endorsee.tbs_certificate_bytes) 
+â¯ â¯ digest = digester.finalize() 
+â¯ â¯ endorser_pk = endorser.public_key() 
+â¯ â¯ assert isinstance(endorser_pk, ec.EllipticCurvePublicKey) 
+â¯ â¯ endorser_pk.verify( 
+â¯ â¯ â¯ â¯ endorsee.signature, digest, ec.ECDSA(utils.Prehashed(digest_algo)) 
+â¯ â¯ ) 
+
+def check_endorsements( 
+â¯ â¯ node_cert: Certificate, service_cert: Certificate, endorsements: List[Certificate] 
+): 
+â¯ â¯ """ 
+â¯ â¯ Check a node certificate is endorsed by a service certificate, transitively through a list of endorsements. 
+â¯ â¯ """ 
+
+â¯ â¯ cert_i = node_cert 
+â¯ â¯ for endorsement in endorsements: 
+â¯ â¯ â¯ â¯ check_endorsement(cert_i, endorsement) 
+â¯ â¯ â¯ â¯ cert_i = endorsement 
+â¯ â¯ check_endorsement(cert_i, service_cert)
+As an alternative, we could also validate the certificate by using the OpenSSL library using a similar method.
+from OpenSSL.crypto import ( 
+â¯ â¯ X509, 
+â¯ â¯ X509Store, 
+â¯ â¯ X509StoreContext, 
+)
+
+def verify_openssl_certificate( 
+â¯ â¯ node_cert: Certificate, 
+â¯ â¯ service_cert: Certificate, 
+â¯ â¯ service_endorsements_certs: List[Certificate], 
+) -> None: 
+â¯ â¯ """Verify that the given node certificate is a valid OpenSSL certificate through 
+â¯ â¯ the service certificate and a list of endorsements certificates.""" 
+
+â¯ â¯ store = X509Store() 
+
+â¯ â¯ # pyopenssl does not support X509_V_FLAG_NO_CHECK_TIME. For recovery of expired 
+â¯ â¯ # services and historical receipts, we want to ignore the validity time. 0x200000 
+â¯ â¯ # is the bitmask for this option in more recent versions of OpenSSL. 
+â¯ â¯ X509_V_FLAG_NO_CHECK_TIME = 0x200000 
+â¯ â¯ store.set_flags(X509_V_FLAG_NO_CHECK_TIME) 
+
+â¯ â¯ # Add service certificate to the X.509 store 
+â¯ â¯ store.add_cert(X509.from_cryptography(service_cert)) 
+
+â¯ â¯ # Prepare X.509 endorsement certificates 
+â¯ â¯ certs_chain = [X509.from_cryptography(cert) for cert in service_endorsements_certs] 
+
+â¯ â¯ # Prepare X.509 node certificate 
+â¯ â¯ node_cert_pem = X509.from_cryptography(node_cert) 
+
+â¯ â¯ # Create X.509 store context and verify its certificate 
+â¯ â¯ ctx = X509StoreContext(store, node_cert_pem, certs_chain) 
+â¯ â¯ ctx.verify_certificate()
+from OpenSSL.crypto import ( 
+â¯ â¯ X509, 
+â¯ â¯ X509Store, 
+â¯ â¯ X509StoreContext, 
+)
+
+def verify_openssl_certificate( 
+â¯ â¯ node_cert: Certificate, 
+â¯ â¯ service_cert: Certificate, 
+â¯ â¯ service_endorsements_certs: List[Certificate], 
+) -> None: 
+â¯ â¯ """Verify that the given node certificate is a valid OpenSSL certificate through 
+â¯ â¯ the service certificate and a list of endorsements certificates.""" 
+
+â¯ â¯ store = X509Store() 
+
+â¯ â¯ # pyopenssl does not support X509_V_FLAG_NO_CHECK_TIME. For recovery of expired 
+â¯ â¯ # services and historical receipts, we want to ignore the validity time. 0x200000 
+â¯ â¯ # is the bitmask for this option in more recent versions of OpenSSL. 
+â¯ â¯ X509_V_FLAG_NO_CHECK_TIME = 0x200000 
+â¯ â¯ store.set_flags(X509_V_FLAG_NO_CHECK_TIME) 
+
+â¯ â¯ # Add service certificate to the X.509 store 
+â¯ â¯ store.add_cert(X509.from_cryptography(service_cert)) 
+
+â¯ â¯ # Prepare X.509 endorsement certificates 
+â¯ â¯ certs_chain = [X509.from_cryptography(cert) for cert in service_endorsements_certs] 
+
+â¯ â¯ # Prepare X.509 node certificate 
+â¯ â¯ node_cert_pem = X509.from_cryptography(node_cert) 
+
+â¯ â¯ # Create X.509 store context and verify its certificate 
+â¯ â¯ ctx = X509StoreContext(store, node_cert_pem, certs_chain) 
+â¯ â¯ ctx.verify_certificate()
+Sample code
+The full sample code used in the code walkthrough is provided.
+import json 
+
+# Use the receipt and the service identity to verify the receipt content 
+with open("network_certificate.pem", "r") as service_certificate_file, open( 
+â¯ â¯ "receipt.json", "r" 
+) as receipt_file: 
+
+â¯ â¯ # Load relevant files content 
+â¯ â¯ receipt = json.loads(receipt_file.read())["receipt"]
+â¯ â¯ service_certificate_cert = service_certificate_file.read()
+
+â¯ â¯ try: 
+â¯ â¯ â¯ â¯ verify_receipt(receipt, service_certificate_cert) 
+â¯ â¯ â¯ â¯ print("Receipt verification succeeded") 
+
+â¯ â¯ except Exception as e: 
+â¯ â¯ â¯ â¯ print("Receipt verification failed") 
+
+â¯ â¯ â¯ â¯ # Raise caught exception to look at the error stack 
+â¯ â¯ â¯ â¯ raise e
+import json 
+
+# Use the receipt and the service identity to verify the receipt content 
+with open("network_certificate.pem", "r") as service_certificate_file, open( 
+â¯ â¯ "receipt.json", "r" 
+) as receipt_file: 
+
+â¯ â¯ # Load relevant files content 
+â¯ â¯ receipt = json.loads(receipt_file.read())["receipt"]
+â¯ â¯ service_certificate_cert = service_certificate_file.read()
+
+â¯ â¯ try: 
+â¯ â¯ â¯ â¯ verify_receipt(receipt, service_certificate_cert) 
+â¯ â¯ â¯ â¯ print("Receipt verification succeeded") 
+
+â¯ â¯ except Exception as e: 
+â¯ â¯ â¯ â¯ print("Receipt verification failed") 
+
+â¯ â¯ â¯ â¯ # Raise caught exception to look at the error stack 
+â¯ â¯ â¯ â¯ raise e
+from cryptography.x509 import load_pem_x509_certificate, Certificate 
+from hashlib import sha256 
+from typing import Dict, List, Any 
+
+from OpenSSL.crypto import ( 
+â¯ â¯ X509, 
+â¯ â¯ X509Store, 
+â¯ â¯ X509StoreContext, 
+) 
+
+from ccf.receipt import root, verify, check_endorsements 
+
+def verify_receipt(receipt: Dict[str, Any], service_cert_pem: str) -> None: 
+â¯ â¯ """Function to verify that a given write transaction receipt is valid based 
+â¯ â¯ on its content and the service certificate. 
+â¯ â¯ Throws an exception if the verification fails.""" 
+
+â¯ â¯ # Check that all the fields are present in the receipt 
+â¯ â¯ assert "cert" in receipt 
+â¯ â¯ assert "leafComponents" in receipt 
+â¯ â¯ assert "claimsDigest" in receipt["leafComponents"] 
+â¯ â¯ assert "commitEvidence" in receipt["leafComponents"] 
+â¯ â¯ assert "writeSetDigest" in receipt["leafComponents"] 
+â¯ â¯ assert "proof" in receipt 
+â¯ â¯ assert "signature" in receipt 
+
+â¯ â¯ # Set the variables 
+â¯ â¯ node_cert_pem = receipt["cert"] 
+â¯ â¯ claims_digest_hex = receipt["leafComponents"]["claimsDigest"] 
+â¯ â¯ commit_evidence_str = receipt["leafComponents"]["commitEvidence"] 
+
+â¯ â¯ write_set_digest_hex = receipt["leafComponents"]["writeSetDigest"] 
+â¯ â¯ proof_list = receipt["proof"] 
+    service_endorsements_certs_pem = receipt.get("serviceEndorsements", [])
+â¯ â¯ root_node_signature = receipt["signature"] 
+
+â¯ â¯ # Load service and node PEM certificates
+â¯ â¯ service_cert = load_pem_x509_certificate(service_cert_pem.encode()) 
+â¯ â¯ node_cert = load_pem_x509_certificate(node_cert_pem.encode()) 
+
+â¯ â¯ # Load service endorsements PEM certificates
+â¯ â¯ service_endorsements_certs = [ 
+â¯ â¯ â¯ â¯ load_pem_x509_certificate(pem.encode()) 
+â¯ â¯ â¯ â¯ for pem in service_endorsements_certs_pem 
+â¯ â¯ ] 
+
+â¯ â¯ # Compute leaf of the Merkle Tree 
+â¯ â¯ leaf_node_hex = compute_leaf_node( 
+â¯ â¯ â¯ â¯ claims_digest_hex, commit_evidence_str, write_set_digest_hex 
+â¯ â¯ ) 
+
+â¯ â¯ # Compute root of the Merkle Tree
+â¯ â¯ root_node = root(leaf_node_hex, proof_list) 
+
+â¯ â¯ # Verify signature of the signing node over the root of the tree
+â¯ â¯ verify(root_node, root_node_signature, node_cert) 
+
+â¯ â¯ # Verify node certificate is endorsed by the service certificates through endorsements
+â¯ â¯ check_endorsements(node_cert, service_cert, service_endorsements_certs) 
+
+â¯ â¯ # Alternative: Verify node certificate is endorsed by the service certificates through endorsements 
+â¯ â¯ verify_openssl_certificate(node_cert, service_cert, service_endorsements_certs) 
+
+def compute_leaf_node( 
+â¯ â¯ claims_digest_hex: str, commit_evidence_str: str, write_set_digest_hex: str 
+) -> str: 
+â¯ â¯ """Function to compute the leaf node associated to a transaction 
+â¯ â¯ given its claims digest, commit evidence, and write set digest.""" 
+
+â¯ â¯ # Digest commit evidence string
+â¯ â¯ commit_evidence_digest = sha256(commit_evidence_str.encode()).digest() 
+
+â¯ â¯ # Convert write set digest to bytes
+â¯ â¯ write_set_digest = bytes.fromhex(write_set_digest_hex) 
+
+â¯ â¯ # Convert claims digest to bytes
+â¯ â¯ claims_digest = bytes.fromhex(claims_digest_hex) 
+
+â¯ â¯ # Create leaf node by hashing the concatenation of its three components 
+â¯ â¯ # as bytes objects in the following order: 
+â¯ â¯ # 1. write_set_digest 
+â¯ â¯ # 2. commit_evidence_digest 
+â¯ â¯ # 3. claims_digest 
+â¯ â¯ leaf_node_digest = sha256( 
+â¯ â¯ â¯ â¯ write_set_digest + commit_evidence_digest + claims_digest 
+â¯ â¯ ).digest() 
+
+â¯ â¯ # Convert the result into a string of hexadecimal digits 
+â¯ â¯ return leaf_node_digest.hex() 
+
+def verify_openssl_certificate( 
+â¯ â¯ node_cert: Certificate, 
+â¯ â¯ service_cert: Certificate, 
+â¯ â¯ service_endorsements_certs: List[Certificate], 
+) -> None: 
+â¯ â¯ """Verify that the given node certificate is a valid OpenSSL certificate through 
+â¯ â¯ the service certificate and a list of endorsements certificates.""" 
+
+â¯ â¯ store = X509Store() 
+
+â¯ â¯ # pyopenssl does not support X509_V_FLAG_NO_CHECK_TIME. For recovery of expired 
+â¯ â¯ # services and historical receipts, we want to ignore the validity time. 0x200000 
+â¯ â¯ # is the bitmask for this option in more recent versions of OpenSSL. 
+â¯ â¯ X509_V_FLAG_NO_CHECK_TIME = 0x200000 
+â¯ â¯ store.set_flags(X509_V_FLAG_NO_CHECK_TIME) 
+
+â¯ â¯ # Add service certificate to the X.509 store
+â¯ â¯ store.add_cert(X509.from_cryptography(service_cert)) 
+
+â¯ â¯ # Prepare X.509 endorsement certificates
+â¯ â¯ certs_chain = [X509.from_cryptography(cert) for cert in service_endorsements_certs] 
+
+â¯ â¯ # Prepare X.509 node certificate
+â¯ â¯ node_cert_pem = X509.from_cryptography(node_cert) 
+
+â¯ â¯ # Create X.509 store context and verify its certificate
+â¯ â¯ ctx = X509StoreContext(store, node_cert_pem, certs_chain) 
+â¯ â¯ ctx.verify_certificate()
+from cryptography.x509 import load_pem_x509_certificate, Certificate 
+from hashlib import sha256 
+from typing import Dict, List, Any 
+
+from OpenSSL.crypto import ( 
+â¯ â¯ X509, 
+â¯ â¯ X509Store, 
+â¯ â¯ X509StoreContext, 
+) 
+
+from ccf.receipt import root, verify, check_endorsements 
+
+def verify_receipt(receipt: Dict[str, Any], service_cert_pem: str) -> None: 
+â¯ â¯ """Function to verify that a given write transaction receipt is valid based 
+â¯ â¯ on its content and the service certificate. 
+â¯ â¯ Throws an exception if the verification fails.""" 
+
+â¯ â¯ # Check that all the fields are present in the receipt 
+â¯ â¯ assert "cert" in receipt 
+â¯ â¯ assert "leafComponents" in receipt 
+â¯ â¯ assert "claimsDigest" in receipt["leafComponents"] 
+â¯ â¯ assert "commitEvidence" in receipt["leafComponents"] 
+â¯ â¯ assert "writeSetDigest" in receipt["leafComponents"] 
+â¯ â¯ assert "proof" in receipt 
+â¯ â¯ assert "signature" in receipt 
+
+â¯ â¯ # Set the variables 
+â¯ â¯ node_cert_pem = receipt["cert"] 
+â¯ â¯ claims_digest_hex = receipt["leafComponents"]["claimsDigest"] 
+â¯ â¯ commit_evidence_str = receipt["leafComponents"]["commitEvidence"] 
+
+â¯ â¯ write_set_digest_hex = receipt["leafComponents"]["writeSetDigest"] 
+â¯ â¯ proof_list = receipt["proof"] 
+    service_endorsements_certs_pem = receipt.get("serviceEndorsements", [])
+â¯ â¯ root_node_signature = receipt["signature"] 
+
+â¯ â¯ # Load service and node PEM certificates
+â¯ â¯ service_cert = load_pem_x509_certificate(service_cert_pem.encode()) 
+â¯ â¯ node_cert = load_pem_x509_certificate(node_cert_pem.encode()) 
+
+â¯ â¯ # Load service endorsements PEM certificates
+â¯ â¯ service_endorsements_certs = [ 
+â¯ â¯ â¯ â¯ load_pem_x509_certificate(pem.encode()) 
+â¯ â¯ â¯ â¯ for pem in service_endorsements_certs_pem 
+â¯ â¯ ] 
+
+â¯ â¯ # Compute leaf of the Merkle Tree 
+â¯ â¯ leaf_node_hex = compute_leaf_node( 
+â¯ â¯ â¯ â¯ claims_digest_hex, commit_evidence_str, write_set_digest_hex 
+â¯ â¯ ) 
+
+â¯ â¯ # Compute root of the Merkle Tree
+â¯ â¯ root_node = root(leaf_node_hex, proof_list) 
+
+â¯ â¯ # Verify signature of the signing node over the root of the tree
+â¯ â¯ verify(root_node, root_node_signature, node_cert) 
+
+â¯ â¯ # Verify node certificate is endorsed by the service certificates through endorsements
+â¯ â¯ check_endorsements(node_cert, service_cert, service_endorsements_certs) 
+
+â¯ â¯ # Alternative: Verify node certificate is endorsed by the service certificates through endorsements 
+â¯ â¯ verify_openssl_certificate(node_cert, service_cert, service_endorsements_certs) 
+
+def compute_leaf_node( 
+â¯ â¯ claims_digest_hex: str, commit_evidence_str: str, write_set_digest_hex: str 
+) -> str: 
+â¯ â¯ """Function to compute the leaf node associated to a transaction 
+â¯ â¯ given its claims digest, commit evidence, and write set digest.""" 
+
+â¯ â¯ # Digest commit evidence string
+â¯ â¯ commit_evidence_digest = sha256(commit_evidence_str.encode()).digest() 
+
+â¯ â¯ # Convert write set digest to bytes
+â¯ â¯ write_set_digest = bytes.fromhex(write_set_digest_hex) 
+
+â¯ â¯ # Convert claims digest to bytes
+â¯ â¯ claims_digest = bytes.fromhex(claims_digest_hex) 
+
+â¯ â¯ # Create leaf node by hashing the concatenation of its three components 
+â¯ â¯ # as bytes objects in the following order: 
+â¯ â¯ # 1. write_set_digest 
+â¯ â¯ # 2. commit_evidence_digest 
+â¯ â¯ # 3. claims_digest 
+â¯ â¯ leaf_node_digest = sha256( 
+â¯ â¯ â¯ â¯ write_set_digest + commit_evidence_digest + claims_digest 
+â¯ â¯ ).digest() 
+
+â¯ â¯ # Convert the result into a string of hexadecimal digits 
+â¯ â¯ return leaf_node_digest.hex() 
+
+def verify_openssl_certificate( 
+â¯ â¯ node_cert: Certificate, 
+â¯ â¯ service_cert: Certificate, 
+â¯ â¯ service_endorsements_certs: List[Certificate], 
+) -> None: 
+â¯ â¯ """Verify that the given node certificate is a valid OpenSSL certificate through 
+â¯ â¯ the service certificate and a list of endorsements certificates.""" 
+
+â¯ â¯ store = X509Store() 
+
+â¯ â¯ # pyopenssl does not support X509_V_FLAG_NO_CHECK_TIME. For recovery of expired 
+â¯ â¯ # services and historical receipts, we want to ignore the validity time. 0x200000 
+â¯ â¯ # is the bitmask for this option in more recent versions of OpenSSL. 
+â¯ â¯ X509_V_FLAG_NO_CHECK_TIME = 0x200000 
+â¯ â¯ store.set_flags(X509_V_FLAG_NO_CHECK_TIME) 
+
+â¯ â¯ # Add service certificate to the X.509 store
+â¯ â¯ store.add_cert(X509.from_cryptography(service_cert)) 
+
+â¯ â¯ # Prepare X.509 endorsement certificates
+â¯ â¯ certs_chain = [X509.from_cryptography(cert) for cert in service_endorsements_certs] 
+
+â¯ â¯ # Prepare X.509 node certificate
+â¯ â¯ node_cert_pem = X509.from_cryptography(node_cert) 
+
+â¯ â¯ # Create X.509 store context and verify its certificate
+â¯ â¯ ctx = X509StoreContext(store, node_cert_pem, certs_chain) 
+â¯ â¯ ctx.verify_certificate()
+Next steps
+Azure Confidential Ledger write transaction receipts
+Overview of Microsoft Azure confidential ledger
+Azure confidential ledger architecture
+Feedback
+Was this page helpful?
+Additional resources

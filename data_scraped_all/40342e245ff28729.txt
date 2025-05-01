@@ -1,0 +1,277 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Create and manage Azure virtual networks for Linux virtual machines with the Azure CLI
+Article
+2024-08-22
+18 contributors
+In this article
+Applies to:âï¸ Linux VMs âï¸ Flexible scale sets
+Azure virtual machines use Azure networking for internal and external network communication. This tutorial walks through deploying two virtual machines and configuring Azure networking for these VMs. The examples in this tutorial assume that the VMs are hosting a web application with a database back-end, however an application is not deployed in the tutorial. In this tutorial, you learn how to:
+Create a virtual network and subnet
+Create a public IP address
+Create a front-end VM
+Secure network traffic
+Create a back-end VM
+This tutorial uses the CLI within theAzure Cloud Shell, which is constantly updated to the latest version. To open the Cloud Shell, selectTry itfrom the top of any code block.
+If you choose to install and use the CLI locally, this tutorial requires that you are running the Azure CLI version 2.0.30 or later. Runaz --versionto find the version. If you need to install or upgrade, seeInstall Azure CLI.
+az --version
+VM networking overview
+Azure virtual networks enable secure network connections between virtual machines, the internet, and other Azure services such as Azure SQL Database. Virtual networks are broken down into logical segments called subnets. Subnets are used to control network flow, and as a security boundary. When deploying a VM, it generally includes a virtual network interface, which is attached to a subnet.
+As you complete the tutorial, the following virtual network resources are created:
+
+myVNet- The virtual network that the VMs use to communicate with each other and the internet.
+myFrontendSubnet- The subnet inmyVNetused by the front-end resources.
+myPublicIPAddress- The public IP address used to accessmyFrontendVMfrom the internet.
+myFrontentNic- The network interface used bymyFrontendVMto communicate withmyBackendVM.
+myFrontendVM- The VM used to communicate between the internet andmyBackendVM.
+myBackendNSG- The network security group that controls communication between themyFrontendVMandmyBackendVM.
+myBackendSubnet- The subnet associated withmyBackendNSGand used by the back-end resources.
+myBackendNic- The network interface used bymyBackendVMto communicate withmyFrontendVM.
+myBackendVM- The VM that uses port 22 and 3306 to communicate withmyFrontendVM.
+Create a virtual network and subnet
+For this tutorial, a single virtual network is created with two subnets. A front-end subnet for hosting a web application, and a back-end subnet for hosting a database server.
+Before you can create a virtual network, create a resource group withaz group create. The following example creates a resource group namedmyRGNetworkin the eastus location.
+az group create --name myRGNetwork --location eastus
+az group create --name myRGNetwork --location eastus
+Create virtual network
+Use theaz network vnet createcommand to create a virtual network. In this example, the network is namedmvVNetand is given an address prefix of10.0.0.0/16. A subnet is also created with a name ofmyFrontendSubnetand a prefix of10.0.1.0/24. Later in this tutorial a front-end VM is connected to this subnet.
+az network vnet create \
+  --resource-group myRGNetwork \
+  --name myVNet \
+  --address-prefix 10.0.0.0/16 \
+  --subnet-name myFrontendSubnet \
+  --subnet-prefix 10.0.1.0/24
+az network vnet create \
+  --resource-group myRGNetwork \
+  --name myVNet \
+  --address-prefix 10.0.0.0/16 \
+  --subnet-name myFrontendSubnet \
+  --subnet-prefix 10.0.1.0/24
+Create subnet
+A new subnet is added to the virtual network using theaz network vnet subnet createcommand. In this example, the subnet is namedmyBackendSubnetand is given an address prefix of10.0.2.0/24. This subnet is used with all back-end services.
+az network vnet subnet create \
+  --resource-group myRGNetwork \
+  --vnet-name myVNet \
+  --name myBackendSubnet \
+  --address-prefix 10.0.2.0/24
+az network vnet subnet create \
+  --resource-group myRGNetwork \
+  --vnet-name myVNet \
+  --name myBackendSubnet \
+  --address-prefix 10.0.2.0/24
+At this point, a network has been created and segmented into two subnets, one for front-end services, and another for back-end services. In the next section, virtual machines are created and connected to these subnets.
+Create a public IP address
+A public IP address allows Azure resources to be accessible on the internet. The allocation method of the public IP address can be configured as dynamic or static. By default, a public IP address is dynamically allocated. Dynamic IP addresses are released when a VM is deallocated. This behavior causes the IP address to change during any operation that includes a VM deallocation.
+The allocation method can be set to static, which ensures that the IP address remains assigned to a VM, even during a deallocated state. When using a statically allocated IP address, the IP address itself cannot be specified. Instead, it is allocated from a pool of available addresses.
+az network public-ip create --resource-group myRGNetwork --name myPublicIPAddress
+az network public-ip create --resource-group myRGNetwork --name myPublicIPAddress
+When creating a VM with theaz vm createcommand, the default public IP address allocation method is dynamic. When creating a virtual machine using theaz vm createcommand, include the--public-ip-address-allocation staticargument to assign a static public IP address. This operation is not demonstrated in this tutorial, however in the next section a dynamically allocated IP address is changed to a statically allocated address.
+--public-ip-address-allocation static
+Change allocation method
+The IP address allocation method can be changed using theaz network public-ip updatecommand. In this example, the IP address allocation method of the front-end VM is changed to static.
+First, deallocate the VM.
+az vm deallocate --resource-group myRGNetwork --name myFrontendVM
+az vm deallocate --resource-group myRGNetwork --name myFrontendVM
+Use theaz network public-ip updatecommand to update the allocation method. In this case, the--allocation-methodis being set tostatic.
+--allocation-method
+az network public-ip update --resource-group myRGNetwork --name myPublicIPAddress --allocation-method static
+az network public-ip update --resource-group myRGNetwork --name myPublicIPAddress --allocation-method static
+Start the VM.
+az vm start --resource-group myRGNetwork --name myFrontendVM --no-wait
+az vm start --resource-group myRGNetwork --name myFrontendVM --no-wait
+No public IP address
+Often, a VM does not need to be accessible over the internet. To create a VM without a public IP address, use the--public-ip-address ""argument with an empty set of double quotes. This configuration is demonstrated later in this tutorial.
+--public-ip-address ""
+Create a front-end VM
+Use theaz vm createcommand to create the VM namedmyFrontendVMusingmyPublicIPAddress.
+az vm create \
+  --resource-group myRGNetwork \
+  --name myFrontendVM \
+  --vnet-name myVNet \
+  --subnet myFrontendSubnet \
+  --nsg myFrontendNSG \
+  --public-ip-address myPublicIPAddress \
+  --image Ubuntu2204 \
+  --generate-ssh-keys
+az vm create \
+  --resource-group myRGNetwork \
+  --name myFrontendVM \
+  --vnet-name myVNet \
+  --subnet myFrontendSubnet \
+  --nsg myFrontendNSG \
+  --public-ip-address myPublicIPAddress \
+  --image Ubuntu2204 \
+  --generate-ssh-keys
+Secure network traffic
+A network security group (NSG) contains a list of security rules that allow or deny network traffic to resources connected to Azure Virtual Networks (VNet). NSGs can be associated to subnets or individual network interfaces. When an NSG is associated with a network interface, it applies only the associated VM. When an NSG is associated to a subnet, the rules apply to all resources connected to the subnet.
+Network security group rules
+NSG rules define networking ports over which traffic is allowed or denied. The rules can include source and destination IP address ranges so that traffic is controlled between specific systems or subnets. NSG rules also include a priority (between 1âand 4096). Rules are evaluated in the order of priority. A rule with a priority of 100 is evaluated before a rule with priority 200.
+All NSGs contain a set of default rules. The default rules cannot be deleted, but because they are assigned the lowest priority, they can be overridden by the rules that you create.
+The default rules for NSGs are:
+Virtual network- Traffic originating and ending in a virtual network is allowed both in inbound and outbound directions.
+Internet- Outbound traffic is allowed, but inbound traffic is blocked.
+Load balancer- Allow Azureâs load balancer to probe the health of your VMs and role instances. If you are not using a load balanced set, you can override this rule.
+Create network security groups
+A network security group can be created at the same time as a VM using theaz vm createcommand. When doing so, the NSG is associated with the VMs network interface and an NSG rule is auto created to allow traffic on port22from any source. Earlier in this tutorial, the front-end NSG was auto-created with the front-end VM. An NSG rule was also auto created for port 22.
+In some cases, it may be helpful to pre-create an NSG, such as when default SSH rules should not be created, or when the NSG should be attached to a subnet.
+Use theaz network nsg createcommand to create a network security group.
+az network nsg create --resource-group myRGNetwork --name myBackendNSG
+az network nsg create --resource-group myRGNetwork --name myBackendNSG
+Instead of associating the NSG to a network interface, it is associated with a subnet. In this configuration, any VM that is attached to the subnet inherits the NSG rules.
+Update the existing subnet namedmyBackendSubnetwith the new NSG.
+az network vnet subnet update \
+  --resource-group myRGNetwork \
+  --vnet-name myVNet \
+  --name myBackendSubnet \
+  --network-security-group myBackendNSG
+az network vnet subnet update \
+  --resource-group myRGNetwork \
+  --vnet-name myVNet \
+  --name myBackendSubnet \
+  --network-security-group myBackendNSG
+Secure incoming traffic
+When the front-end VM was created, an NSG rule was created to allow incoming traffic on port 22. This rule allows SSH connections to the VM. For this example, traffic should also be allowed on port80. This configuration allows a web application to be accessed on the VM.
+Use theaz network nsg rule createcommand to create a rule for port80.
+az network nsg rule create \
+  --resource-group myRGNetwork \
+  --nsg-name myFrontendNSG \
+  --name http \
+  --access allow \
+  --protocol Tcp \
+  --direction Inbound \
+  --priority 200 \
+  --source-address-prefix "*" \
+  --source-port-range "*" \
+  --destination-address-prefix "*" \
+  --destination-port-range 80
+az network nsg rule create \
+  --resource-group myRGNetwork \
+  --nsg-name myFrontendNSG \
+  --name http \
+  --access allow \
+  --protocol Tcp \
+  --direction Inbound \
+  --priority 200 \
+  --source-address-prefix "*" \
+  --source-port-range "*" \
+  --destination-address-prefix "*" \
+  --destination-port-range 80
+The front-end VM is only accessible on port22and port80. All other incoming traffic is blocked at the network security group. It may be helpful to visualize the NSG rule configurations. Return the NSG rule configuration with theaz network rule listcommand.
+az network nsg rule list --resource-group myRGNetwork --nsg-name myFrontendNSG --output table
+az network nsg rule list --resource-group myRGNetwork --nsg-name myFrontendNSG --output table
+Secure VM to VM traffic
+Network security group rules can also apply between VMs. For this example, the front-end VM needs to communicate with the back-end VM on port22and3306. This configuration allows SSH connections from the front-end VM, and also allow an application on the front-end VM to communicate with a back-end MySQL database. All other traffic should be blocked between the front-end and back-end virtual machines.
+Use theaz network nsg rule createcommand to create a rule for port 22. Notice that the--source-address-prefixargument specifies a value of10.0.1.0/24. This configuration ensures that only traffic from the front-end subnet is allowed through the NSG.
+--source-address-prefix
+az network nsg rule create \
+  --resource-group myRGNetwork \
+  --nsg-name myBackendNSG \
+  --name SSH \
+  --access Allow \
+  --protocol Tcp \
+  --direction Inbound \
+  --priority 100 \
+  --source-address-prefix 10.0.1.0/24 \
+  --source-port-range "*" \
+  --destination-address-prefix "*" \
+  --destination-port-range "22"
+az network nsg rule create \
+  --resource-group myRGNetwork \
+  --nsg-name myBackendNSG \
+  --name SSH \
+  --access Allow \
+  --protocol Tcp \
+  --direction Inbound \
+  --priority 100 \
+  --source-address-prefix 10.0.1.0/24 \
+  --source-port-range "*" \
+  --destination-address-prefix "*" \
+  --destination-port-range "22"
+Now add a rule for MySQL traffic on port 3306.
+az network nsg rule create \
+  --resource-group myRGNetwork \
+  --nsg-name myBackendNSG \
+  --name MySQL \
+  --access Allow \
+  --protocol Tcp \
+  --direction Inbound \
+  --priority 200 \
+  --source-address-prefix 10.0.1.0/24 \
+  --source-port-range "*" \
+  --destination-address-prefix "*" \
+  --destination-port-range "3306"
+az network nsg rule create \
+  --resource-group myRGNetwork \
+  --nsg-name myBackendNSG \
+  --name MySQL \
+  --access Allow \
+  --protocol Tcp \
+  --direction Inbound \
+  --priority 200 \
+  --source-address-prefix 10.0.1.0/24 \
+  --source-port-range "*" \
+  --destination-address-prefix "*" \
+  --destination-port-range "3306"
+Finally, because NSGs have a default rule allowing all traffic between VMs in the same VNet, a rule can be created for the back-end NSGs to block all traffic. Notice here that the--priorityis given a value of300, which is lower that both the NSG and MySQL rules. This configuration ensures that SSH and MySQL traffic is still allowed through the NSG.
+--priority
+az network nsg rule create \
+  --resource-group myRGNetwork \
+  --nsg-name myBackendNSG \
+  --name denyAll \
+  --access Deny \
+  --protocol Tcp \
+  --direction Inbound \
+  --priority 300 \
+  --source-address-prefix "*" \
+  --source-port-range "*" \
+  --destination-address-prefix "*" \
+  --destination-port-range "*"
+az network nsg rule create \
+  --resource-group myRGNetwork \
+  --nsg-name myBackendNSG \
+  --name denyAll \
+  --access Deny \
+  --protocol Tcp \
+  --direction Inbound \
+  --priority 300 \
+  --source-address-prefix "*" \
+  --source-port-range "*" \
+  --destination-address-prefix "*" \
+  --destination-port-range "*"
+Create back-end VM
+Now create a virtual machine, which is attached to themyBackendSubnet. Notice that the--nsgargument has a value of empty double quotes. An NSG does not need to be created with the VM. The VM is attached to the back-end subnet, which is protected with the pre-created back-end NSG. This NSG applies to the VM. Also, notice here that the--public-ip-addressargument has a value of empty double quotes. This configuration creates a VM without a public IP address.
+--nsg
+--public-ip-address
+az vm create \
+  --resource-group myRGNetwork \
+  --name myBackendVM \
+  --vnet-name myVNet \
+  --subnet myBackendSubnet \
+  --public-ip-address "" \
+  --nsg "" \
+  --image Ubuntu2204 \
+  --generate-ssh-keys
+az vm create \
+  --resource-group myRGNetwork \
+  --name myBackendVM \
+  --vnet-name myVNet \
+  --subnet myBackendSubnet \
+  --public-ip-address "" \
+  --nsg "" \
+  --image Ubuntu2204 \
+  --generate-ssh-keys
+The back-end VM is only accessible on port22and port3306from the front-end subnet. All other incoming traffic is blocked at the network security group. It may be helpful to visualize the NSG rule configurations. Return the NSG rule configuration with theaz network rule listcommand.
+az network nsg rule list --resource-group myRGNetwork --nsg-name myBackendNSG --output table
+az network nsg rule list --resource-group myRGNetwork --nsg-name myBackendNSG --output table
+Next steps
+In this tutorial, you created and secured Azure networks as related to virtual machines. You learned how to:
+Create a virtual network and subnet
+Create a public IP address
+Create a front-end VM
+Secure network traffic
+Create back-end VM
+To learn about protecting your VM disks, seeBackup and disaster recovery for disks.
+Feedback
+Was this page helpful?
+Additional resources

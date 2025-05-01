@@ -1,0 +1,225 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Standard columns in Azure Monitor Logs
+Article
+2024-09-11
+11 contributors
+In this article
+Data in Azure Monitor Logs isstored as a set of records in either a Log Analytics workspace or Application Insights application, each with a particular data type that has a unique set of columns. Many data types will have standard columns that are common across multiple types. This article describes these columns and provides examples of how you can use them in queries.
+Workspace-based applications in Application Insights store their data in a Log Analytics workspace and use the same standard columns as other tables in the workspace. Classic applications store their data separately and have different standard columns as specified in this article.
+Note
+Some of the standard columns will not show in the schema view or intellisense in Log Analytics, and they won't show in query results unless you explicitly specify the column in the output.
+TenantId
+TheTenantIdcolumn holds the workspace ID for the Log Analytics workspace.
+TimeGenerated
+TheTimeGeneratedcolumn contains the date and time that the record was created by the data source. SeeLog data ingestion time in Azure Monitorfor more details.
+TimeGeneratedprovides a common column to use for filtering or summarizing by time. When you select a time range for a view or dashboard in the Azure portal, it usesTimeGeneratedto filter the results.
+Note
+Tables supporting classic Application Insights resources use theTimestampcolumn instead of theTimeGeneratedcolumn.
+Note
+TheTimeGeneratedvalue cannot be older than 2 days before received time or more than a day in the future. If in some situation, the value is older than 2 days or more than a day in the future, it would be replaced with the actual received time.
+Examples
+The following query returns the number of error events created for each day in the previous week.
+Event
+| where EventLevelName == "Error" 
+| where TimeGenerated between(startofweek(ago(7days))..endofweek(ago(7days))) 
+| summarize count() by bin(TimeGenerated, 1day) 
+| sort by TimeGenerated asc
+Event
+| where EventLevelName == "Error" 
+| where TimeGenerated between(startofweek(ago(7days))..endofweek(ago(7days))) 
+| summarize count() by bin(TimeGenerated, 1day) 
+| sort by TimeGenerated asc
+_TimeReceived
+The_TimeReceivedcolumn contains the date and time that the record was received by the Azure Monitor ingestion point in the Azure cloud. This can be useful for identifying latency issues between the data source and the cloud. An example would be a networking issue causing a delay with data being sent from an agent. SeeLog data ingestion time in Azure Monitorfor more details.
+Note
+The_TimeReceivedcolumn is calculate each time it is used. This process is resource intensive. Refrain from using it to filter large number of records. Using this function recurrently can lead to increased query execution duration.
+The following query gives the average latency by hour for event records from an agent. This includes the time from the agent to the cloud and the total time for the record to be available for log queries.
+Event
+| where TimeGenerated > ago(1d) 
+| project TimeGenerated, TimeReceived = _TimeReceived, IngestionTime = ingestion_time() 
+| extend AgentLatency = toreal(datetime_diff('Millisecond',TimeReceived,TimeGenerated)) / 1000
+| extend TotalLatency = toreal(datetime_diff('Millisecond',IngestionTime,TimeGenerated)) / 1000
+| summarize avg(AgentLatency), avg(TotalLatency) by bin(TimeGenerated,1hr)
+Event
+| where TimeGenerated > ago(1d) 
+| project TimeGenerated, TimeReceived = _TimeReceived, IngestionTime = ingestion_time() 
+| extend AgentLatency = toreal(datetime_diff('Millisecond',TimeReceived,TimeGenerated)) / 1000
+| extend TotalLatency = toreal(datetime_diff('Millisecond',IngestionTime,TimeGenerated)) / 1000
+| summarize avg(AgentLatency), avg(TotalLatency) by bin(TimeGenerated,1hr)
+Type
+TheTypecolumn holds the name of the table that the record was retrieved from which can also be thought of as the record type. This column is useful in queries that combine records from multiple tables, such as those that use thesearchoperator, to distinguish between records of different types.$tablecan be used in place ofTypein some queries.
+search
+Note
+Tables supporting classic Application Insights resources use theitemTypecolumn instead of theTypecolumn.
+Examples
+The following query returns the count of records by type collected over the past hour.
+search * 
+| where TimeGenerated > ago(1h)
+| summarize count() by Type
+search * 
+| where TimeGenerated > ago(1h)
+| summarize count() by Type
+_ItemId
+The_ItemIdcolumn holds a unique identifier for the record.
+_ResourceId
+The_ResourceIdcolumn holds a unique identifier for the resource that the record is associated with. This gives you a standard column to use to scope your query to only records from a particular resource, or to join related data across multiple tables.
+For Azure resources, the value of_ResourceIdis theAzure resource ID URL. The column is limited to Azure resources, includingAzure Arcresources, or to custom logs that indicated the Resource ID during ingestion.
+Note
+Some data types already have fields that contain Azure resource ID or at least parts of it like subscription ID. While these fields are kept for backward compatibility, it is recommended to use the _ResourceId to perform cross correlation since it will be more consistent.
+Examples
+The following query joins performance and event data for each computer. It shows all events with an ID of101and processor utilization over 50%.
+Perf 
+| where CounterName == "% User Time" and CounterValue  > 50 and _ResourceId != "" 
+| join kind=inner (     
+    Event 
+    | where EventID == 101 
+) on _ResourceId
+Perf 
+| where CounterName == "% User Time" and CounterValue  > 50 and _ResourceId != "" 
+| join kind=inner (     
+    Event 
+    | where EventID == 101 
+) on _ResourceId
+The following query joinsAzureActivityrecords withSecurityEventrecords. It shows all activity operations with users that were logged in to these machines.
+AzureActivity 
+| where  
+    OperationName in ("Restart Virtual Machine", "Create or Update Virtual Machine", "Delete Virtual Machine")  
+    and ActivityStatus == "Succeeded"  
+| join kind= leftouter (    
+   SecurityEvent 
+   | where EventID == 4624  
+   | summarize LoggedOnAccounts = makeset(Account) by _ResourceId 
+) on _ResourceId
+AzureActivity 
+| where  
+    OperationName in ("Restart Virtual Machine", "Create or Update Virtual Machine", "Delete Virtual Machine")  
+    and ActivityStatus == "Succeeded"  
+| join kind= leftouter (    
+   SecurityEvent 
+   | where EventID == 4624  
+   | summarize LoggedOnAccounts = makeset(Account) by _ResourceId 
+) on _ResourceId
+The following query parses_ResourceIdand aggregates billed data volumes per Azure Resource Group.
+union withsource = tt * 
+| where _IsBillable == true 
+| parse tolower(_ResourceId) with "/subscriptions/" subscriptionId "/resourcegroups/" 
+    resourceGroup "/providers/" provider "/" resourceType "/" resourceName   
+| summarize Bytes=sum(_BilledSize) by resourceGroup | sort by Bytes nulls last
+union withsource = tt * 
+| where _IsBillable == true 
+| parse tolower(_ResourceId) with "/subscriptions/" subscriptionId "/resourcegroups/" 
+    resourceGroup "/providers/" provider "/" resourceType "/" resourceName   
+| summarize Bytes=sum(_BilledSize) by resourceGroup | sort by Bytes nulls last
+Use theseunion withsource = tt *queries sparingly as scans across data types are expensive to execute.
+union withsource = tt *
+It is always more efficient to use the _SubscriptionId column than extracting it by parsing the _ResourceId column.
+_SubscriptionId
+The_SubscriptionIdcolumn holds the subscription ID of the resource that the record is associated with. This gives you a standard column to use to scope your query to only records from a particular subscription, or to compare different subscriptions.
+For Azure resources, the value of__SubscriptionIdis the subscription part of theAzure resource ID URL. The column is limited to Azure resources, includingAzure Arcresources, or to custom logs that indicated the Subscription ID during ingestion.
+Note
+Some data types already have fields that contain Azure subscription ID . While these fields are kept for backward compatibility, it is recommended to use the _SubscriptionId column to perform cross correlation since it will be more consistent.
+Examples
+The following query examines performance data for computers of a specific subscription.
+Perf 
+| where TimeGenerated > ago(24h) and CounterName == "memoryAllocatableBytes"
+| where _SubscriptionId == "ebb79bc0-aa86-44a7-8111-cabbe0c43993"
+| summarize avgMemoryAllocatableBytes = avg(CounterValue) by Computer
+Perf 
+| where TimeGenerated > ago(24h) and CounterName == "memoryAllocatableBytes"
+| where _SubscriptionId == "ebb79bc0-aa86-44a7-8111-cabbe0c43993"
+| summarize avgMemoryAllocatableBytes = avg(CounterValue) by Computer
+The following query parses_ResourceIdand aggregates billed data volumes per Azure subscription.
+union withsource = tt * 
+| where _IsBillable == true 
+| summarize Bytes=sum(_BilledSize) by _SubscriptionId | sort by Bytes nulls last
+union withsource = tt * 
+| where _IsBillable == true 
+| summarize Bytes=sum(_BilledSize) by _SubscriptionId | sort by Bytes nulls last
+Use theseunion withsource = tt *queries sparingly as scans across data types are expensive to execute.
+union withsource = tt *
+_IsBillable
+The_IsBillablecolumn specifies whether ingested data is considered billable. Data with_IsBillableequal tofalsedoes not incur data ingestion, retention or archive charges.
+false
+Examples
+To get a list of computers sending billed data types, use the following query:
+Note
+Use queries withunion withsource = tt *sparingly as scans across data types are expensive to execute.
+union withsource = tt *
+union withsource = tt * 
+| where _IsBillable == true 
+| extend computerName = tolower(tostring(split(Computer, '.')[0]))
+| where computerName != ""
+| summarize TotalVolumeBytes=sum(_BilledSize) by computerName
+union withsource = tt * 
+| where _IsBillable == true 
+| extend computerName = tolower(tostring(split(Computer, '.')[0]))
+| where computerName != ""
+| summarize TotalVolumeBytes=sum(_BilledSize) by computerName
+This can be extended to return the count of computers per hour that are sending billed data types:
+union withsource = tt * 
+| where _IsBillable == true 
+| extend computerName = tolower(tostring(split(Computer, '.')[0]))
+| where computerName != ""
+| summarize dcount(computerName) by bin(TimeGenerated, 1h) | sort by TimeGenerated asc
+union withsource = tt * 
+| where _IsBillable == true 
+| extend computerName = tolower(tostring(split(Computer, '.')[0]))
+| where computerName != ""
+| summarize dcount(computerName) by bin(TimeGenerated, 1h) | sort by TimeGenerated asc
+_BilledSize
+The_BilledSizecolumn specifies the size in bytes of data that will be billed to your Azure account if_IsBillableis true. SeeData size calculationto learn more about the details of how the billed size is calculated.
+Examples
+To see the size of billable events ingested per computer, use the_BilledSizecolumn which provides the size in bytes:
+_BilledSize
+union withsource = tt * 
+| where _IsBillable == true 
+| summarize Bytes=sum(_BilledSize) by  Computer | sort by Bytes nulls last
+union withsource = tt * 
+| where _IsBillable == true 
+| summarize Bytes=sum(_BilledSize) by  Computer | sort by Bytes nulls last
+To see the size of billable events ingested per subscription, use the following query:
+union withsource=table * 
+| where _IsBillable == true 
+| summarize Bytes=sum(_BilledSize) by  _SubscriptionId | sort by Bytes nulls last
+union withsource=table * 
+| where _IsBillable == true 
+| summarize Bytes=sum(_BilledSize) by  _SubscriptionId | sort by Bytes nulls last
+To see the size of billable events ingested per resource group, use the following query:
+union withsource=table * 
+| where _IsBillable == true 
+| parse _ResourceId with "/subscriptions/" SubscriptionId "/resourcegroups/" ResourceGroupName "/" *
+| summarize Bytes=sum(_BilledSize) by  _SubscriptionId, ResourceGroupName | sort by Bytes nulls last
+union withsource=table * 
+| where _IsBillable == true 
+| parse _ResourceId with "/subscriptions/" SubscriptionId "/resourcegroups/" ResourceGroupName "/" *
+| summarize Bytes=sum(_BilledSize) by  _SubscriptionId, ResourceGroupName | sort by Bytes nulls last
+To see the count of events ingested per computer, use the following query:
+union withsource = tt *
+| summarize count() by Computer | sort by count_ nulls last
+union withsource = tt *
+| summarize count() by Computer | sort by count_ nulls last
+To see the count of billable events ingested per computer, use the following query:
+union withsource = tt * 
+| where _IsBillable == true 
+| summarize count() by Computer  | sort by count_ nulls last
+union withsource = tt * 
+| where _IsBillable == true 
+| summarize count() by Computer  | sort by count_ nulls last
+To see the count of billable data types from a specific computer, use the following query:
+union withsource = tt *
+| where Computer == "computer name"
+| where _IsBillable == true 
+| summarize count() by tt | sort by count_ nulls last
+union withsource = tt *
+| where Computer == "computer name"
+| where _IsBillable == true 
+| summarize count() by tt | sort by count_ nulls last
+Next steps
+Read more about howAzure Monitor log data is stored.
+Get a lesson onwriting log queries.
+Get a lesson onjoining tables in log queries.
+Feedback
+Was this page helpful?
+Additional resources

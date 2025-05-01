@@ -1,0 +1,419 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Custom metric collection in .NET and .NET Core
+Article
+2025-03-21
+13 contributors
+In this article
+The Azure Monitor Application Insights .NET and .NET Core SDKs have two different methods of collecting custom metrics:TrackMetric()andGetMetric(). The key difference between these two methods is local aggregation. TheTrackMetric()method lacks preaggregation. TheGetMetric()method has preaggregation. We recommend that you use aggregation, soTrackMetric()is no longer the preferred method of collecting custom metrics. This article walks you through using theGetMetric()method and some of the rationale behind how it works.
+TrackMetric()
+GetMetric()
+TrackMetric()
+GetMetric()
+TrackMetric()
+GetMetric()
+Caution
+We recommend theAzure Monitor OpenTelemetry Distrofor new applications or customers to powerAzure Monitor Application Insights. The Azure Monitor OpenTelemetry Distro delivers a similar functionality and experience as the Application Insights SDK. It's possible to migrate from the Application Insights SDK using the migration guides for.NET,Node.js, andPython, but we are still working to add afew more featuresfor backwards compatibility.
+Preaggregating vs. non-preaggregating API
+TheTrackMetric()method sends raw telemetry denoting a metric. It's inefficient to send a single telemetry item for each value. TheTrackMetric()method is also inefficient in terms of performance because everyTrackMetric(item)goes through the full SDK pipeline of telemetry initializers and processors.
+TrackMetric()
+TrackMetric()
+TrackMetric(item)
+UnlikeTrackMetric(),GetMetric()handles local preaggregation for you and then only submits an aggregated summary metric at a fixed interval of one minute. If you need to closely monitor some custom metric at the second or even millisecond level, you can do so while only incurring the storage and network traffic cost of only monitoring every minute. This behavior also greatly reduces the risk of throttling occurring because the total number of telemetry items that need to be sent for an aggregated metric are greatly reduced.
+TrackMetric()
+GetMetric()
+In Application Insights, custom metrics collected viaTrackMetric()andGetMetric()aren't subject tosampling. Sampling important metrics can lead to scenarios where alerting you might have built around those metrics could become unreliable. By never sampling your custom metrics, you can generally be confident that when your alert thresholds are breached, an alert fires. Because custom metrics aren't sampled, there are some potential concerns.
+TrackMetric()
+GetMetric()
+Trend tracking in a metric every second, or at an even more granular interval, can result in:
+Increased data storage costs.There's a cost associated with how much data you send to Azure Monitor. The more data you send, the greater the overall cost of monitoring.
+Increased network traffic or performance overhead.In some scenarios, this overhead could have both a monetary and application performance cost.
+Risk of ingestion throttling.Azure Monitor drops ("throttles") data points when your app sends a high rate of telemetry in a short time interval.
+Throttling is a concern because it can lead to missed alerts. The condition to trigger an alert could occur locally and then be dropped at the ingestion endpoint because of too much data being sent. We don't recommend usingTrackMetric()for .NET and .NET Core unless you've implemented your own local aggregation logic. If you're trying to track every instance an event occurs over a given time period, you might find thatTrackEvent()is a better fit. Keep in mind that unlike custom metrics, custom events are subject to sampling. You can still useTrackMetric()even without writing your own local preaggregation. But if you do so, be aware of the pitfalls.
+TrackMetric()
+TrackEvent()
+TrackMetric()
+In summary, we recommendGetMetric()because it does preaggregation, it accumulates values from all theTrack()calls, and sends a summary/aggregate once every minute. TheGetMetric()method can significantly reduce the cost and performance overhead by sending fewer data points while still collecting all relevant information.
+GetMetric()
+Track()
+GetMetric()
+Note
+Only the .NET and .NET Core SDKs have aGetMetric()method. If you're using Java, seeSending custom metrics using micrometer. For JavaScript and Node.js, you would still useTrackMetric(), but keep in mind the caveats that were outlined in the previous section. For Python, you can useOpenCensus.statsto send custom metrics, but the metrics implementation is different.
+GetMetric()
+TrackMetric()
+Get started with GetMetric
+For our examples, we're going to use a basic .NET Core 3.1 worker service application. If you want to replicate the test environment used with these examples, follow steps 1-6 in theMonitoring worker service article. These steps add Application Insights to a basic worker service project template. The concepts apply to any general application where the SDK can be used, including web apps and console apps.
+Send metrics
+Replace the contents of yourworker.csfile with the following code:
+worker.cs
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.ApplicationInsights;
+
+namespace WorkerService3
+{
+    public class Worker : BackgroundService
+    {
+        private readonly ILogger<Worker> _logger;
+        private TelemetryClient _telemetryClient;
+
+        public Worker(ILogger<Worker> logger, TelemetryClient tc)
+        {
+            _logger = logger;
+            _telemetryClient = tc;
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {   // The following line demonstrates usages of GetMetric API.
+            // Here "computersSold", a custom metric name, is being tracked with a value of 42 every second.
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                _telemetryClient.GetMetric("ComputersSold").TrackValue(42);
+
+                _logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
+                await Task.Delay(1000, stoppingToken);
+            }
+        }
+    }
+}
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.ApplicationInsights;
+
+namespace WorkerService3
+{
+    public class Worker : BackgroundService
+    {
+        private readonly ILogger<Worker> _logger;
+        private TelemetryClient _telemetryClient;
+
+        public Worker(ILogger<Worker> logger, TelemetryClient tc)
+        {
+            _logger = logger;
+            _telemetryClient = tc;
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {   // The following line demonstrates usages of GetMetric API.
+            // Here "computersSold", a custom metric name, is being tracked with a value of 42 every second.
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                _telemetryClient.GetMetric("ComputersSold").TrackValue(42);
+
+                _logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
+                await Task.Delay(1000, stoppingToken);
+            }
+        }
+    }
+}
+When you run the sample code, you see thewhileloop repeatedly executing with no telemetry being sent in the Visual Studio output window. A single telemetry item is sent by around the 60-second mark, which in our test looks like:
+while
+Application Insights Telemetry: {"name":"Microsoft.ApplicationInsights.Dev.00000000-0000-0000-0000-000000000000.Metric", "time":"2019-12-28T00:54:19.0000000Z",
+"ikey":"00000000-0000-0000-0000-000000000000",
+"tags":{"ai.application.ver":"1.0.0.0",
+"ai.cloud.roleInstance":"Test-Computer-Name",
+"ai.internal.sdkVersion":"m-agg2c:2.12.0-21496",
+"ai.internal.nodeName":"Test-Computer-Name"},
+"data":{"baseType":"MetricData",
+"baseData":{"ver":2,"metrics":[{"name":"ComputersSold",
+"kind":"Aggregation",
+"value":1722,
+"count":41,
+"min":42,
+"max":42,
+"stdDev":0}],
+"properties":{"_MS.AggregationIntervalMs":"42000",
+"DeveloperMode":"true"}}}}
+Application Insights Telemetry: {"name":"Microsoft.ApplicationInsights.Dev.00000000-0000-0000-0000-000000000000.Metric", "time":"2019-12-28T00:54:19.0000000Z",
+"ikey":"00000000-0000-0000-0000-000000000000",
+"tags":{"ai.application.ver":"1.0.0.0",
+"ai.cloud.roleInstance":"Test-Computer-Name",
+"ai.internal.sdkVersion":"m-agg2c:2.12.0-21496",
+"ai.internal.nodeName":"Test-Computer-Name"},
+"data":{"baseType":"MetricData",
+"baseData":{"ver":2,"metrics":[{"name":"ComputersSold",
+"kind":"Aggregation",
+"value":1722,
+"count":41,
+"min":42,
+"max":42,
+"stdDev":0}],
+"properties":{"_MS.AggregationIntervalMs":"42000",
+"DeveloperMode":"true"}}}}
+This single telemetry item represents an aggregate of 41 distinct metric measurements. Because we were sending the same value over and over again, we have a standard deviation (stDev) of0with identical maximum (max) and minimum (min) values. Thevalueproperty represents a sum of all the individual values that were aggregated.
+stDev
+0
+max
+min
+value
+Note
+TheGetMetricmethod doesn't support tracking the last value (for example,gauge) or tracking histograms or distributions.
+GetMetric
+gauge
+If we examine our Application Insights resource in theLogs (Analytics)experience, the individual telemetry item would look like the following screenshot.
+
+Note
+While the raw telemetry item didn't contain an explicit sum property/field once ingested, we create one for you. In this case, both thevalueandvalueSumproperty represent the same thing.
+value
+valueSum
+You can also access your custom metric telemetry in theMetricssection of the portal as both alog-based and custom metric. The following screenshot is an example of a log-based metric.
+
+Cache metric reference for high-throughput usage
+Metric values might be observed frequently in some cases. For example, a high-throughput service that processes 500 requests per second might want to emit 20 telemetry metrics for each request. The result means tracking 10,000 values per second. In such high-throughput scenarios, users might need to help the SDK by avoiding some lookups.
+For example, the preceding example performed a lookup for a handle for the metricComputersSoldand then tracked an observed value of42. Instead, the handle might be cached for multiple track invocations:
+ComputersSold
+42
+//...
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            // This is where the cache is stored to handle faster lookup
+            Metric computersSold = _telemetryClient.GetMetric("ComputersSold");
+            while (!stoppingToken.IsCancellationRequested)
+            {
+
+                computersSold.TrackValue(42);
+
+                computersSold.TrackValue(142);
+
+                _logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
+                await Task.Delay(50, stoppingToken);
+            }
+        }
+//...
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            // This is where the cache is stored to handle faster lookup
+            Metric computersSold = _telemetryClient.GetMetric("ComputersSold");
+            while (!stoppingToken.IsCancellationRequested)
+            {
+
+                computersSold.TrackValue(42);
+
+                computersSold.TrackValue(142);
+
+                _logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
+                await Task.Delay(50, stoppingToken);
+            }
+        }
+In addition to caching the metric handle, the preceding example also reducedTask.Delayto 50 milliseconds so that the loop would execute more frequently. The result is 772TrackValue()invocations.
+Task.Delay
+TrackValue()
+Multidimensional metrics
+The examples in the previous section show zero-dimensional metrics. Metrics can also be multidimensional. We currently support up to 10 dimensions.
+Here's an example of how to create a one-dimensional metric:
+//...
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            // This is an example of a metric with a single dimension.
+            // FormFactor is the name of the dimension.
+            Metric computersSold= _telemetryClient.GetMetric("ComputersSold", "FormFactor");
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                // The number of arguments (dimension values)
+                // must match the number of dimensions specified while GetMetric.
+                // Laptop, Tablet, etc are values for the dimension "FormFactor"
+                computersSold.TrackValue(42, "Laptop");
+                computersSold.TrackValue(20, "Tablet");
+                computersSold.TrackValue(126, "Desktop");
+
+
+                _logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
+                await Task.Delay(50, stoppingToken);
+            }
+        }
+//...
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            // This is an example of a metric with a single dimension.
+            // FormFactor is the name of the dimension.
+            Metric computersSold= _telemetryClient.GetMetric("ComputersSold", "FormFactor");
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                // The number of arguments (dimension values)
+                // must match the number of dimensions specified while GetMetric.
+                // Laptop, Tablet, etc are values for the dimension "FormFactor"
+                computersSold.TrackValue(42, "Laptop");
+                computersSold.TrackValue(20, "Tablet");
+                computersSold.TrackValue(126, "Desktop");
+
+
+                _logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
+                await Task.Delay(50, stoppingToken);
+            }
+        }
+Running the sample code for at least 60 seconds results in three distinct telemetry items being sent to Azure. Each item represents the aggregation of one of the three form factors. As before, you can further examine in theLogs (Analytics)view.
+
+In the metrics explorer:
+
+Notice that you can't split the metric by your new custom dimension or view your custom dimension with the metrics view.
+
+By default, multidimensional metrics within the metric explorer aren't turned on in Application Insights resources.
+Enable multidimensional metrics
+To enable multidimensional metrics for an Application Insights resource, selectUsage and estimated costs>Custom Metrics>Enable alerting on custom metric dimensions>OK. For more information, seeCustom metrics dimensions and preaggregation.
+After you've made that change and sent new multidimensional telemetry, you can selectApply splitting.
+Note
+Only newly sent metrics after the feature was turned on in the portal will have dimensions stored.
+
+View your metric aggregations for eachFormFactordimension.
+FormFactor
+
+Use MetricIdentifier when there are more than three dimensions
+Currently, 10 dimensions are supported. More than three dimensions requires the use ofMetricIdentifier:
+MetricIdentifier
+// Add "using Microsoft.ApplicationInsights.Metrics;" to use MetricIdentifier
+// MetricIdentifier id = new MetricIdentifier("[metricNamespace]","[metricId],"[dim1]","[dim2]","[dim3]","[dim4]","[dim5]");
+MetricIdentifier id = new MetricIdentifier("CustomMetricNamespace","ComputerSold", "FormFactor", "GraphicsCard", "MemorySpeed", "BatteryCapacity", "StorageCapacity");
+Metric computersSold  = _telemetryClient.GetMetric(id);
+computersSold.TrackValue(110,"Laptop", "Nvidia", "DDR4", "39Wh", "1TB");
+// Add "using Microsoft.ApplicationInsights.Metrics;" to use MetricIdentifier
+// MetricIdentifier id = new MetricIdentifier("[metricNamespace]","[metricId],"[dim1]","[dim2]","[dim3]","[dim4]","[dim5]");
+MetricIdentifier id = new MetricIdentifier("CustomMetricNamespace","ComputerSold", "FormFactor", "GraphicsCard", "MemorySpeed", "BatteryCapacity", "StorageCapacity");
+Metric computersSold  = _telemetryClient.GetMetric(id);
+computersSold.TrackValue(110,"Laptop", "Nvidia", "DDR4", "39Wh", "1TB");
+Custom metric configuration
+If you want to alter the metric configuration, you must make alterations in the place where the metric is initialized.
+Special dimension names
+Metrics don't use the telemetry context of theTelemetryClientused to access them. Using special dimension names available as constants in theMetricDimensionNamesclass is the best workaround for this limitation.
+TelemetryClient
+MetricDimensionNames
+Metric aggregates sent by the followingSpecial Operation Request Sizemetricwon'thaveContext.Operation.Nameset toSpecial Operation. TheTrackMetric()method or any otherTrackXXX()method will haveOperationNameset correctly toSpecial Operation.
+Special Operation Request Size
+Context.Operation.Name
+Special Operation
+TrackMetric()
+TrackXXX()
+OperationName
+Special Operation
+//...
+        TelemetryClient specialClient;
+        private static int GetCurrentRequestSize()
+        {
+            // Do stuff
+            return 1100;
+        }
+        int requestSize = GetCurrentRequestSize()
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                //...
+                specialClient.Context.Operation.Name = "Special Operation";
+                specialClient.GetMetric("Special Operation Request Size").TrackValue(requestSize);
+                //...
+            }
+                   
+        }
+//...
+        TelemetryClient specialClient;
+        private static int GetCurrentRequestSize()
+        {
+            // Do stuff
+            return 1100;
+        }
+        int requestSize = GetCurrentRequestSize()
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                //...
+                specialClient.Context.Operation.Name = "Special Operation";
+                specialClient.GetMetric("Special Operation Request Size").TrackValue(requestSize);
+                //...
+            }
+                   
+        }
+In this circumstance, use the special dimension names listed in theMetricDimensionNamesclass to specify theTelemetryContextvalues.
+MetricDimensionNames
+TelemetryContext
+For example, when the metric aggregate resulting from the next statement is sent to the Application Insights cloud endpoint, itsContext.Operation.Namedata field will be set toSpecial Operation:
+Context.Operation.Name
+Special Operation
+_telemetryClient.GetMetric("Request Size", MetricDimensionNames.TelemetryContext.Operation.Name).TrackValue(requestSize, "Special Operation");
+_telemetryClient.GetMetric("Request Size", MetricDimensionNames.TelemetryContext.Operation.Name).TrackValue(requestSize, "Special Operation");
+The values of this special dimension will be copied intoTelemetryContextand won't be used as anormaldimension. If you want to also keep an operation dimension for normal metric exploration, you need to create a separate dimension for that purpose:
+TelemetryContext
+_telemetryClient.GetMetric("Request Size", "Operation Name", MetricDimensionNames.TelemetryContext.Operation.Name).TrackValue(requestSize, "Special Operation", "Special Operation");
+_telemetryClient.GetMetric("Request Size", "Operation Name", MetricDimensionNames.TelemetryContext.Operation.Name).TrackValue(requestSize, "Special Operation", "Special Operation");
+Dimension and time-series capping
+To prevent the telemetry subsystem from accidentally using up your resources, you can control the maximum number of data series per metric. The default limits are no more than 1,000 total data series per metric, and no more than 100 different values per dimension.
+Important
+Use low cardinal values for dimensions to avoid throttling.
+In the context of dimension and time series capping, we useMetric.TrackValue(..)to make sure that the limits are observed. If the limits are already reached,Metric.TrackValue(..)returnsFalseand the value won't be tracked. Otherwise, it returnsTrue. This behavior is useful if the data for a metric originates from user input.
+Metric.TrackValue(..)
+Metric.TrackValue(..)
+False
+True
+TheMetricConfigurationconstructor takes some options on how to manage different series within the respective metric and an object of a class implementingIMetricSeriesConfigurationthat specifies aggregation behavior for each individual series of the metric:
+MetricConfiguration
+IMetricSeriesConfiguration
+var metConfig = new MetricConfiguration(seriesCountLimit: 100, valuesPerDimensionLimit:2,
+                new MetricSeriesConfigurationForMeasurement(restrictToUInt32Values: false));
+
+Metric computersSold = _telemetryClient.GetMetric("ComputersSold", "Dimension1", "Dimension2", metConfig);
+
+// Start tracking.
+computersSold.TrackValue(100, "Dim1Value1", "Dim2Value1");
+computersSold.TrackValue(100, "Dim1Value1", "Dim2Value2");
+
+// The following call gives 3rd unique value for dimension2, which is above the limit of 2.
+computersSold.TrackValue(100, "Dim1Value1", "Dim2Value3");
+// The above call does not track the metric, and returns false.
+var metConfig = new MetricConfiguration(seriesCountLimit: 100, valuesPerDimensionLimit:2,
+                new MetricSeriesConfigurationForMeasurement(restrictToUInt32Values: false));
+
+Metric computersSold = _telemetryClient.GetMetric("ComputersSold", "Dimension1", "Dimension2", metConfig);
+
+// Start tracking.
+computersSold.TrackValue(100, "Dim1Value1", "Dim2Value1");
+computersSold.TrackValue(100, "Dim1Value1", "Dim2Value2");
+
+// The following call gives 3rd unique value for dimension2, which is above the limit of 2.
+computersSold.TrackValue(100, "Dim1Value1", "Dim2Value3");
+// The above call does not track the metric, and returns false.
+seriesCountLimitis the maximum number of data time series a metric can contain. When this limit is reached, calls toTrackValue()that would normally result in a new series returnfalse.
+seriesCountLimit
+TrackValue()
+false
+valuesPerDimensionLimitlimits the number of distinct values per dimension in a similar manner.
+valuesPerDimensionLimit
+restrictToUInt32Valuesdetermines whether or not only non-negative integer values should be tracked.
+restrictToUInt32Values
+Here's an example of how to send a message to know if cap limits are exceeded:
+if (! computersSold.TrackValue(100, "Dim1Value1", "Dim2Value3"))
+{
+// Add "using Microsoft.ApplicationInsights.DataContract;" to use SeverityLevel.Error
+_telemetryClient.TrackTrace("Metric value not tracked as value of one of the dimension exceeded the cap. Revisit the dimensions to ensure they are within the limits",
+SeverityLevel.Error);
+}
+if (! computersSold.TrackValue(100, "Dim1Value1", "Dim2Value3"))
+{
+// Add "using Microsoft.ApplicationInsights.DataContract;" to use SeverityLevel.Error
+_telemetryClient.TrackTrace("Metric value not tracked as value of one of the dimension exceeded the cap. Revisit the dimensions to ensure they are within the limits",
+SeverityLevel.Error);
+}
+Next steps
+Metrics - Get - REST API
+Application Insights API for custom events and metrics
+Learn moreabout monitoring worker service applications.
+Uselog-based and preaggregated metrics.
+Analyze metrics withmetrics explorer.
+Learn how to enable Application Insights forASP.NET Core applications.
+Learn how to enable Application Insights forASP.NET applications.
+Feedback
+Was this page helpful?
+Additional resources

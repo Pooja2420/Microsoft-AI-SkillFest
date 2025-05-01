@@ -1,0 +1,460 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use the Azure CLI to enable end-to-end encryption using encryption at host
+Article
+2025-02-25
+11 contributors
+In this article
+Applies to:âï¸ Linux VMs âï¸ Flexible scale sets
+When you enable encryption at host, data stored on the VM host is encrypted at rest and flows encrypted to the Storage service. For conceptual information on encryption at host, and other managed disk encryption types, seeEncryption at host - End-to-end encryption for your VM data.
+Restrictions
+Supported for 4k sector size Ultra Disks and Premium SSD v2.
+Only supported on 512e sector size Ultra Disks and Premium SSD v2 if they were created after 5/13/2023.For disks created before this date,snapshot your diskand create a new disk using the snapshot.
+For disks created before this date,snapshot your diskand create a new disk using the snapshot.
+Can't be enabled on virtual machines (VMs) or virtual machine scale sets that currently or ever had Azure Disk Encryption enabled.
+Azure Disk Encryption can't be enabled on disks that have encryption at host enabled.
+The encryption can be enabled on existing virtual machine scale sets. However, only new VMs created after enabling the encryption are automatically encrypted.
+Existing VMs must be deallocated and reallocated in order to be encrypted.
+Supported VM sizes
+The complete list of supported VM sizes can be pulled programmatically. To learn how to retrieve them programmatically, see theFinding supported VM sizessection.
+Upgrading the VM size results in validation to check if the new VM size supports the EncryptionAtHost feature.
+Prerequisites
+You must enable the feature for your subscription before you use the EncryptionAtHost property for your VM/VMSS. Use the following steps to enable the feature for your subscription:
+Execute the following command to register the feature for your subscription
+az feature register --namespace Microsoft.Compute --name EncryptionAtHost
+az feature register --namespace Microsoft.Compute --name EncryptionAtHost
+Check that the registration state isRegistered(takes a few minutes) using the command below before trying out the feature.
+az feature show --namespace Microsoft.Compute --name EncryptionAtHost
+az feature show --namespace Microsoft.Compute --name EncryptionAtHost
+Create resources
+Note
+This section only applies to configurations with customer-managed keys. If you're using platform-managed keys, you can skip to theExample scriptssection.
+Once the feature is enabled, you need to set up a DiskEncryptionSet and either anAzure Key Vaultor anAzure Key Vault Managed HSM.
+Azure Key Vault
+Install the latestAzure CLIand log to an Azure account in withaz login.
+Create an Azure Key Vault and encryption key.
+When creating the Key Vault, you must enable purge protection. Purge protection ensures that a deleted key can't be permanently deleted until the retention period lapses. These settings protect you from losing data due to accidental deletion. These settings are mandatory when using a Key Vault for encrypting managed disks.
+Important
+Don't camel case the region, if you do so, you may experience problems when assigning additional disks to the resource in the Azure portal.
+subscriptionId=yourSubscriptionID
+rgName=yourResourceGroupName
+location=westcentralus
+keyVaultName=yourKeyVaultName
+keyName=yourKeyName
+diskEncryptionSetName=yourDiskEncryptionSetName
+diskName=yourDiskName
+
+az account set --subscription $subscriptionId
+
+az group create --resource-group $rgName --location $location
+
+az keyvault create -n $keyVaultName \
+-g $rgName \
+-l $location \
+--enable-purge-protection true 
+
+az keyvault key create --vault-name $keyVaultName \
+-n $keyName \
+--protection software
+subscriptionId=yourSubscriptionID
+rgName=yourResourceGroupName
+location=westcentralus
+keyVaultName=yourKeyVaultName
+keyName=yourKeyName
+diskEncryptionSetName=yourDiskEncryptionSetName
+diskName=yourDiskName
+
+az account set --subscription $subscriptionId
+
+az group create --resource-group $rgName --location $location
+
+az keyvault create -n $keyVaultName \
+-g $rgName \
+-l $location \
+--enable-purge-protection true 
+
+az keyvault key create --vault-name $keyVaultName \
+-n $keyName \
+--protection software
+Create a DiskEncryptionSet. You can setenable-auto-key-rotationtotrueto enable automatic rotation of the key. When you enable automatic rotation, the system automatically updates all managed disks, snapshots, and images referencing the disk encryption set to use the new version of the key within one hour.
+keyVaultKeyUrl=$(az keyvault key show --vault-name $keyVaultName --name $keyName --query [key.kid] -o tsv)
+
+az disk-encryption-set create -n $diskEncryptionSetName \
+-l $location \
+-g $rgName \
+--key-url $keyVaultKeyUrl \
+--enable-auto-key-rotation false
+keyVaultKeyUrl=$(az keyvault key show --vault-name $keyVaultName --name $keyName --query [key.kid] -o tsv)
+
+az disk-encryption-set create -n $diskEncryptionSetName \
+-l $location \
+-g $rgName \
+--key-url $keyVaultKeyUrl \
+--enable-auto-key-rotation false
+Grant the DiskEncryptionSet resource access to the key vault.
+Note
+It may take few minutes for Azure to create the identity of your DiskEncryptionSet in your Microsoft Entra ID. If you get an error like "Cannot find the Active Directory object" when running the following command, wait a few minutes and try again.
+desIdentity=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [identity.principalId] -o tsv)
+
+az keyvault set-policy -n $keyVaultName \
+-g $rgName \
+--object-id $desIdentity \
+--key-permissions wrapkey unwrapkey get
+desIdentity=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [identity.principalId] -o tsv)
+
+az keyvault set-policy -n $keyVaultName \
+-g $rgName \
+--object-id $desIdentity \
+--key-permissions wrapkey unwrapkey get
+Azure Key Vault Managed HSM
+Alternatively, you can use a Managed HSM to handle your keys.
+To do this, you must complete the following prerequisites:
+Install the latestAzure CLIand log in to an Azure account in withaz login.
+Create and configure a managed HSM.
+Assign permissions to a user, so they can manage your Managed HSM.
+Once you've created a Managed HSM and added permissions, enable purge protection and create an encryption key.
+subscriptionId=yourSubscriptionID
+rgName=yourResourceGroupName
+location=westcentralus
+keyVaultName=yourKeyVaultName
+keyName=yourKeyName
+diskEncryptionSetName=yourDiskEncryptionSetName
+diskName=yourDiskName
+    
+az account set --subscription $subscriptionId
+    
+az keyvault update-hsm --subscription $subscriptionId -g $rgName --hsm-name $keyVaultName --enable-purge-protection true
+    
+az keyvault key create --hsm-name  $keyVaultName --name $keyName --ops wrapKey unwrapKey --kty RSA-HSM --size 2048
+subscriptionId=yourSubscriptionID
+rgName=yourResourceGroupName
+location=westcentralus
+keyVaultName=yourKeyVaultName
+keyName=yourKeyName
+diskEncryptionSetName=yourDiskEncryptionSetName
+diskName=yourDiskName
+    
+az account set --subscription $subscriptionId
+    
+az keyvault update-hsm --subscription $subscriptionId -g $rgName --hsm-name $keyVaultName --enable-purge-protection true
+    
+az keyvault key create --hsm-name  $keyVaultName --name $keyName --ops wrapKey unwrapKey --kty RSA-HSM --size 2048
+Then, create a DiskEncryptionSet.
+keyVaultKeyUrl=$(az keyvault key show --vault-name $keyVaultName --name $keyName --query [key.kid] -o tsv)
+    
+az disk-encryption-set create -n $diskEncryptionSetName \
+-l $location \
+-g $rgName \
+--key-url $keyVaultKeyUrl \
+--enable-auto-key-rotation false
+keyVaultKeyUrl=$(az keyvault key show --vault-name $keyVaultName --name $keyName --query [key.kid] -o tsv)
+    
+az disk-encryption-set create -n $diskEncryptionSetName \
+-l $location \
+-g $rgName \
+--key-url $keyVaultKeyUrl \
+--enable-auto-key-rotation false
+Finally, grant the DiskEncryptionSet access to the Managed HSM.
+desIdentity=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [identity.principalId] -o tsv)
+    
+az keyvault role assignment create --hsm-name $keyVaultName --role "Managed HSM Crypto Service Encryption User" --assignee $desIdentity --scope /keys
+desIdentity=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [identity.principalId] -o tsv)
+    
+az keyvault role assignment create --hsm-name $keyVaultName --role "Managed HSM Crypto Service Encryption User" --assignee $desIdentity --scope /keys
+Example scripts
+Create a VM with encryption at host enabled with customer-managed keys
+Create a VM with managed disks using the resource URI of the DiskEncryptionSet created earlier to encrypt cache of OS and data disks with customer-managed keys. The temp disks are encrypted with platform-managed keys.
+rgName=yourRGName
+vmName=yourVMName
+location=eastus
+vmSize=Standard_DS2_v2
+image=LinuxImageURN
+diskEncryptionSetName=yourDiskEncryptionSetName
+
+diskEncryptionSetId=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [id] -o tsv)
+
+az vm create -g $rgName \
+-n $vmName \
+-l $location \
+--encryption-at-host \
+--image $image \
+--size $vmSize \
+--generate-ssh-keys \
+--os-disk-encryption-set $diskEncryptionSetId \
+--data-disk-sizes-gb 128 128 \
+--data-disk-encryption-sets $diskEncryptionSetId $diskEncryptionSetId
+rgName=yourRGName
+vmName=yourVMName
+location=eastus
+vmSize=Standard_DS2_v2
+image=LinuxImageURN
+diskEncryptionSetName=yourDiskEncryptionSetName
+
+diskEncryptionSetId=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [id] -o tsv)
+
+az vm create -g $rgName \
+-n $vmName \
+-l $location \
+--encryption-at-host \
+--image $image \
+--size $vmSize \
+--generate-ssh-keys \
+--os-disk-encryption-set $diskEncryptionSetId \
+--data-disk-sizes-gb 128 128 \
+--data-disk-encryption-sets $diskEncryptionSetId $diskEncryptionSetId
+Create a VM with encryption at host enabled with platform-managed keys
+Create a VM with encryption at host enabled to encrypt cache of OS/data disks and temp disks with platform-managed keys.
+rgName=yourRGName
+vmName=yourVMName
+location=eastus
+vmSize=Standard_DS2_v2
+image=LinuxImageURN
+
+az vm create -g $rgName \
+-n $vmName \
+-l $location \
+--encryption-at-host \
+--image $image \
+--size $vmSize \
+--generate-ssh-keys \
+--data-disk-sizes-gb 128 128 \
+rgName=yourRGName
+vmName=yourVMName
+location=eastus
+vmSize=Standard_DS2_v2
+image=LinuxImageURN
+
+az vm create -g $rgName \
+-n $vmName \
+-l $location \
+--encryption-at-host \
+--image $image \
+--size $vmSize \
+--generate-ssh-keys \
+--data-disk-sizes-gb 128 128 \
+Update a VM to enable encryption at host
+rgName=yourRGName
+vmName=yourVMName
+
+az vm update -n $vmName \
+-g $rgName \
+--set securityProfile.encryptionAtHost=true
+rgName=yourRGName
+vmName=yourVMName
+
+az vm update -n $vmName \
+-g $rgName \
+--set securityProfile.encryptionAtHost=true
+Check the status of encryption at host for a VM
+rgName=yourRGName
+vmName=yourVMName
+
+az vm show -n $vmName \
+-g $rgName \
+--query [securityProfile.encryptionAtHost] -o tsv
+rgName=yourRGName
+vmName=yourVMName
+
+az vm show -n $vmName \
+-g $rgName \
+--query [securityProfile.encryptionAtHost] -o tsv
+Update a VM to disable encryption at host
+You must deallocate your VM before you can disable encryption at host.
+rgName=yourRGName
+vmName=yourVMName
+
+az vm update -n $vmName \
+-g $rgName \
+--set securityProfile.encryptionAtHost=false
+rgName=yourRGName
+vmName=yourVMName
+
+az vm update -n $vmName \
+-g $rgName \
+--set securityProfile.encryptionAtHost=false
+Create a Virtual Machine Scale Set with encryption at host enabled with customer-managed keys
+Create a Virtual Machine Scale Set with managed disks using the resource URI of the DiskEncryptionSet created earlier to encrypt cache of OS and data disks with customer-managed keys. The temp disks are encrypted with platform-managed keys.
+Important
+Starting November 2023, VM scale sets created using PowerShell and Azure CLI will default to Flexible Orchestration Mode if no orchestration mode is specified. For more information about this change and what actions you should take, go toBreaking Change for VMSS PowerShell/CLI Customers - Microsoft Community Hub
+rgName=yourRGName
+vmssName=yourVMSSName
+location=westus2
+vmSize=Standard_DS3_V2
+image=Ubuntu2204
+diskEncryptionSetName=yourDiskEncryptionSetName
+
+diskEncryptionSetId=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [id] -o tsv)
+
+az vmss create -g $rgName \
+-n $vmssName \
+--encryption-at-host \
+--image $image \
+--orchestration-mode flexible \
+--admin-username azureuser \
+--generate-ssh-keys \
+--os-disk-encryption-set $diskEncryptionSetId \
+--data-disk-sizes-gb 64 128 \
+--data-disk-encryption-sets $diskEncryptionSetId $diskEncryptionSetId
+rgName=yourRGName
+vmssName=yourVMSSName
+location=westus2
+vmSize=Standard_DS3_V2
+image=Ubuntu2204
+diskEncryptionSetName=yourDiskEncryptionSetName
+
+diskEncryptionSetId=$(az disk-encryption-set show -n $diskEncryptionSetName -g $rgName --query [id] -o tsv)
+
+az vmss create -g $rgName \
+-n $vmssName \
+--encryption-at-host \
+--image $image \
+--orchestration-mode flexible \
+--admin-username azureuser \
+--generate-ssh-keys \
+--os-disk-encryption-set $diskEncryptionSetId \
+--data-disk-sizes-gb 64 128 \
+--data-disk-encryption-sets $diskEncryptionSetId $diskEncryptionSetId
+Create a Virtual Machine Scale Set with encryption at host enabled with platform-managed keys
+Create a Virtual Machine Scale Set with encryption at host enabled to encrypt cache of OS/data disks and temp disks with platform-managed keys.
+Important
+Starting November 2023, VM scale sets created using PowerShell and Azure CLI will default to Flexible Orchestration Mode if no orchestration mode is specified. For more information about this change and what actions you should take, go toBreaking Change for VMSS PowerShell/CLI Customers - Microsoft Community Hub
+rgName=yourRGName
+vmssName=yourVMSSName
+location=westus2
+vmSize=Standard_DS3_V2
+image=Ubuntu2204
+
+az vmss create -g $rgName \
+-n $vmssName \
+--encryption-at-host \
+--image $image \
+--orchestration-mode flexible \
+--admin-username azureuser \
+--generate-ssh-keys \
+--data-disk-sizes-gb 64 128 \
+rgName=yourRGName
+vmssName=yourVMSSName
+location=westus2
+vmSize=Standard_DS3_V2
+image=Ubuntu2204
+
+az vmss create -g $rgName \
+-n $vmssName \
+--encryption-at-host \
+--image $image \
+--orchestration-mode flexible \
+--admin-username azureuser \
+--generate-ssh-keys \
+--data-disk-sizes-gb 64 128 \
+Update a Virtual Machine Scale Set to enable encryption at host
+rgName=yourRGName
+vmssName=yourVMName
+
+az vmss update -n $vmssName \
+-g $rgName \
+--set virtualMachineProfile.securityProfile.encryptionAtHost=true
+rgName=yourRGName
+vmssName=yourVMName
+
+az vmss update -n $vmssName \
+-g $rgName \
+--set virtualMachineProfile.securityProfile.encryptionAtHost=true
+Check the status of encryption at host for a Virtual Machine Scale Set
+rgName=yourRGName
+vmssName=yourVMName
+
+az vmss show -n $vmssName \
+-g $rgName \
+--query [virtualMachineProfile.securityProfile.encryptionAtHost] -o tsv
+rgName=yourRGName
+vmssName=yourVMName
+
+az vmss show -n $vmssName \
+-g $rgName \
+--query [virtualMachineProfile.securityProfile.encryptionAtHost] -o tsv
+Update a Virtual Machine Scale Set to disable encryption at host
+You can disable encryption at host on your Virtual Machine Scale Set but, this will only affect VMs created after you disable encryption at host. For existing VMs, you must deallocate the VM,disable encryption at host on that individual VM, then reallocate the VM.
+rgName=yourRGName
+vmssName=yourVMName
+
+az vmss update -n $vmssName \
+-g $rgName \
+--set virtualMachineProfile.securityProfile.encryptionAtHost=false
+rgName=yourRGName
+vmssName=yourVMName
+
+az vmss update -n $vmssName \
+-g $rgName \
+--set virtualMachineProfile.securityProfile.encryptionAtHost=false
+Finding supported VM sizes
+Legacy VM Sizes aren't supported. You can find the list of supported VM sizes by either using resource SKU APIs or the Azure PowerShell module. You can't find the supported sizes using the CLI.
+When calling theResource Skus API, check that theEncryptionAtHostSupportedcapability is set toTrue.
+EncryptionAtHostSupported
+{
+        "resourceType": "virtualMachines",
+        "name": "Standard_DS1_v2",
+        "tier": "Standard",
+        "size": "DS1_v2",
+        "family": "standardDSv2Family",
+        "locations": [
+        "CentralUS"
+        ],
+        "capabilities": [
+        {
+            "name": "EncryptionAtHostSupported",
+            "value": "True"
+        }
+        ]
+    }
+{
+        "resourceType": "virtualMachines",
+        "name": "Standard_DS1_v2",
+        "tier": "Standard",
+        "size": "DS1_v2",
+        "family": "standardDSv2Family",
+        "locations": [
+        "CentralUS"
+        ],
+        "capabilities": [
+        {
+            "name": "EncryptionAtHostSupported",
+            "value": "True"
+        }
+        ]
+    }
+For the Azure PowerShell module, use theGet-AzComputeResourceSkucmdlet.
+$vmSizes=Get-AzComputeResourceSku | where{$_.ResourceType -eq 'virtualMachines' -and $_.Locations.Contains('CentralUS')}
+
+foreach($vmSize in $vmSizes)
+{
+    foreach($capability in $vmSize.capabilities)
+    {
+        if($capability.Name -eq 'EncryptionAtHostSupported' -and $capability.Value -eq 'true')
+        {
+            $vmSize
+
+        }
+
+    }
+}
+$vmSizes=Get-AzComputeResourceSku | where{$_.ResourceType -eq 'virtualMachines' -and $_.Locations.Contains('CentralUS')}
+
+foreach($vmSize in $vmSizes)
+{
+    foreach($capability in $vmSize.capabilities)
+    {
+        if($capability.Name -eq 'EncryptionAtHostSupported' -and $capability.Value -eq 'true')
+        {
+            $vmSize
+
+        }
+
+    }
+}
+Next steps
+Now that you've created and configured these resources, you can use them to secure your managed disks. The following link contains example scripts, each with a respective scenario, that you can use to secure your managed disks.
+Azure Resource Manager template samples
+Feedback
+Was this page helpful?
+Additional resources

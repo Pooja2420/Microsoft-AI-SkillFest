@@ -1,0 +1,1148 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Configure data sources for a Tomcat, JBoss, or Java SE app in Azure App Service
+Article
+2024-12-03
+2 contributors
+In this article
+This article shows how to configure data sources in a Java SE, Tomcat, or JBoss app in App Service.
+Azure App Service runs Java web applications on a fully managed service in three variants:
+Java Standard Edition (SE): Can run an app deployed as a Java Archive (JAR) package that contains an embedded server (such as Spring Boot, Quarkus, Dropwizard, or an app with an embedded Tomcat or Jetty server).
+Tomcat: The built-in Tomcat server can run an app deployed as a web application archive (WAR) package.
+JBoss Enterprise Application Platform (EAP): The built-in JBoss EAP server can run an app deployed as a WAR or enterprise archive (EAR) package. Supported for Linux apps in a set of pricing tiers which includes Free, Premium v3, and Isolated v2.gti
+Configure the data source
+To connect to data sources in Spring Boot applications, we suggest creating connection strings and injecting them into yourapplication.propertiesfile.
+In the "Configuration" section of the App Service page, set a name for the string, paste your JDBC connection string into the value field, and set the type to "Custom". You can optionally set this connection string as slot setting.This connection string is accessible to our application as an environment variable namedCUSTOMCONNSTR_<your-string-name>. For example,CUSTOMCONNSTR_exampledb.
+In the "Configuration" section of the App Service page, set a name for the string, paste your JDBC connection string into the value field, and set the type to "Custom". You can optionally set this connection string as slot setting.
+This connection string is accessible to our application as an environment variable namedCUSTOMCONNSTR_<your-string-name>. For example,CUSTOMCONNSTR_exampledb.
+CUSTOMCONNSTR_<your-string-name>
+CUSTOMCONNSTR_exampledb
+In yourapplication.propertiesfile, reference this connection string with the environment variable name. For our example, we would use the following code:app.datasource.url=${CUSTOMCONNSTR_exampledb}
+In yourapplication.propertiesfile, reference this connection string with the environment variable name. For our example, we would use the following code:
+app.datasource.url=${CUSTOMCONNSTR_exampledb}
+app.datasource.url=${CUSTOMCONNSTR_exampledb}
+For more information, see theSpring Boot documentation on data accessandexternalized configurations.
+Tip
+By default, the Linux Tomcat containers can automatically configure shared data sources for you in the Tomcat server. The only thing for you to do is add an app setting that contains a valid JDBC connection string to an Oracle, SQL Server, PostgreSQL, or MySQL database (including the connection credentials), and App Service automatically adds the corresponding shared database to/usr/local/tomcat/conf/context.xml, using an appropriate driver available in the container. For an end-to-end scenario using this approach, seeTutorial: Build a Tomcat web app with Azure App Service on Linux and MySQL.
+These instructions apply to all database connections. You need to fill placeholders with your chosen database's driver class name and JAR file. Provided is a table with class names and driver downloads for common databases.
+org.postgresql.Driver
+com.mysql.jdbc.Driver
+com.microsoft.sqlserver.jdbc.SQLServerDriver
+To configure Tomcat to use Java Database Connectivity (JDBC) or the Java Persistence API (JPA), first customize theCATALINA_OPTSenvironment variable that is read in by Tomcat at start-up. Set these values through an app setting in theApp Service Maven plugin:
+CATALINA_OPTS
+<appSettings>
+    <property>
+        <name>CATALINA_OPTS</name>
+        <value>"$CATALINA_OPTS -Ddbuser=${DBUSER} -Ddbpassword=${DBPASSWORD} -DconnURL=${CONNURL}"</value>
+    </property>
+</appSettings>
+<appSettings>
+    <property>
+        <name>CATALINA_OPTS</name>
+        <value>"$CATALINA_OPTS -Ddbuser=${DBUSER} -Ddbpassword=${DBPASSWORD} -DconnURL=${CONNURL}"</value>
+    </property>
+</appSettings>
+Or set the environment variables in theConfiguration>Application Settingspage in the Azure portal.
+Next, determine if the data source should be available to one application or to all applications running on the Tomcat servlet.
+Application-level data sources
+Create acontext.xmlfile in theMETA-INF/directory of your project. Create theMETA-INF/directory if it doesn't exist.
+Create acontext.xmlfile in theMETA-INF/directory of your project. Create theMETA-INF/directory if it doesn't exist.
+Incontext.xml, add aContextelement to link the data source to a JNDI address. Replace thedriverClassNameplaceholder with your driver's class name from the table above.<Context>
+    <Resource
+        name="jdbc/dbconnection"
+        type="javax.sql.DataSource"
+        url="${connURL}"
+        driverClassName="<insert your driver class name>"
+        username="${dbuser}"
+        password="${dbpassword}"
+    />
+</Context>
+Incontext.xml, add aContextelement to link the data source to a JNDI address. Replace thedriverClassNameplaceholder with your driver's class name from the table above.
+Context
+driverClassName
+<Context>
+    <Resource
+        name="jdbc/dbconnection"
+        type="javax.sql.DataSource"
+        url="${connURL}"
+        driverClassName="<insert your driver class name>"
+        username="${dbuser}"
+        password="${dbpassword}"
+    />
+</Context>
+<Context>
+    <Resource
+        name="jdbc/dbconnection"
+        type="javax.sql.DataSource"
+        url="${connURL}"
+        driverClassName="<insert your driver class name>"
+        username="${dbuser}"
+        password="${dbpassword}"
+    />
+</Context>
+Update your application'sweb.xmlto use the data source in your application.<resource-env-ref>
+    <resource-env-ref-name>jdbc/dbconnection</resource-env-ref-name>
+    <resource-env-ref-type>javax.sql.DataSource</resource-env-ref-type>
+</resource-env-ref>
+Update your application'sweb.xmlto use the data source in your application.
+<resource-env-ref>
+    <resource-env-ref-name>jdbc/dbconnection</resource-env-ref-name>
+    <resource-env-ref-type>javax.sql.DataSource</resource-env-ref-type>
+</resource-env-ref>
+<resource-env-ref>
+    <resource-env-ref-name>jdbc/dbconnection</resource-env-ref-name>
+    <resource-env-ref-type>javax.sql.DataSource</resource-env-ref-type>
+</resource-env-ref>
+Shared server-level resources
+Linux
+Windows
+Adding a shared, server-level data source requires you to edit Tomcat's server.xml. The most reliable way to do this is as follows:
+Upload astartup scriptand set the path to the script inConfiguration>Startup Command. You can upload the startup script usingFTP.
+Your startup script makes anxsl transformto the server.xml file and output the resulting xml file to/usr/local/tomcat/conf/server.xml. The startup script should install libxslt via apk. Your xsl file and startup script can be uploaded via FTP. Below is an example startup script.
+/usr/local/tomcat/conf/server.xml
+# Install libxslt. Also copy the transform file to /home/tomcat/conf/
+apk add --update libxslt
+
+# Usage: xsltproc --output output.xml style.xsl input.xml
+xsltproc --output /home/tomcat/conf/server.xml /home/tomcat/conf/transform.xsl /usr/local/tomcat/conf/server.xml
+# Install libxslt. Also copy the transform file to /home/tomcat/conf/
+apk add --update libxslt
+
+# Usage: xsltproc --output output.xml style.xsl input.xml
+xsltproc --output /home/tomcat/conf/server.xml /home/tomcat/conf/transform.xsl /usr/local/tomcat/conf/server.xml
+The following example XSL file adds a new connector node to the Tomcat server.xml.
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:output method="xml" indent="yes"/>
+
+  <xsl:template match="@* | node()" name="Copy">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="@* | node()" mode="insertConnector">
+    <xsl:call-template name="Copy" />
+  </xsl:template>
+
+  <xsl:template match="comment()[not(../Connector[@scheme = 'https']) and
+                                 contains(., '&lt;Connector') and
+                                 (contains(., 'scheme=&quot;https&quot;') or
+                                  contains(., &quot;scheme='https'&quot;))]">
+    <xsl:value-of select="." disable-output-escaping="yes" />
+  </xsl:template>
+
+  <xsl:template match="Service[not(Connector[@scheme = 'https'] or
+                                   comment()[contains(., '&lt;Connector') and
+                                             (contains(., 'scheme=&quot;https&quot;') or
+                                              contains(., &quot;scheme='https'&quot;))]
+                                  )]
+                      ">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()" mode="insertConnector" />
+    </xsl:copy>
+  </xsl:template>
+
+  <!-- Add the new connector after the last existing Connector if there's one -->
+  <xsl:template match="Connector[last()]" mode="insertConnector">
+    <xsl:call-template name="Copy" />
+
+    <xsl:call-template name="AddConnector" />
+  </xsl:template>
+
+  <!-- ... or before the first Engine if there's no existing Connector -->
+  <xsl:template match="Engine[1][not(preceding-sibling::Connector)]"
+                mode="insertConnector">
+    <xsl:call-template name="AddConnector" />
+
+    <xsl:call-template name="Copy" />
+  </xsl:template>
+
+  <xsl:template name="AddConnector">
+    <!-- Add new line -->
+    <xsl:text>&#xa;</xsl:text>
+    <!-- This is the new connector -->
+    <Connector port="8443" protocol="HTTP/1.1" SSLEnabled="true" 
+               maxThreads="150" scheme="https" secure="true" 
+               keystoreFile="${{user.home}}/.keystore" keystorePass="changeit"
+               clientAuth="false" sslProtocol="TLS" />
+  </xsl:template>
+
+</xsl:stylesheet>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:output method="xml" indent="yes"/>
+
+  <xsl:template match="@* | node()" name="Copy">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="@* | node()" mode="insertConnector">
+    <xsl:call-template name="Copy" />
+  </xsl:template>
+
+  <xsl:template match="comment()[not(../Connector[@scheme = 'https']) and
+                                 contains(., '&lt;Connector') and
+                                 (contains(., 'scheme=&quot;https&quot;') or
+                                  contains(., &quot;scheme='https'&quot;))]">
+    <xsl:value-of select="." disable-output-escaping="yes" />
+  </xsl:template>
+
+  <xsl:template match="Service[not(Connector[@scheme = 'https'] or
+                                   comment()[contains(., '&lt;Connector') and
+                                             (contains(., 'scheme=&quot;https&quot;') or
+                                              contains(., &quot;scheme='https'&quot;))]
+                                  )]
+                      ">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()" mode="insertConnector" />
+    </xsl:copy>
+  </xsl:template>
+
+  <!-- Add the new connector after the last existing Connector if there's one -->
+  <xsl:template match="Connector[last()]" mode="insertConnector">
+    <xsl:call-template name="Copy" />
+
+    <xsl:call-template name="AddConnector" />
+  </xsl:template>
+
+  <!-- ... or before the first Engine if there's no existing Connector -->
+  <xsl:template match="Engine[1][not(preceding-sibling::Connector)]"
+                mode="insertConnector">
+    <xsl:call-template name="AddConnector" />
+
+    <xsl:call-template name="Copy" />
+  </xsl:template>
+
+  <xsl:template name="AddConnector">
+    <!-- Add new line -->
+    <xsl:text>&#xa;</xsl:text>
+    <!-- This is the new connector -->
+    <Connector port="8443" protocol="HTTP/1.1" SSLEnabled="true" 
+               maxThreads="150" scheme="https" secure="true" 
+               keystoreFile="${{user.home}}/.keystore" keystorePass="changeit"
+               clientAuth="false" sslProtocol="TLS" />
+  </xsl:template>
+
+</xsl:stylesheet>
+Finally, place the driver JARs in the Tomcat classpath and restart your App Service.
+Ensure that the JDBC driver files are available to the Tomcat classloader by placing them in the/home/site/libdirectory. In theCloud Shell, runaz webapp deploy --type=libfor each driver JAR:
+az webapp deploy --type=lib
+az webapp deploy --resource-group <group-name> --name <app-name> --src-path <jar-name>.jar --type=lib --path <jar-name>.jar
+az webapp deploy --resource-group <group-name> --name <app-name> --src-path <jar-name>.jar --type=lib --path <jar-name>.jar
+If you created a server-level data source, restart the App Service Linux application. Tomcat resetsCATALINA_BASEto/home/tomcatand uses the updated configuration.
+CATALINA_BASE
+/home/tomcat
+You can't directly modify a Tomcat installation for server-wide configuration because the installation location is read-only. To make server-level configuration changes to your Windows Tomcat installation, the simplest way is to do the following on app start:
+Copy Tomcat to a local directory (%LOCAL_EXPANDED%) and use that asCATALINA_BASE(seeTomcat documentation on this variable).
+%LOCAL_EXPANDED%
+CATALINA_BASE
+Add your shared data sources to%LOCAL_EXPANDED%\tomcat\conf\server.xmlusing XSL transform.
+%LOCAL_EXPANDED%\tomcat\conf\server.xml
+Create a file namedstartup.cmd%HOME%\site\wwwrootdirectory. This file runs automatically before the Tomcat server starts. The file should have the following content:
+startup.cmd
+%HOME%\site\wwwroot
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -File  %HOME%\site\configure.ps1
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -File  %HOME%\site\configure.ps1
+Next, add the configuration script calledconfigure.ps1to the%HOME%_\sitedirectory with the following code:
+# Locations of xml and xsl files
+$target_xml="$Env:LOCAL_EXPANDED\tomcat\conf\server.xml"
+$target_xsl="$Env:HOME\site\server.xsl"
+
+# Define the transform function
+# Useful if transforming multiple files
+function TransformXML{
+    param ($xml, $xsl, $output)
+
+    if (-not $xml -or -not $xsl -or -not $output)
+    {
+        return 0
+    }
+
+    Try
+    {
+        $xslt_settings = New-Object System.Xml.Xsl.XsltSettings;
+        $XmlUrlResolver = New-Object System.Xml.XmlUrlResolver;
+        $xslt_settings.EnableScript = 1;
+
+        $xslt = New-Object System.Xml.Xsl.XslCompiledTransform;
+        $xslt.Load($xsl,$xslt_settings,$XmlUrlResolver);
+        $xslt.Transform($xml, $output);
+    }
+
+    Catch
+    {
+        $ErrorMessage = $_.Exception.Message
+        $FailedItem = $_.Exception.ItemName
+        echo  'Error'$ErrorMessage':'$FailedItem':' $_.Exception;
+        return 0
+    }
+    return 1
+}
+
+# Start here
+
+# Check for marker file indicating that config has already been done
+if(Test-Path "$Env:LOCAL_EXPANDED\tomcat\config_done_marker"){
+    return 0
+}
+
+# Delete previous Tomcat directory if it exists
+# In case previous config isn't completed or a new config should be forcefully installed
+if(Test-Path "$Env:LOCAL_EXPANDED\tomcat"){
+    Remove-Item "$Env:LOCAL_EXPANDED\tomcat" Recurse
+}
+
+md -Path "$Env:LOCAL_EXPANDED\tomcat"
+
+# Copy Tomcat to local
+# Using the environment variable $AZURE_TOMCAT90_HOME uses the 'default' version of Tomcat
+New-Item "$Env:LOCAL_EXPANDED\tomcat" -ItemType Directory
+Copy-Item -Path "$Env:AZURE_TOMCAT90_HOME\*" "$Env:LOCAL_EXPANDED\tomcat" -Recurse
+
+# Perform the required customization of Tomcat
+$success = TransformXML -xml $target_xml -xsl $target_xsl -output $target_xml
+
+# Mark that the operation was a success if successful
+if($success){
+    New-Item -Path "$Env:LOCAL_EXPANDED\tomcat\config_done_marker" -ItemType File
+}
+# Locations of xml and xsl files
+$target_xml="$Env:LOCAL_EXPANDED\tomcat\conf\server.xml"
+$target_xsl="$Env:HOME\site\server.xsl"
+
+# Define the transform function
+# Useful if transforming multiple files
+function TransformXML{
+    param ($xml, $xsl, $output)
+
+    if (-not $xml -or -not $xsl -or -not $output)
+    {
+        return 0
+    }
+
+    Try
+    {
+        $xslt_settings = New-Object System.Xml.Xsl.XsltSettings;
+        $XmlUrlResolver = New-Object System.Xml.XmlUrlResolver;
+        $xslt_settings.EnableScript = 1;
+
+        $xslt = New-Object System.Xml.Xsl.XslCompiledTransform;
+        $xslt.Load($xsl,$xslt_settings,$XmlUrlResolver);
+        $xslt.Transform($xml, $output);
+    }
+
+    Catch
+    {
+        $ErrorMessage = $_.Exception.Message
+        $FailedItem = $_.Exception.ItemName
+        echo  'Error'$ErrorMessage':'$FailedItem':' $_.Exception;
+        return 0
+    }
+    return 1
+}
+
+# Start here
+
+# Check for marker file indicating that config has already been done
+if(Test-Path "$Env:LOCAL_EXPANDED\tomcat\config_done_marker"){
+    return 0
+}
+
+# Delete previous Tomcat directory if it exists
+# In case previous config isn't completed or a new config should be forcefully installed
+if(Test-Path "$Env:LOCAL_EXPANDED\tomcat"){
+    Remove-Item "$Env:LOCAL_EXPANDED\tomcat" Recurse
+}
+
+md -Path "$Env:LOCAL_EXPANDED\tomcat"
+
+# Copy Tomcat to local
+# Using the environment variable $AZURE_TOMCAT90_HOME uses the 'default' version of Tomcat
+New-Item "$Env:LOCAL_EXPANDED\tomcat" -ItemType Directory
+Copy-Item -Path "$Env:AZURE_TOMCAT90_HOME\*" "$Env:LOCAL_EXPANDED\tomcat" -Recurse
+
+# Perform the required customization of Tomcat
+$success = TransformXML -xml $target_xml -xsl $target_xsl -output $target_xml
+
+# Mark that the operation was a success if successful
+if($success){
+    New-Item -Path "$Env:LOCAL_EXPANDED\tomcat\config_done_marker" -ItemType File
+}
+This PowerShell completes the following steps:
+Check whether a custom Tomcat copy exists already. If it does, the startup script can end here.
+Copy Tomcat locally.
+Add shared data sources to the custom Tomcat's configuration using XSL transform.
+Indicate that configuration was successfully completed.
+A common use case for customizing the built-in Tomcat installation is to modify theserver.xml,context.xml, orweb.xmlTomcat configuration files. App Service already modifies these files to provide platform features. To continue to use these features, it's important to preserve the content of these files when you make changes to them. To accomplish this, use anXSL transformation (XSLT).
+server.xml
+context.xml
+web.xml
+Add an XSL transform file calledconfigure.ps1to the%HOME%_\sitedirectory. You can use the following XSL transform code to add a new connector node toserver.xml. Theidentity transformat the beginning  preserves the original contents of the configuration file.
+server.xml
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+    <xsl:output method="xml" indent="yes"/>
+
+    <!-- Identity transform: this ensures that the original contents of the file are included in the new file -->
+    <!-- Ensure that your transform files include this block -->
+    <xsl:template match="@* | node()" name="Copy">
+      <xsl:copy>
+        <xsl:apply-templates select="@* | node()"/>
+      </xsl:copy>
+    </xsl:template>
+
+    <xsl:template match="@* | node()" mode="insertConnector">
+      <xsl:call-template name="Copy" />
+    </xsl:template>
+
+    <xsl:template match="comment()[not(../Connector[@scheme = 'https']) and
+                                   contains(., '&lt;Connector') and
+                                   (contains(., 'scheme=&quot;https&quot;') or
+                                    contains(., &quot;scheme='https'&quot;))]">
+      <xsl:value-of select="." disable-output-escaping="yes" />
+    </xsl:template>
+
+    <xsl:template match="Service[not(Connector[@scheme = 'https'] or
+                                     comment()[contains(., '&lt;Connector') and
+                                               (contains(., 'scheme=&quot;https&quot;') or
+                                                contains(., &quot;scheme='https'&quot;))]
+                                    )]
+                        ">
+      <xsl:copy>
+        <xsl:apply-templates select="@* | node()" mode="insertConnector" />
+      </xsl:copy>
+    </xsl:template>
+
+    <!-- Add the new connector after the last existing Connector if there's one -->
+    <xsl:template match="Connector[last()]" mode="insertConnector">
+      <xsl:call-template name="Copy" />
+
+      <xsl:call-template name="AddConnector" />
+    </xsl:template>
+
+    <!-- ... or before the first Engine if there's no existing Connector -->
+    <xsl:template match="Engine[1][not(preceding-sibling::Connector)]"
+                  mode="insertConnector">
+      <xsl:call-template name="AddConnector" />
+
+      <xsl:call-template name="Copy" />
+    </xsl:template>
+
+    <xsl:template name="AddConnector">
+      <!-- Add new line -->
+      <xsl:text>&#xa;</xsl:text>
+      <!-- This is the new connector -->
+      <Connector port="8443" protocol="HTTP/1.1" SSLEnabled="true" 
+                 maxThreads="150" scheme="https" secure="true" 
+                 keystoreFile="${{user.home}}/.keystore" keystorePass="changeit"
+                 clientAuth="false" sslProtocol="TLS" />
+    </xsl:template>
+
+</xsl:stylesheet>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+    <xsl:output method="xml" indent="yes"/>
+
+    <!-- Identity transform: this ensures that the original contents of the file are included in the new file -->
+    <!-- Ensure that your transform files include this block -->
+    <xsl:template match="@* | node()" name="Copy">
+      <xsl:copy>
+        <xsl:apply-templates select="@* | node()"/>
+      </xsl:copy>
+    </xsl:template>
+
+    <xsl:template match="@* | node()" mode="insertConnector">
+      <xsl:call-template name="Copy" />
+    </xsl:template>
+
+    <xsl:template match="comment()[not(../Connector[@scheme = 'https']) and
+                                   contains(., '&lt;Connector') and
+                                   (contains(., 'scheme=&quot;https&quot;') or
+                                    contains(., &quot;scheme='https'&quot;))]">
+      <xsl:value-of select="." disable-output-escaping="yes" />
+    </xsl:template>
+
+    <xsl:template match="Service[not(Connector[@scheme = 'https'] or
+                                     comment()[contains(., '&lt;Connector') and
+                                               (contains(., 'scheme=&quot;https&quot;') or
+                                                contains(., &quot;scheme='https'&quot;))]
+                                    )]
+                        ">
+      <xsl:copy>
+        <xsl:apply-templates select="@* | node()" mode="insertConnector" />
+      </xsl:copy>
+    </xsl:template>
+
+    <!-- Add the new connector after the last existing Connector if there's one -->
+    <xsl:template match="Connector[last()]" mode="insertConnector">
+      <xsl:call-template name="Copy" />
+
+      <xsl:call-template name="AddConnector" />
+    </xsl:template>
+
+    <!-- ... or before the first Engine if there's no existing Connector -->
+    <xsl:template match="Engine[1][not(preceding-sibling::Connector)]"
+                  mode="insertConnector">
+      <xsl:call-template name="AddConnector" />
+
+      <xsl:call-template name="Copy" />
+    </xsl:template>
+
+    <xsl:template name="AddConnector">
+      <!-- Add new line -->
+      <xsl:text>&#xa;</xsl:text>
+      <!-- This is the new connector -->
+      <Connector port="8443" protocol="HTTP/1.1" SSLEnabled="true" 
+                 maxThreads="150" scheme="https" secure="true" 
+                 keystoreFile="${{user.home}}/.keystore" keystorePass="changeit"
+                 clientAuth="false" sslProtocol="TLS" />
+    </xsl:template>
+
+</xsl:stylesheet>
+CATALINA_BASE
+The platform also needs to know where your custom version of Tomcat is installed. You can set the installation's location in theCATALINA_BASEapp setting.
+CATALINA_BASE
+You can use the Azure CLI to change this setting:
+az webapp config appsettings set -g $MyResourceGroup -n $MyUniqueApp --settings CATALINA_BASE="%LOCAL_EXPANDED%\tomcat"
+az webapp config appsettings set -g $MyResourceGroup -n $MyUniqueApp --settings CATALINA_BASE="%LOCAL_EXPANDED%\tomcat"
+Or, you can manually change the setting in the Azure portal:
+Go toSettings>Configuration>Application settings.
+SelectNew Application Setting.
+Use these values to create the setting:Name:CATALINA_BASEValue:"%LOCAL_EXPANDED%\tomcat"
+Name:CATALINA_BASE
+CATALINA_BASE
+Value:"%LOCAL_EXPANDED%\tomcat"
+"%LOCAL_EXPANDED%\tomcat"
+Finally, you place the driver JARs in the Tomcat classpath and restart your App Service. Ensure that the JDBC driver files are available to the Tomcat classloader by placing them in the/home/site/libdirectory. In theCloud Shell, runaz webapp deploy --type=libfor each driver JAR:
+az webapp deploy --type=lib
+az webapp deploy --resource-group <group-name> --name <app-name> --src-path <jar-name>.jar --type=lib --target-path <jar-name>.jar
+az webapp deploy --resource-group <group-name> --name <app-name> --src-path <jar-name>.jar --type=lib --target-path <jar-name>.jar
+Tip
+By default, the Linux JBoss containers can automatically configure shared data sources for you in the JBoss server. The only thing for you to do is add an app setting that contains a valid JDBC connection string to an Oracle, SQL Server, PostgreSQL, or MySQL database (including the connection credentials), and App Service automatically adds the corresponding shared data source, using an appropriate driver available in the container. For an end-to-end scenario using this approach, seeTutorial: Build a JBoss web app with Azure App Service on Linux and MySQL.
+There are three core steps whenregistering a data source with JBoss EAP:
+Upload the JDBC driver.
+Add the JDBC driver as a module.
+Add a data source with the module.
+App Service is a stateless hosting service, so you must put these steps into a startup script and run it each time the JBoss container starts. Using PostgreSQL, MySQL, and SQL Database as an examples:
+PostgreSQL
+MySQL
+SQL Database
+Put your JBoss CLI commands into a file namedjboss-cli-commands.cli. The JBoss commands must add the module and register it as a data source. The following example shows the JBoss CLI commands for creating a PostgreSQL data source with the JNDI namejava:jboss/datasources/postgresDS.module add --name=org.postgresql --resources=/home/site/libs/postgresql-42.7.4.jar
+/subsystem=datasources/jdbc-driver=postgresql:add(driver-name="postgresql",driver-module-name="org.postgresql",driver-class-name="org.postgresql.Driver",driver-xa-datasource-class-name="org.postgresql.xa.PGXADataSource")
+data-source add --name=postgresql --driver-name="postgresql" --jndi-name="java:jboss/datasources/postgresDS" --connection-url="jdbc:postgresql://\${env.DB_HOST}:5432/postgres" --user-name="\${env.DB_USERNAME}" --password="\${env.DB_PASSWORD}" --enabled=true --use-java-context=trueNote that themodule addcommand uses three environment variables (DB_HOST,DB_USERNAME, andDB_PASSWORD), which you must add in App Service as app settings. The script adds them without the--resolve-parameter-valuesflag so that JBoss doesn't save their values in plaintext.
+Put your JBoss CLI commands into a file namedjboss-cli-commands.cli. The JBoss commands must add the module and register it as a data source. The following example shows the JBoss CLI commands for creating a PostgreSQL data source with the JNDI namejava:jboss/datasources/postgresDS.
+java:jboss/datasources/postgresDS
+module add --name=org.postgresql --resources=/home/site/libs/postgresql-42.7.4.jar
+/subsystem=datasources/jdbc-driver=postgresql:add(driver-name="postgresql",driver-module-name="org.postgresql",driver-class-name="org.postgresql.Driver",driver-xa-datasource-class-name="org.postgresql.xa.PGXADataSource")
+data-source add --name=postgresql --driver-name="postgresql" --jndi-name="java:jboss/datasources/postgresDS" --connection-url="jdbc:postgresql://\${env.DB_HOST}:5432/postgres" --user-name="\${env.DB_USERNAME}" --password="\${env.DB_PASSWORD}" --enabled=true --use-java-context=true
+module add --name=org.postgresql --resources=/home/site/libs/postgresql-42.7.4.jar
+/subsystem=datasources/jdbc-driver=postgresql:add(driver-name="postgresql",driver-module-name="org.postgresql",driver-class-name="org.postgresql.Driver",driver-xa-datasource-class-name="org.postgresql.xa.PGXADataSource")
+data-source add --name=postgresql --driver-name="postgresql" --jndi-name="java:jboss/datasources/postgresDS" --connection-url="jdbc:postgresql://\${env.DB_HOST}:5432/postgres" --user-name="\${env.DB_USERNAME}" --password="\${env.DB_PASSWORD}" --enabled=true --use-java-context=true
+Note that themodule addcommand uses three environment variables (DB_HOST,DB_USERNAME, andDB_PASSWORD), which you must add in App Service as app settings. The script adds them without the--resolve-parameter-valuesflag so that JBoss doesn't save their values in plaintext.
+module add
+DB_HOST
+DB_USERNAME
+DB_PASSWORD
+--resolve-parameter-values
+Create a startup script,startup.sh, that calls the JBoss CLI commands. The following example shows how to call yourjboss-cli-commands.cli. Later, you'll configure App Service to run this script when the container starts.$JBOSS_HOME/bin/jboss-cli.sh --connect --file=/home/site/scripts/jboss_cli_commands.cli
+Create a startup script,startup.sh, that calls the JBoss CLI commands. The following example shows how to call yourjboss-cli-commands.cli. Later, you'll configure App Service to run this script when the container starts.
+jboss-cli-commands.cli
+$JBOSS_HOME/bin/jboss-cli.sh --connect --file=/home/site/scripts/jboss_cli_commands.cli
+$JBOSS_HOME/bin/jboss-cli.sh --connect --file=/home/site/scripts/jboss_cli_commands.cli
+Using a deployment option of your choice, upload your JDBC driver,jboss-cli-commands.cli, andstartup.shto the paths specified in the respective scripts. Especially, uploadstartup.shas a startup file. For example:Azure CLIAzure Maven PluginAzure Pipelinesexport RESOURCE_GROUP_NAME=<resource-group-name>
+export APP_NAME=<app-name>
+
+# The lib type uploads to /home/site/libs by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path postgresql-42.7.4.jar --target-path postgresql-42.7.4.jar --type lib
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+# The startup type uploads to /home/site/scripts/startup.sh by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path startup.sh --type startupFor more information, seeDeploy files to App Service.<deployment>
+    <resources>
+        <resource>
+            <!-- The lib type uploads to /home/site/libs by default. -->
+            <type>lib</type>
+            <directory>${project.build.directory}/${project.artifactId}/META-INF/lib</directory> <!-- Assume driver is part of POM dependencies. -->
+            <includes>
+                <include>postgresql-42.7.4.jar</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The script type uploads to /home/site/scripts by default. -->
+            <type>script</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>jboss_cli_commands.cli</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The startup type uploads to /home/site/scripts by default. -->
+            <type>startup</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>startup.sh</include>
+            </includes>
+        </resource>
+        ...
+    </resources>
+</deployment>variables: # Set <subscription-id>, <resource-group-name>, <app-name> for your environment
+- name: SUBSCRIPTION_ID
+  value: <subscription-id>
+- name: RESOURCE_GROUP_NAME
+  value: <resource-group-name>
+- name: APP_NAME
+  value: <app-name>
+
+steps: 
+- task: AzureCLI@2
+  displayName: Azure CLI
+  inputs:
+    azureSubscription: $(SUBSCRIPTION_ID)
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      # The lib type uploads to /home/site/libs by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path postgresql-42.7.4.jar --target-path postgresql-42.7.4.jar --type lib
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+      # The startup type uploads to /home/site/scripts/startup.sh by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path startup.sh --type startup
+Using a deployment option of your choice, upload your JDBC driver,jboss-cli-commands.cli, andstartup.shto the paths specified in the respective scripts. Especially, uploadstartup.shas a startup file. For example:
+Azure CLI
+Azure Maven Plugin
+Azure Pipelines
+export RESOURCE_GROUP_NAME=<resource-group-name>
+export APP_NAME=<app-name>
+
+# The lib type uploads to /home/site/libs by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path postgresql-42.7.4.jar --target-path postgresql-42.7.4.jar --type lib
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+# The startup type uploads to /home/site/scripts/startup.sh by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path startup.sh --type startup
+export RESOURCE_GROUP_NAME=<resource-group-name>
+export APP_NAME=<app-name>
+
+# The lib type uploads to /home/site/libs by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path postgresql-42.7.4.jar --target-path postgresql-42.7.4.jar --type lib
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+# The startup type uploads to /home/site/scripts/startup.sh by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path startup.sh --type startup
+For more information, seeDeploy files to App Service.
+<deployment>
+    <resources>
+        <resource>
+            <!-- The lib type uploads to /home/site/libs by default. -->
+            <type>lib</type>
+            <directory>${project.build.directory}/${project.artifactId}/META-INF/lib</directory> <!-- Assume driver is part of POM dependencies. -->
+            <includes>
+                <include>postgresql-42.7.4.jar</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The script type uploads to /home/site/scripts by default. -->
+            <type>script</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>jboss_cli_commands.cli</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The startup type uploads to /home/site/scripts by default. -->
+            <type>startup</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>startup.sh</include>
+            </includes>
+        </resource>
+        ...
+    </resources>
+</deployment>
+<deployment>
+    <resources>
+        <resource>
+            <!-- The lib type uploads to /home/site/libs by default. -->
+            <type>lib</type>
+            <directory>${project.build.directory}/${project.artifactId}/META-INF/lib</directory> <!-- Assume driver is part of POM dependencies. -->
+            <includes>
+                <include>postgresql-42.7.4.jar</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The script type uploads to /home/site/scripts by default. -->
+            <type>script</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>jboss_cli_commands.cli</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The startup type uploads to /home/site/scripts by default. -->
+            <type>startup</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>startup.sh</include>
+            </includes>
+        </resource>
+        ...
+    </resources>
+</deployment>
+variables: # Set <subscription-id>, <resource-group-name>, <app-name> for your environment
+- name: SUBSCRIPTION_ID
+  value: <subscription-id>
+- name: RESOURCE_GROUP_NAME
+  value: <resource-group-name>
+- name: APP_NAME
+  value: <app-name>
+
+steps: 
+- task: AzureCLI@2
+  displayName: Azure CLI
+  inputs:
+    azureSubscription: $(SUBSCRIPTION_ID)
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      # The lib type uploads to /home/site/libs by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path postgresql-42.7.4.jar --target-path postgresql-42.7.4.jar --type lib
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+      # The startup type uploads to /home/site/scripts/startup.sh by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path startup.sh --type startup
+variables: # Set <subscription-id>, <resource-group-name>, <app-name> for your environment
+- name: SUBSCRIPTION_ID
+  value: <subscription-id>
+- name: RESOURCE_GROUP_NAME
+  value: <resource-group-name>
+- name: APP_NAME
+  value: <app-name>
+
+steps: 
+- task: AzureCLI@2
+  displayName: Azure CLI
+  inputs:
+    azureSubscription: $(SUBSCRIPTION_ID)
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      # The lib type uploads to /home/site/libs by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path postgresql-42.7.4.jar --target-path postgresql-42.7.4.jar --type lib
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+      # The startup type uploads to /home/site/scripts/startup.sh by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path startup.sh --type startup
+To confirm that the data source was added to the JBoss server, SSH into your webapp and run$JBOSS_HOME/bin/jboss-cli.sh --connect. Once you're connected to JBoss, run the/subsystem=datasources:read-resourceto print a list of the data sources.
+$JBOSS_HOME/bin/jboss-cli.sh --connect
+/subsystem=datasources:read-resource
+As defined byjboss-cli-commands.clipreviously, you can access the PostgreSQL connection using the JNDI namejava:jboss/datasources/postgresDS.
+java:jboss/datasources/postgresDS
+Put your JBoss CLI commands into a file namedjboss-cli-commands.cli. The JBoss commands must add the module and register it as a data source. The following example shows the JBoss CLI commands for creating a MySQL data source with the JNDI namejava:jboss/datasources/mysqlDS.module add --name=com.mysql.mysql-connector-j --resources=/home/site/libs/mysql-connector-j-9.1.0.jar
+/subsystem=datasources/jdbc-driver=mysql:add(driver-name="mysql",driver-module-name="com.mysql.mysql-connector-j",driver-class-name="com.mysql.cj.jdbc.Driver",driver-xa-datasource-class-name="com.mysql.cj.jdbc.MysqlXADataSource")
+data-source add --name=mysql --driver-name="mysql" --jndi-name="java:jboss/datasources/mysqlDS" --connection-url="jdbc:mysql://\${env.DB_HOST}:5432/mysql?serverTimezone=UTC" --user-name="\${env.DB_USERNAME}" --password="\${env.DB_PASSWORD}" --enabled=true --use-java-context=trueNote that themodule addcommand uses three environment variables (DB_HOST,DB_USERNAME, andDB_PASSWORD), which you must add in App Service as app settings. The script adds them without the--resolve-parameter-valuesflag so that JBoss doesn't save their values in plaintext.
+Put your JBoss CLI commands into a file namedjboss-cli-commands.cli. The JBoss commands must add the module and register it as a data source. The following example shows the JBoss CLI commands for creating a MySQL data source with the JNDI namejava:jboss/datasources/mysqlDS.
+java:jboss/datasources/mysqlDS
+module add --name=com.mysql.mysql-connector-j --resources=/home/site/libs/mysql-connector-j-9.1.0.jar
+/subsystem=datasources/jdbc-driver=mysql:add(driver-name="mysql",driver-module-name="com.mysql.mysql-connector-j",driver-class-name="com.mysql.cj.jdbc.Driver",driver-xa-datasource-class-name="com.mysql.cj.jdbc.MysqlXADataSource")
+data-source add --name=mysql --driver-name="mysql" --jndi-name="java:jboss/datasources/mysqlDS" --connection-url="jdbc:mysql://\${env.DB_HOST}:5432/mysql?serverTimezone=UTC" --user-name="\${env.DB_USERNAME}" --password="\${env.DB_PASSWORD}" --enabled=true --use-java-context=true
+module add --name=com.mysql.mysql-connector-j --resources=/home/site/libs/mysql-connector-j-9.1.0.jar
+/subsystem=datasources/jdbc-driver=mysql:add(driver-name="mysql",driver-module-name="com.mysql.mysql-connector-j",driver-class-name="com.mysql.cj.jdbc.Driver",driver-xa-datasource-class-name="com.mysql.cj.jdbc.MysqlXADataSource")
+data-source add --name=mysql --driver-name="mysql" --jndi-name="java:jboss/datasources/mysqlDS" --connection-url="jdbc:mysql://\${env.DB_HOST}:5432/mysql?serverTimezone=UTC" --user-name="\${env.DB_USERNAME}" --password="\${env.DB_PASSWORD}" --enabled=true --use-java-context=true
+Note that themodule addcommand uses three environment variables (DB_HOST,DB_USERNAME, andDB_PASSWORD), which you must add in App Service as app settings. The script adds them without the--resolve-parameter-valuesflag so that JBoss doesn't save their values in plaintext.
+module add
+DB_HOST
+DB_USERNAME
+DB_PASSWORD
+--resolve-parameter-values
+Create a startup script,startup.sh, that calls the JBoss CLI commands. The following example shows how to call yourjboss-cli-commands.cli. Later, you'll configure App Service to run this script when the container starts.$JBOSS_HOME/bin/jboss-cli.sh --connect --file=/home/site/scripts/jboss_cli_commands.cli
+Create a startup script,startup.sh, that calls the JBoss CLI commands. The following example shows how to call yourjboss-cli-commands.cli. Later, you'll configure App Service to run this script when the container starts.
+jboss-cli-commands.cli
+$JBOSS_HOME/bin/jboss-cli.sh --connect --file=/home/site/scripts/jboss_cli_commands.cli
+$JBOSS_HOME/bin/jboss-cli.sh --connect --file=/home/site/scripts/jboss_cli_commands.cli
+Using a deployment option of your choice, upload your JDBC driver,jboss-cli-commands.cli, andstartup.shto the paths specified in the respective scripts. Especially, uploadstartup.shas a startup file. For example:Azure CLIAzure Maven PluginAzure Pipelinesexport RESOURCE_GROUP_NAME=<resource-group-name>
+export APP_NAME=<app-name>
+
+# The lib type uploads to /home/site/libs by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path mysql-connector-j-9.1.0.jar --target-path mysql-connector-j-9.1.0.jar --type lib
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+# The startup type uploads to /home/site/scripts/startup.sh by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path startup.sh --type startupFor more information, seeDeploy files to App Service.<deployment>
+    <resources>
+        <resource>
+            <!-- The lib type uploads to /home/site/libs by default. -->
+            <type>lib</type>
+            <directory>${project.build.directory}/${project.artifactId}/META-INF/lib</directory> <!-- Assume driver is part of POM dependencies. -->
+            <includes>
+                <include>mysql-connector-j-9.1.0.jar</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The script type uploads to /home/site/scripts by default. -->
+            <type>script</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>jboss_cli_commands.cli</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The startup type uploads to /home/site/scripts/startup.sh by default -->
+            <type>startup</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>startup.sh</include>
+            </includes>
+        </resource>
+        ...
+    </resources>
+</deployment>variables: # Set <subscription-id>, <resource-group-name>, <app-name> for your environment
+- name: SUBSCRIPTION_ID
+  value: <subscription-id>
+- name: RESOURCE_GROUP_NAME
+  value: <resource-group-name>
+- name: APP_NAME
+  value: <app-name>
+
+steps: 
+- task: AzureCLI@2
+  displayName: Azure CLI
+  inputs:
+    azureSubscription: $(SUBSCRIPTION_ID)
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      # The lib type uploads to /home/site/libs by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path mysql-connector-j-9.1.0.jar --target-path mysql-connector-j-9.1.0.jar --type lib
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+      # The startup type uploads to /home/site/scripts/startup.sh by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path startup.sh --type startup
+Using a deployment option of your choice, upload your JDBC driver,jboss-cli-commands.cli, andstartup.shto the paths specified in the respective scripts. Especially, uploadstartup.shas a startup file. For example:
+Azure CLI
+Azure Maven Plugin
+Azure Pipelines
+export RESOURCE_GROUP_NAME=<resource-group-name>
+export APP_NAME=<app-name>
+
+# The lib type uploads to /home/site/libs by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path mysql-connector-j-9.1.0.jar --target-path mysql-connector-j-9.1.0.jar --type lib
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+# The startup type uploads to /home/site/scripts/startup.sh by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path startup.sh --type startup
+export RESOURCE_GROUP_NAME=<resource-group-name>
+export APP_NAME=<app-name>
+
+# The lib type uploads to /home/site/libs by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path mysql-connector-j-9.1.0.jar --target-path mysql-connector-j-9.1.0.jar --type lib
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+# The startup type uploads to /home/site/scripts/startup.sh by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path startup.sh --type startup
+For more information, seeDeploy files to App Service.
+<deployment>
+    <resources>
+        <resource>
+            <!-- The lib type uploads to /home/site/libs by default. -->
+            <type>lib</type>
+            <directory>${project.build.directory}/${project.artifactId}/META-INF/lib</directory> <!-- Assume driver is part of POM dependencies. -->
+            <includes>
+                <include>mysql-connector-j-9.1.0.jar</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The script type uploads to /home/site/scripts by default. -->
+            <type>script</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>jboss_cli_commands.cli</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The startup type uploads to /home/site/scripts/startup.sh by default -->
+            <type>startup</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>startup.sh</include>
+            </includes>
+        </resource>
+        ...
+    </resources>
+</deployment>
+<deployment>
+    <resources>
+        <resource>
+            <!-- The lib type uploads to /home/site/libs by default. -->
+            <type>lib</type>
+            <directory>${project.build.directory}/${project.artifactId}/META-INF/lib</directory> <!-- Assume driver is part of POM dependencies. -->
+            <includes>
+                <include>mysql-connector-j-9.1.0.jar</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The script type uploads to /home/site/scripts by default. -->
+            <type>script</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>jboss_cli_commands.cli</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The startup type uploads to /home/site/scripts/startup.sh by default -->
+            <type>startup</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>startup.sh</include>
+            </includes>
+        </resource>
+        ...
+    </resources>
+</deployment>
+variables: # Set <subscription-id>, <resource-group-name>, <app-name> for your environment
+- name: SUBSCRIPTION_ID
+  value: <subscription-id>
+- name: RESOURCE_GROUP_NAME
+  value: <resource-group-name>
+- name: APP_NAME
+  value: <app-name>
+
+steps: 
+- task: AzureCLI@2
+  displayName: Azure CLI
+  inputs:
+    azureSubscription: $(SUBSCRIPTION_ID)
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      # The lib type uploads to /home/site/libs by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path mysql-connector-j-9.1.0.jar --target-path mysql-connector-j-9.1.0.jar --type lib
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+      # The startup type uploads to /home/site/scripts/startup.sh by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path startup.sh --type startup
+variables: # Set <subscription-id>, <resource-group-name>, <app-name> for your environment
+- name: SUBSCRIPTION_ID
+  value: <subscription-id>
+- name: RESOURCE_GROUP_NAME
+  value: <resource-group-name>
+- name: APP_NAME
+  value: <app-name>
+
+steps: 
+- task: AzureCLI@2
+  displayName: Azure CLI
+  inputs:
+    azureSubscription: $(SUBSCRIPTION_ID)
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      # The lib type uploads to /home/site/libs by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path mysql-connector-j-9.1.0.jar --target-path mysql-connector-j-9.1.0.jar --type lib
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+      # The startup type uploads to /home/site/scripts/startup.sh by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path startup.sh --type startup
+To confirm that the data source was added to the JBoss server, SSH into your webapp and run$JBOSS_HOME/bin/jboss-cli.sh --connect. Once you're connected to JBoss, run the/subsystem=datasources:read-resourceto print a list of the data sources.
+$JBOSS_HOME/bin/jboss-cli.sh --connect
+/subsystem=datasources:read-resource
+As defined byjboss-cli-commands.clipreviously, you can access the MySQL connection using the JNDI namejava:jboss/datasources/mysqlDS.
+java:jboss/datasources/mysqlDS
+Put your JBoss CLI commands into a file namedjboss-cli-commands.cli. The JBoss commands must add the module and register it as a data source. The following example shows the JBoss CLI commands for creating a data source for Azure SQL Database with the JNDI namejava:jboss/datasources/sqlDS.module add --name=sqlserver --resources=/home/site/libs/mssql-jdbc-11.2.3.jre17.jar
+/subsystem=datasources/jdbc-driver=sqlserver:add(driver-name="sqlserver",driver-module-name="sqlserver",driver-class-name="com.microsoft.sqlserver.jdbc.SQLServerDriver",driver-xa-datasource-class-name="com.microsoft.sqlserver.jdbc.SQLServerXADataSource")
+data-source add --name=sqlDS --jndi-name=java:jboss/datasources/sqlDS --driver-name=sqlserver --connection-url="jdbc:sqlserver://\${env.DB_HOST}:1433;databaseName=master" --user-name="\${env.DB_USERNAME}" --password="\${env.DB_PASSWORD}" --validate-on-match=true --background-validation=false --valid-connection-checker-class-name=org.jboss.jca.adapters.jdbc.extensions.mssql.MSSQLValidConnectionChecker --exception-sorter-class-name=org.jboss.jca.adapters.jdbc.extensions.mssql.MSSQLExceptionSorterNote that themodule addcommand uses three environment variables (DB_HOST,DB_USERNAME, andDB_PASSWORD), which you must add in App Service as app settings. The script adds them without the--resolve-parameter-valuesflag so that JBoss doesn't save their values in plaintext.
+Put your JBoss CLI commands into a file namedjboss-cli-commands.cli. The JBoss commands must add the module and register it as a data source. The following example shows the JBoss CLI commands for creating a data source for Azure SQL Database with the JNDI namejava:jboss/datasources/sqlDS.
+java:jboss/datasources/sqlDS
+module add --name=sqlserver --resources=/home/site/libs/mssql-jdbc-11.2.3.jre17.jar
+/subsystem=datasources/jdbc-driver=sqlserver:add(driver-name="sqlserver",driver-module-name="sqlserver",driver-class-name="com.microsoft.sqlserver.jdbc.SQLServerDriver",driver-xa-datasource-class-name="com.microsoft.sqlserver.jdbc.SQLServerXADataSource")
+data-source add --name=sqlDS --jndi-name=java:jboss/datasources/sqlDS --driver-name=sqlserver --connection-url="jdbc:sqlserver://\${env.DB_HOST}:1433;databaseName=master" --user-name="\${env.DB_USERNAME}" --password="\${env.DB_PASSWORD}" --validate-on-match=true --background-validation=false --valid-connection-checker-class-name=org.jboss.jca.adapters.jdbc.extensions.mssql.MSSQLValidConnectionChecker --exception-sorter-class-name=org.jboss.jca.adapters.jdbc.extensions.mssql.MSSQLExceptionSorter
+module add --name=sqlserver --resources=/home/site/libs/mssql-jdbc-11.2.3.jre17.jar
+/subsystem=datasources/jdbc-driver=sqlserver:add(driver-name="sqlserver",driver-module-name="sqlserver",driver-class-name="com.microsoft.sqlserver.jdbc.SQLServerDriver",driver-xa-datasource-class-name="com.microsoft.sqlserver.jdbc.SQLServerXADataSource")
+data-source add --name=sqlDS --jndi-name=java:jboss/datasources/sqlDS --driver-name=sqlserver --connection-url="jdbc:sqlserver://\${env.DB_HOST}:1433;databaseName=master" --user-name="\${env.DB_USERNAME}" --password="\${env.DB_PASSWORD}" --validate-on-match=true --background-validation=false --valid-connection-checker-class-name=org.jboss.jca.adapters.jdbc.extensions.mssql.MSSQLValidConnectionChecker --exception-sorter-class-name=org.jboss.jca.adapters.jdbc.extensions.mssql.MSSQLExceptionSorter
+Note that themodule addcommand uses three environment variables (DB_HOST,DB_USERNAME, andDB_PASSWORD), which you must add in App Service as app settings. The script adds them without the--resolve-parameter-valuesflag so that JBoss doesn't save their values in plaintext.
+module add
+DB_HOST
+DB_USERNAME
+DB_PASSWORD
+--resolve-parameter-values
+Create a startup script,startup.sh, that calls the JBoss CLI commands. The following example shows how to call yourjboss-cli-commands.cli. Later, you'll configure App Service to run this script when the container starts.$JBOSS_HOME/bin/jboss-cli.sh --connect --file=/home/site/scripts/jboss_cli_commands.cli
+Create a startup script,startup.sh, that calls the JBoss CLI commands. The following example shows how to call yourjboss-cli-commands.cli. Later, you'll configure App Service to run this script when the container starts.
+jboss-cli-commands.cli
+$JBOSS_HOME/bin/jboss-cli.sh --connect --file=/home/site/scripts/jboss_cli_commands.cli
+$JBOSS_HOME/bin/jboss-cli.sh --connect --file=/home/site/scripts/jboss_cli_commands.cli
+Using a deployment option of your choice, upload your JDBC driver,jboss-cli-commands.cli, andstartup.shto the paths specified in the respective scripts. Especially, uploadstartup.shas a startup file. For example:Azure CLIAzure Maven PluginAzure Pipelinesexport RESOURCE_GROUP_NAME=<resource-group-name>
+export APP_NAME=<app-name>
+
+# The lib type uploads to /home/site/libs by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path mssql-jdbc-11.2.3.jre17.jar --target-path mssql-jdbc-11.2.3.jre17.jar --type lib
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+# The startup type uploads to /home/site/scripts/startup.sh by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path startup.sh --type startupFor more information, seeDeploy files to App Service.<deployment>
+    <resources>
+        <resource>
+            <!-- The lib type uploads to /home/site/libs by default. -->
+            <type>lib</type>
+            <directory>${project.build.directory}/${project.artifactId}/META-INF/lib</directory> <!-- Assume driver is part of POM dependencies. -->
+            <includes>
+                <include>mssql-jdbc-11.2.3.jre17.jar</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The script type uploads to /home/site/scripts by default. -->
+            <type>script</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>jboss_cli_commands.cli</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The startup type uploads to /home/site/scripts/startup.sh by default -->
+            <type>startup</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>startup.sh</include>
+            </includes>
+        </resource>
+        ...
+    </resources>
+</deployment>variables: # Set <subscription-id>, <resource-group-name>, <app-name> for your environment
+- name: SUBSCRIPTION_ID
+  value: <subscription-id>
+- name: RESOURCE_GROUP_NAME
+  value: <resource-group-name>
+- name: APP_NAME
+  value: <app-name>
+
+steps: 
+- task: AzureCLI@2
+  displayName: Azure CLI
+  inputs:
+    azureSubscription: $(SUBSCRIPTION_ID)
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      # The lib type uploads to /home/site/libs by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path mssql-jdbc-11.2.3.jre17.jar --target-path mssql-jdbc-11.2.3.jre17.jar --type lib
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+      # The startup type uploads to /home/site/scripts/startup.sh by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path startup.sh --type startup
+Using a deployment option of your choice, upload your JDBC driver,jboss-cli-commands.cli, andstartup.shto the paths specified in the respective scripts. Especially, uploadstartup.shas a startup file. For example:
+Azure CLI
+Azure Maven Plugin
+Azure Pipelines
+export RESOURCE_GROUP_NAME=<resource-group-name>
+export APP_NAME=<app-name>
+
+# The lib type uploads to /home/site/libs by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path mssql-jdbc-11.2.3.jre17.jar --target-path mssql-jdbc-11.2.3.jre17.jar --type lib
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+# The startup type uploads to /home/site/scripts/startup.sh by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path startup.sh --type startup
+export RESOURCE_GROUP_NAME=<resource-group-name>
+export APP_NAME=<app-name>
+
+# The lib type uploads to /home/site/libs by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path mssql-jdbc-11.2.3.jre17.jar --target-path mssql-jdbc-11.2.3.jre17.jar --type lib
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+# The startup type uploads to /home/site/scripts/startup.sh by default.
+az webapp deploy --resource-group $RESOURCE_GROUP_NAME --name $APP_NAME --src-path startup.sh --type startup
+For more information, seeDeploy files to App Service.
+<deployment>
+    <resources>
+        <resource>
+            <!-- The lib type uploads to /home/site/libs by default. -->
+            <type>lib</type>
+            <directory>${project.build.directory}/${project.artifactId}/META-INF/lib</directory> <!-- Assume driver is part of POM dependencies. -->
+            <includes>
+                <include>mssql-jdbc-11.2.3.jre17.jar</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The script type uploads to /home/site/scripts by default. -->
+            <type>script</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>jboss_cli_commands.cli</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The startup type uploads to /home/site/scripts/startup.sh by default -->
+            <type>startup</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>startup.sh</include>
+            </includes>
+        </resource>
+        ...
+    </resources>
+</deployment>
+<deployment>
+    <resources>
+        <resource>
+            <!-- The lib type uploads to /home/site/libs by default. -->
+            <type>lib</type>
+            <directory>${project.build.directory}/${project.artifactId}/META-INF/lib</directory> <!-- Assume driver is part of POM dependencies. -->
+            <includes>
+                <include>mssql-jdbc-11.2.3.jre17.jar</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The script type uploads to /home/site/scripts by default. -->
+            <type>script</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>jboss_cli_commands.cli</include>
+            </includes>
+        </resource>
+        <resource>
+            <!-- The startup type uploads to /home/site/scripts/startup.sh by default -->
+            <type>startup</type>
+            <directory>${project.scriptSourceDirectory}</directory> <!-- Assume script is in src/main/scripts. -->
+            <includes>
+                <include>startup.sh</include>
+            </includes>
+        </resource>
+        ...
+    </resources>
+</deployment>
+variables: # Set <subscription-id>, <resource-group-name>, <app-name> for your environment
+- name: SUBSCRIPTION_ID
+  value: <subscription-id>
+- name: RESOURCE_GROUP_NAME
+  value: <resource-group-name>
+- name: APP_NAME
+  value: <app-name>
+
+steps: 
+- task: AzureCLI@2
+  displayName: Azure CLI
+  inputs:
+    azureSubscription: $(SUBSCRIPTION_ID)
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      # The lib type uploads to /home/site/libs by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path mssql-jdbc-11.2.3.jre17.jar --target-path mssql-jdbc-11.2.3.jre17.jar --type lib
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+      # The startup type uploads to /home/site/scripts/startup.sh by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path startup.sh --type startup
+variables: # Set <subscription-id>, <resource-group-name>, <app-name> for your environment
+- name: SUBSCRIPTION_ID
+  value: <subscription-id>
+- name: RESOURCE_GROUP_NAME
+  value: <resource-group-name>
+- name: APP_NAME
+  value: <app-name>
+
+steps: 
+- task: AzureCLI@2
+  displayName: Azure CLI
+  inputs:
+    azureSubscription: $(SUBSCRIPTION_ID)
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      # The lib type uploads to /home/site/libs by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path mssql-jdbc-11.2.3.jre17.jar --target-path mssql-jdbc-11.2.3.jre17.jar --type lib
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path jboss_cli_commands.cli --target-path /home/site/scripts/jboss_cli_commands.cli --type static
+      # The startup type uploads to /home/site/scripts/startup.sh by default.
+      az webapp deploy --resource-group $(RESOURCE_GROUP_NAME) --name $(APP_NAME) --src-path startup.sh --type startup
+To confirm that the data source was added to the JBoss server, SSH into your webapp and run$JBOSS_HOME/bin/jboss-cli.sh --connect. Once you're connected to JBoss, run the/subsystem=datasources:read-resourceto print a list of the data sources.
+$JBOSS_HOME/bin/jboss-cli.sh --connect
+/subsystem=datasources:read-resource
+As defined byjboss-cli-commands.clipreviously, you can access the SQL Database connection using the JNDI namejava:jboss/datasources/sqlDS.
+java:jboss/datasources/sqlDS
+Next steps
+Visit theAzure for Java Developerscenter to find Azure quickstarts, tutorials, and Java reference documentation.
+App Service Linux FAQ
+Environment variables and app settings reference
+Feedback
+Was this page helpful?
+Additional resources

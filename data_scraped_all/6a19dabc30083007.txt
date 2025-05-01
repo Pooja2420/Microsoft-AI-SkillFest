@@ -1,0 +1,195 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Integrate DevTest Labs into Azure Pipelines
+Article
+2021-12-28
+1 contributor
+In this article
+You can use the Azure DevTest Labs Tasks extension to integrate Azure DevTest Labs into Azure Pipelines continuous integration and delivery (CI/CD) pipelines. The extension installs several tasks into Azure Pipelines, including:
+Create a virtual machine (VM)
+Create a custom image from a VM
+Delete a VM
+These tasks make it easy to, for example, quickly deploy agolden imageVM, run a specific test, and then delete the VM.
+This article shows how to use Azure DevTest Labs Tasks to create and deploy a VM, create a custom image, and then delete the VM, all in one release pipeline. You'd ordinarily perform these tasks separately in your own build, test, and deployment pipelines.
+Get started with Azure DevTest Labs
+New to Azure?Create a free Azure account.
+Already on Azure? Create your first lab andget started with Azure DevTest Labs in minutes.
+Prerequisites
+In the Azure portal, create a DevTest Labs lab, or use an existing one.
+In the Azure portal, create a DevTest Labs lab, or use an existing one.
+Register or sign into yourAzure DevOps Servicesorganization, andcreate a project, or use an existing project.
+Register or sign into yourAzure DevOps Servicesorganization, andcreate a project, or use an existing project.
+Install the Azure DevTest Labs Tasks extension from Visual Studio Marketplace:Go toAzure DevTest Labs Tasks.SelectGet it free.Select your Azure DevOps Services organization from the dropdown list, and then selectInstall.
+Install the Azure DevTest Labs Tasks extension from Visual Studio Marketplace:
+Go toAzure DevTest Labs Tasks.
+SelectGet it free.
+Select your Azure DevOps Services organization from the dropdown list, and then selectInstall.
+Create a template to build a lab VM
+First, construct an Azure Resource Manager (ARM) template that creates a lab VM on demand.
+In your lab in the Azure portal, selectAddin the top menu bar.
+On theChoose a basescreen, select a Windows base image for the VM.
+On theCreate lab resourcescreen, underArtifacts, selectAdd or Remove Artifacts.
+On theAdd artifactsscreen, search forwinrm, and then select the arrow next toConfigure WinRM.
+On theAdd artifactpane, enter a fully qualified domain name (FQDN) for the VM, such ascontosolab00000000000000.westus3.cloudapp.azure.com. SelectOK, and then selectOKagain.
+contosolab00000000000000.westus3.cloudapp.azure.com
+Select theAdvanced Settingstab, and forIP Address, selectPublic.NoteIf you use the WinRM artifact with a shared IP address, you must add a network address translation (NAT) rule to map an external port to the WinRM port. You don't need the NAT rule if you create the VM with a public IP address. For this walkthrough, create the VM with a public IP address.
+Note
+If you use the WinRM artifact with a shared IP address, you must add a network address translation (NAT) rule to map an external port to the WinRM port. You don't need the NAT rule if you create the VM with a public IP address. For this walkthrough, create the VM with a public IP address.
+SelectView ARM template.
+Copy the template code and save it as a file namedCreateVMTemplate.jsonin your local source control branch.
+Check in the template to your project's source control system.
+Create a script to get VM properties
+Next, create a script to collect the values that task steps likeAzure File CopyandPowerShell on Target Machinesuse to deploy apps to VMs. You'd ordinarily use these tasks to deploy your own apps to your Azure VMs. The tasks require values such as the VM resource group name, IP address, and FQDN.
+Note
+We recommend that you use the Azure Az PowerShell module to interact with Azure. To get started, seeInstall Azure PowerShell. To learn how to migrate to the Az PowerShell module, seeMigrate Azure PowerShell from AzureRM to Az.
+Save the following script with a name likeGetLabVMParams.ps1, and check it in to your project's source control system.
+Param( [string] $labVmId)
+
+$labVmComputeId = (Get-AzResource -Id $labVmId).Properties.ComputeId
+
+# Get lab VM resource group name
+$labVmRgName = (Get-AzResource -Id $labVmComputeId).ResourceGroupName
+
+# Get the lab VM Name
+$labVmName = (Get-AzResource -Id $labVmId).Name
+
+# Get lab VM public IP address
+$labVMIpAddress = (Get-AzPublicIpAddress -ResourceGroupName $labVmRgName -Name $labVmName).IpAddress
+
+# Get lab VM FQDN
+$labVMFqdn = (Get-AzPublicIpAddress -ResourceGroupName $labVmRgName -Name $labVmName).DnsSettings.Fqdn
+
+# Set a variable labVmRgName to store the lab VM resource group name
+Write-Host "##vso[task.setvariable variable=labVmRgName;]$labVmRgName"
+
+# Set a variable labVMIpAddress to store the lab VM Ip address
+Write-Host "##vso[task.setvariable variable=labVMIpAddress;]$labVMIpAddress"
+
+# Set a variable labVMFqdn to store the lab VM FQDN name
+Write-Host "##vso[task.setvariable variable=labVMFqdn;]$labVMFqdn"
+Param( [string] $labVmId)
+
+$labVmComputeId = (Get-AzResource -Id $labVmId).Properties.ComputeId
+
+# Get lab VM resource group name
+$labVmRgName = (Get-AzResource -Id $labVmComputeId).ResourceGroupName
+
+# Get the lab VM Name
+$labVmName = (Get-AzResource -Id $labVmId).Name
+
+# Get lab VM public IP address
+$labVMIpAddress = (Get-AzPublicIpAddress -ResourceGroupName $labVmRgName -Name $labVmName).IpAddress
+
+# Get lab VM FQDN
+$labVMFqdn = (Get-AzPublicIpAddress -ResourceGroupName $labVmRgName -Name $labVmName).DnsSettings.Fqdn
+
+# Set a variable labVmRgName to store the lab VM resource group name
+Write-Host "##vso[task.setvariable variable=labVmRgName;]$labVmRgName"
+
+# Set a variable labVMIpAddress to store the lab VM Ip address
+Write-Host "##vso[task.setvariable variable=labVMIpAddress;]$labVMIpAddress"
+
+# Set a variable labVMFqdn to store the lab VM FQDN name
+Write-Host "##vso[task.setvariable variable=labVMFqdn;]$labVMFqdn"
+Create a release pipeline in Azure Pipelines
+Next, create the release pipeline in Azure Pipelines. The pipeline tasks use the values you assigned to the VM when you created the ARM template.
+From your Azure DevOps Services project page, selectPipelines>Releasesfrom the left navigation.
+SelectNew pipeline.
+In theSelect a templatepane, selectEmpty job.
+Close theStagepane.
+On theNew release pipelinepage, select theVariablestab.
+SelectAdd, and enter the followingNameandValuepairs, selectingAddafter adding each one.vmName: The VM name you assigned in the ARM template.userName: The username to access the VM.password: Password for the username. Select the lock icon to hide and secure the password.
+vmName: The VM name you assigned in the ARM template.
+userName: The username to access the VM.
+password: Password for the username. Select the lock icon to hide and secure the password.
+Add an artifact
+On the new release pipeline page, on thePipelinetab, selectAdd an artifact.
+On theAdd an artifact pane, selectAzure Repo.
+In theProjectlist, select your DevOps project.
+In theSource (repository)list, select your source repo.
+In theDefault branchlist, select the branch to check out.
+SelectAdd.
+Create a DevTest Labs VM
+The next step creates a golden image VM to use for future deployments. This step uses theAzure DevTest Labs Create VMtask.
+On the new release pipeline page, on thePipelinetab, select the hyperlinked text inStage 1.
+On the new release pipeline page, on thePipelinetab, select the hyperlinked text inStage 1.
+In the left pane, select the plus sign+next toAgent job.
+In the left pane, select the plus sign+next toAgent job.
+UnderAdd tasksin the right pane, search for and selectAzure DevTest Labs Create VM, and selectAdd.
+UnderAdd tasksin the right pane, search for and selectAzure DevTest Labs Create VM, and selectAdd.
+In the left pane, select theCreate Azure DevTest Labs VMtask.
+In the left pane, select theCreate Azure DevTest Labs VMtask.
+In the right pane, fill out the form as follows:Azure RM Subscription: Select your service connection or subscription from the dropdown list, and selectAuthorizeif necessary.NoteFor information about creating a more restricted permissions connection to your Azure subscription, seeAzure Resource Manager service endpoint.Lab: Select your DevTest Labs lab name.Virtual Machine Name: the variable you specified for your virtual machine name:$vmName.Template: Browse to and select the template file you checked in to your project repository.Parameters File: If you checked a parameters file into your repository, browse to and select it.Parameter Overrides: Enter-newVMName '$(vmName)' -userName '$(userName)' -password '$(password)'.Drop downOutput Variables, and underReference name, enter the variable for the created lab VM ID. Let's entervmforReference namefor simplicity.labVmIdwill be an attribute of this variable and will be referred to later as$vm.labVmId. If you use any other name, then remember to use it accordingly in the subsequent tasks.Lab VM ID will be in the following form:/subscriptions/{subscription Id}/resourceGroups/{resource group Name}/providers/Microsoft.DevTestLab/labs/{lab name}/virtualMachines/{vmName}.
+In the right pane, fill out the form as follows:
+Azure RM Subscription: Select your service connection or subscription from the dropdown list, and selectAuthorizeif necessary.NoteFor information about creating a more restricted permissions connection to your Azure subscription, seeAzure Resource Manager service endpoint.
+Azure RM Subscription: Select your service connection or subscription from the dropdown list, and selectAuthorizeif necessary.
+Note
+For information about creating a more restricted permissions connection to your Azure subscription, seeAzure Resource Manager service endpoint.
+Lab: Select your DevTest Labs lab name.
+Lab: Select your DevTest Labs lab name.
+Virtual Machine Name: the variable you specified for your virtual machine name:$vmName.
+Virtual Machine Name: the variable you specified for your virtual machine name:$vmName.
+Template: Browse to and select the template file you checked in to your project repository.
+Template: Browse to and select the template file you checked in to your project repository.
+Parameters File: If you checked a parameters file into your repository, browse to and select it.
+Parameters File: If you checked a parameters file into your repository, browse to and select it.
+Parameter Overrides: Enter-newVMName '$(vmName)' -userName '$(userName)' -password '$(password)'.
+Parameter Overrides: Enter-newVMName '$(vmName)' -userName '$(userName)' -password '$(password)'.
+-newVMName '$(vmName)' -userName '$(userName)' -password '$(password)'
+Drop downOutput Variables, and underReference name, enter the variable for the created lab VM ID. Let's entervmforReference namefor simplicity.labVmIdwill be an attribute of this variable and will be referred to later as$vm.labVmId. If you use any other name, then remember to use it accordingly in the subsequent tasks.Lab VM ID will be in the following form:/subscriptions/{subscription Id}/resourceGroups/{resource group Name}/providers/Microsoft.DevTestLab/labs/{lab name}/virtualMachines/{vmName}.
+Drop downOutput Variables, and underReference name, enter the variable for the created lab VM ID. Let's entervmforReference namefor simplicity.labVmIdwill be an attribute of this variable and will be referred to later as$vm.labVmId. If you use any other name, then remember to use it accordingly in the subsequent tasks.
+Lab VM ID will be in the following form:/subscriptions/{subscription Id}/resourceGroups/{resource group Name}/providers/Microsoft.DevTestLab/labs/{lab name}/virtualMachines/{vmName}.
+/subscriptions/{subscription Id}/resourceGroups/{resource group Name}/providers/Microsoft.DevTestLab/labs/{lab name}/virtualMachines/{vmName}
+Collect the details of the DevTest Labs VM
+Next, the pipeline runs the script you created to collect the details of the DevTest Labs VM.
+On the release pipelineTaskstab, select the plus sign+next toAgent job.
+UnderAdd tasksin the right pane, search for and selectAzure PowerShell, and selectAdd.
+In the left pane, select theAzure PowerShell script: FilePathtask.
+In the right pane, fill out the form as follows:Azure Subscription: Select your service connection or subscription.Script Type: SelectScript File Path.Script Path: Browse to and select the PowerShell script that you checked in to your source code repository. You can use built-in properties to simplify the path, for example:$(System.DefaultWorkingDirectory/Scripts/GetLabVMParams.ps1.Script Arguments: Enter the value as-labVmId $(vm.labVmId).
+Azure Subscription: Select your service connection or subscription.
+Script Type: SelectScript File Path.
+Script Path: Browse to and select the PowerShell script that you checked in to your source code repository. You can use built-in properties to simplify the path, for example:$(System.DefaultWorkingDirectory/Scripts/GetLabVMParams.ps1.
+$(System.DefaultWorkingDirectory/Scripts/GetLabVMParams.ps1
+Script Arguments: Enter the value as-labVmId $(vm.labVmId).
+The script collects the required values and stores them in environment variables within the release pipeline, so you can refer to them in later steps.
+Create a VM image from the DevTest Labs VM
+The next task creates an image of the newly deployed VM in your lab. You can use the image to create copies of the VM on demand to do developer tasks or run tests.
+On the release pipelineTaskstab, select the plus sign+next toAgent job.
+UnderAdd tasks, selectAzure DevTest Labs Create Custom Image, and selectAdd.
+In the left pane, select theAzure DevTest Labs Create Custom Imagetask.
+In the right pane, fill out the form as follows:Azure RM Subscription: Select your service connection or subscription.Lab: Select your lab.Custom Image Name: Enter a name for the custom image.Description: Enter an optional description to make it easy to select the correct image.Source Lab VM: The sourcelabVmId. Enter the value as$(vm.labVmId).Output Variables: You can edit the name of the default Custom Image ID variable if necessary.
+Azure RM Subscription: Select your service connection or subscription.
+Lab: Select your lab.
+Custom Image Name: Enter a name for the custom image.
+Description: Enter an optional description to make it easy to select the correct image.
+Source Lab VM: The sourcelabVmId. Enter the value as$(vm.labVmId).
+Output Variables: You can edit the name of the default Custom Image ID variable if necessary.
+Deploy your app to the DevTest Labs VM (optional)
+You can add tasks to deploy your app to the new DevTest Labs VM. If you only want to experiment with creating a DevTest Labs VM and a custom image, without deploying an app, you can skip this step.
+The tasks you usually use to deploy apps areAzure File CopyandPowerShell on Target Machines. You can find the VM information you need for the task parameters in three configuration variables namedlabVmRgName,labVMIpAddress, andlabVMFqdnwithin the release pipeline.
+Delete the VM
+The final task is to delete the VM that you deployed in your lab. You'd ordinarily delete the VM after you do the developer tasks or run the tests that you need on the deployed VM.
+On the release pipelineTaskstab, select the plus sign+next toAgent job.
+UnderAdd tasks, selectAzure DevTest Labs Delete VM, and selectAdd.
+Configure the task as follows:Azure RM Subscription: Select your service connection or subscription.Lab: Select your lab.Virtual Machine: Enter the value as$(vm.labVmId).Output Variables: UnderReference name, if you changed the default name of thelabVmIdvariable, enter it here. The default value is$(labVmId).
+Azure RM Subscription: Select your service connection or subscription.
+Lab: Select your lab.
+Virtual Machine: Enter the value as$(vm.labVmId).
+Output Variables: UnderReference name, if you changed the default name of thelabVmIdvariable, enter it here. The default value is$(labVmId).
+Save the release pipeline
+To save the new release pipeline:
+SelectNew release pipelineat the top of the release pipeline page, and enter a new name for the pipeline.
+SelectSaveat upper right.
+Create and run a release
+To create and run a release using the new pipeline:
+On the release pipeline page, selectCreate releaseat upper right.
+UnderArtifacts, select the latest build, and then selectCreate.
+At each release stage, you can refresh the view of your lab in the Azure portal to see the VM creation, image creation, and VM deletion.
+You can use the custom image to create VMs whenever you need them.
+Next steps
+Explore more quickstart ARM templates for DevTest Labs automation from thepublic DevTest Labs GitHub repo.
+If necessary, seeAzure Pipelines troubleshooting.
+Feedback
+Was this page helpful?
+Additional resources

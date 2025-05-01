@@ -1,0 +1,187 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Row level security policy
+Article
+2024-08-12
+7 contributors
+In this article
+Applies to: âMicrosoft FabricâAzure Data Explorer
+Use group membership or execution context to control access to rows in a database table.
+Row Level Security (RLS) simplifies the design and coding of security. It lets you apply restrictions on data row access in your application. For example, limit user access to rows relevant to their department, or restrict customer access to only the data relevant to their company.
+The access restriction logic is located in the database tier, rather than away from the data in another application tier. The database system applies the access restrictions every time data access is attempted from any tier. This logic makes your security system more reliable and robust by reducing the surface area of your security system.
+RLS lets you provide access to other applications and users, only to a certain portion of a table. For example, you might want to:
+Grant access only to rows that meet some criteria
+Anonymize data in some of the columns
+All of the above
+Note
+When an RLS policy is enabled on a table, access is entirely replaced by the RLS query that's defined on the table. The access restriction applies to all users, including database admins and the RLS creator. The RLS query must explicitly include definitions for all types of users to whom you want to give access.
+For more information, seemanagement commands for managing the Row Level Security policy.
+Tip
+These functions are often useful for row_level_security queries:
+current_principal()
+current_principal_details()
+current_principal_is_member_of()
+Limitations
+There's no limit on the number of tables on which Row Level Security policy can be configured.
+Row Level Security policy cannot be configured onExternal Tables.
+The RLS policy can't be enabled on a table under the following circumstances:When it's referenced by anupdate policyquery, while the update policy is not configured with a managed identity.When it's referenced by acontinuous exportthat uses an authentication method other than impersonation.When arestricted view access policyis configured for the table.
+When it's referenced by anupdate policyquery, while the update policy is not configured with a managed identity.
+When it's referenced by acontinuous exportthat uses an authentication method other than impersonation.
+When arestricted view access policyis configured for the table.
+The RLS query can't reference other tables that have Row Level Security policy enabled.
+The RLS query can't reference tables located in other databases.
+Examples
+Limit access to Sales table
+In a table namedSales, each row contains details about a sale. One of the columns contains the name of the salesperson. Instead of giving your salespeople access to all records inSales, enable a Row Level Security policy on this table to only return records where the salesperson is the current user:
+Sales
+Sales
+Sales | where SalesPersonAadUser == current_principal()
+Sales | where SalesPersonAadUser == current_principal()
+You can also mask the email address:
+Sales | where SalesPersonAadUser == current_principal() | extend EmailAddress = "****"
+Sales | where SalesPersonAadUser == current_principal() | extend EmailAddress = "****"
+If you want every sales person to see all the sales of a specific country/region, you can define a query similar to:
+let UserToCountryMapping = datatable(User:string, Country:string)
+[
+  "john@domain.com", "USA",
+  "anna@domain.com", "France"
+];
+Sales
+| where Country in ((UserToCountryMapping | where User == current_principal_details()["UserPrincipalName"] | project Country))
+let UserToCountryMapping = datatable(User:string, Country:string)
+[
+  "john@domain.com", "USA",
+  "anna@domain.com", "France"
+];
+Sales
+| where Country in ((UserToCountryMapping | where User == current_principal_details()["UserPrincipalName"] | project Country))
+If you have a group that contains the managers, you might want to give them access to all rows. Here's the query for the Row Level Security policy.
+let IsManager = current_principal_is_member_of('aadgroup=sales_managers@domain.com');
+let AllData = Sales | where IsManager;
+let PartialData = Sales | where not(IsManager) and (SalesPersonAadUser == current_principal()) | extend EmailAddress = "****";
+union AllData, PartialData
+let IsManager = current_principal_is_member_of('aadgroup=sales_managers@domain.com');
+let AllData = Sales | where IsManager;
+let PartialData = Sales | where not(IsManager) and (SalesPersonAadUser == current_principal()) | extend EmailAddress = "****";
+union AllData, PartialData
+
+Expose different data to members of different Microsoft Entra groups
+If you have multiple Microsoft Entra groups, and you want the members of each group to see a different subset of data, use this structure for an RLS query.
+Customers
+| where (current_principal_is_member_of('aadgroup=group1@domain.com') and <filtering specific for group1>) or
+        (current_principal_is_member_of('aadgroup=group2@domain.com') and <filtering specific for group2>) or
+        (current_principal_is_member_of('aadgroup=group3@domain.com') and <filtering specific for group3>)
+Customers
+| where (current_principal_is_member_of('aadgroup=group1@domain.com') and <filtering specific for group1>) or
+        (current_principal_is_member_of('aadgroup=group2@domain.com') and <filtering specific for group2>) or
+        (current_principal_is_member_of('aadgroup=group3@domain.com') and <filtering specific for group3>)
+Apply the same RLS function on multiple tables
+First, define a function that receives the table name as a string parameter, and references the table using thetable()operator.
+table()
+For example:
+.create-or-alter function RLSForCustomersTables(TableName: string) {
+    table(TableName)
+    | ...
+}
+.create-or-alter function RLSForCustomersTables(TableName: string) {
+    table(TableName)
+    | ...
+}
+Then configure RLS on multiple tables this way:
+.alter table Customers1 policy row_level_security enable "RLSForCustomersTables('Customers1')"
+.alter table Customers2 policy row_level_security enable "RLSForCustomersTables('Customers2')"
+.alter table Customers3 policy row_level_security enable "RLSForCustomersTables('Customers3')"
+.alter table Customers1 policy row_level_security enable "RLSForCustomersTables('Customers1')"
+.alter table Customers2 policy row_level_security enable "RLSForCustomersTables('Customers2')"
+.alter table Customers3 policy row_level_security enable "RLSForCustomersTables('Customers3')"
+Produce an error upon unauthorized access
+If you want nonauthorized table users to receive an error instead of returning an empty table, use theassert()function. The following example shows you how to produce this error in an RLS function:
+assert()
+.create-or-alter function RLSForCustomersTables() {
+    MyTable
+    | where assert(current_principal_is_member_of('aadgroup=mygroup@mycompany.com') == true, "You don't have access")
+}
+.create-or-alter function RLSForCustomersTables() {
+    MyTable
+    | where assert(current_principal_is_member_of('aadgroup=mygroup@mycompany.com') == true, "You don't have access")
+}
+You can combine this approach with other examples. For example, you can display different results to users in different Microsoft Entra groups, and produce an error for everyone else.
+Control permissions on follower databases
+The RLS policy that you configure on the production database will also take effect in the follower databases. You canât configure different RLS policies on the production and follower databases. However, you can use thecurrent_cluster_endpoint()function in your RLS query to achieve the same effect, as having different RLS queries in follower tables.
+current_cluster_endpoint()
+For example:
+.create-or-alter function RLSForCustomersTables() {
+    let IsProductionCluster = current_cluster_endpoint() == "mycluster.eastus.kusto.windows.net";
+    let DataForProductionCluster = TempTable | where IsProductionCluster;
+    let DataForFollowerClusters = TempTable | where not(IsProductionCluster) | extend EmailAddress = "****";
+    union DataForProductionCluster, DataForFollowerClusters
+}
+.create-or-alter function RLSForCustomersTables() {
+    let IsProductionCluster = current_cluster_endpoint() == "mycluster.eastus.kusto.windows.net";
+    let DataForProductionCluster = TempTable | where IsProductionCluster;
+    let DataForFollowerClusters = TempTable | where not(IsProductionCluster) | extend EmailAddress = "****";
+    union DataForProductionCluster, DataForFollowerClusters
+}
+Note
+The RLS function above has no performance impact whatsoever on queries on the leader cluster. The performance impact on queries on the follower clusters will be impacted only by the complexity ofDataForFollowerClusters.
+DataForFollowerClusters
+Control permissions on shortcut databases
+The RLS policy that you configure on the production database will also take effect in the shortcut databases. You canât configure different RLS policies on the production and shortcut databases. However, you can use thecurrent_cluster_endpoint()function in your RLS query to achieve the same effect, as having different RLS queries in shortcut tables.
+current_cluster_endpoint()
+For example:
+.create-or-alter function RLSForCustomersTables() {
+    let IsProductionCluster = current_cluster_endpoint() == "mycluster.eastus.kusto.windows.net";
+    let DataForProductionCluster = TempTable | where IsProductionCluster;
+    let DataForFollowerClusters = TempTable | where not(IsProductionCluster) | extend EmailAddress = "****";
+    union DataForProductionCluster, DataForFollowerClusters
+}
+.create-or-alter function RLSForCustomersTables() {
+    let IsProductionCluster = current_cluster_endpoint() == "mycluster.eastus.kusto.windows.net";
+    let DataForProductionCluster = TempTable | where IsProductionCluster;
+    let DataForFollowerClusters = TempTable | where not(IsProductionCluster) | extend EmailAddress = "****";
+    union DataForProductionCluster, DataForFollowerClusters
+}
+Note
+The RLS function above has no performance impact whatsoever on queries on the source database. The performance impact on queries on the shortcut databases will be impacted only by the complexity ofDataForFollowerClusters.
+DataForFollowerClusters
+More use cases
+A call center support person may identify callers by several digits of their social security number. This number shouldn't be fully exposed to the support person. An RLS policy can be applied on the table to mask all but the last four digits of the social security number in the result set of any query.
+Set an RLS policy that masks personally identifiable information (PII), and enables developers to query production environments for troubleshooting purposes without violating compliance regulations.
+A hospital can set an RLS policy that allows nurses to view data rows for their patients only.
+A bank can set an RLS policy to restrict access to financial data rows based on an employee's business division or role.
+A multi-tenant application can store data from many tenants in a single tableset (which is efficient). They would use an RLS policy to enforce a logical separation of each tenant's data rows from every other tenant's rows, so each tenant can see only its data rows.
+Performance impact on queries
+When an RLS policy is enabled on a table, there will be some performance impact on queries that access that table. Access to the table will be replaced by the RLS query that's defined on that table. The performance impact of an RLS query will normally consist of two parts:
+Membership checks in Microsoft Entra ID: Checks are efficient. You can check membership in tens, or even hundreds of groups without major impact on the query performance.
+Filters, joins, and other operations that are applied on the data: Impact depends on the complexity of the query
+For example:
+let IsRestrictedUser = current_principal_is_member_of('aadgroup=some_group@domain.com');
+let AllData = MyTable | where not(IsRestrictedUser);
+let PartialData = MyTable | where IsRestrictedUser and (...);
+union AllData, PartialData
+let IsRestrictedUser = current_principal_is_member_of('aadgroup=some_group@domain.com');
+let AllData = MyTable | where not(IsRestrictedUser);
+let PartialData = MyTable | where IsRestrictedUser and (...);
+union AllData, PartialData
+If the user isn't part ofsome_group@domain.com, thenIsRestrictedUseris evaluated tofalse. The query that is evaluated is similar to this one:
+IsRestrictedUser
+false
+let AllData = MyTable;           // the condition evaluates to `true`, so the filter is dropped
+let PartialData = <empty table>; // the condition evaluates to `false`, so the whole expression is replaced with an empty table
+union AllData, PartialData       // this will just return AllData, as PartialData is empty
+let AllData = MyTable;           // the condition evaluates to `true`, so the filter is dropped
+let PartialData = <empty table>; // the condition evaluates to `false`, so the whole expression is replaced with an empty table
+union AllData, PartialData       // this will just return AllData, as PartialData is empty
+Similarly, ifIsRestrictedUserevaluates totrue, then only the query forPartialDatawill be evaluated.
+IsRestrictedUser
+true
+PartialData
+Improve query performance when RLS is used
+If a filter is applied on a high-cardinality column, for example, DeviceID, consider usingPartitioning policyorRow Order policy
+If a filter is applied on a low-medium-cardinality column, consider usingRow Order policy
+Performance impact on ingestion
+There's no performance impact on ingestion.
+Feedback
+Was this page helpful?
+Additional resources

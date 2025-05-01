@@ -1,0 +1,673 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Manage model lifecycle in Unity Catalog
+Article
+2025-04-15
+5 contributors
+In this article
+Important
+This article documents Models in Unity Catalog, which Databricks recommends for governing and deploying models. If your workspace is not enabled for Unity Catalog, the functionality on this page is not available. Instead, seeManage model lifecycle using the Workspace Model Registry (legacy). For guidance on how to upgrade from the Workspace Model Registry to Unity Catalog, seeMigrate workflows and models to Unity Catalog.
+Models in Unity Catalog isnât available in Azure Government regions.
+This article describes how to use Models in Unity Catalog as part of your machine learning workflow to manage the full lifecycle of ML models. Databricks provides a hosted version of MLflow Model Registry inUnity Catalog. Models in Unity Catalog extends the benefits of Unity Catalog to ML models, including centralized access control, auditing, lineage, and model discovery across workspaces. Models in Unity Catalog is compatible with the open-source MLflow Python client.
+For an overview of Model Registry concepts, seeMLflow for gen AI agent and ML model lifecycle.
+Requirements
+Unity Catalog must be enabled in your workspace. SeeGet started using Unity Catalogto create a Unity Catalog Metastore, enable it in a workspace, and create a catalog. If Unity Catalog is not enabled, use theworkspace model registry.
+Unity Catalog must be enabled in your workspace. SeeGet started using Unity Catalogto create a Unity Catalog Metastore, enable it in a workspace, and create a catalog. If Unity Catalog is not enabled, use theworkspace model registry.
+You must use a compute resource that has access to Unity Catalog. For ML workloads, this means that the access mode for the compute must beDedicated(formerly single user). For more information, seeAccess modes. With Databricks Runtime 15.4 LTS ML and above, you can also usededicated group access mode.
+You must use a compute resource that has access to Unity Catalog. For ML workloads, this means that the access mode for the compute must beDedicated(formerly single user). For more information, seeAccess modes. With Databricks Runtime 15.4 LTS ML and above, you can also usededicated group access mode.
+To create new registered models, you need the following privileges:USE SCHEMAandUSE CATALOGprivileges on the schema and its enclosing catalog.CREATE_MODELorCREATE_FUNCTIONprivilege on the schema. To grant privileges, use the Catalog Explorer UI or theSQL GRANT command:GRANT CREATE_MODEL ON SCHEMA <schema-name> TO <principal>
+To create new registered models, you need the following privileges:
+USE SCHEMAandUSE CATALOGprivileges on the schema and its enclosing catalog.
+USE SCHEMA
+USE CATALOG
+CREATE_MODELorCREATE_FUNCTIONprivilege on the schema. To grant privileges, use the Catalog Explorer UI or theSQL GRANT command:
+CREATE_MODEL
+CREATE_FUNCTION
+GRANT CREATE_MODEL ON SCHEMA <schema-name> TO <principal>
+GRANT CREATE_MODEL ON SCHEMA <schema-name> TO <principal>
+Note
+Your workspace must be attached to a Unity Catalog metastore that supports privilege inheritance. This is true for all metastores created after August 25, 2022. If running on an older metastore,follow docsto upgrade.
+Install and configure MLflow client for Unity Catalog
+This section includes instructions for installing and configuring the MLflow client for Unity Catalog.
+Install MLflow Python client
+Support for models in Unity Catalog is included in Databricks Runtime 13.2 ML and above (Databricks Runtime 15.0 ML and above in Azure China).
+You can also use models in Unity Catalog on Databricks Runtime 11.3 LTS and above by installing the latest version of the MLflow Python client in your notebook, using the following code.
+%pip install --upgrade "mlflow-skinny[databricks]"
+dbutils.library.restartPython()
+%pip install --upgrade "mlflow-skinny[databricks]"
+dbutils.library.restartPython()
+Configure MLflow client to access models in Unity Catalog
+If your workspaceâsdefault catalogis in Unity Catalog (rather thanhive_metastore) and you are running a cluster using Databricks Runtime 13.3 LTS or above (Databricks Runtime 15.0 or above in Azure China regions), models are automatically created in and loaded from the default catalog. You do not have to perform this step.
+hive_metastore
+For other workspaces, the MLflow Python client creates models in the Databricks workspace model registry. To upgrade to models in Unity Catalog, use the following code in your notebooks to configure the MLflow client:
+import mlflow
+mlflow.set_registry_uri("databricks-uc")
+import mlflow
+mlflow.set_registry_uri("databricks-uc")
+For a small number of workspaces where both the default catalog was configured to a catalog in Unity Catalog prior to January 2024 and the workspace model registry was used prior to January 2024, you must manually set the default catalog to Unity Catalog using the command shown above.
+Train and register Unity Catalog-compatible models
+Permissions required: To create a new registered model, you need theCREATE_MODELandUSE SCHEMAprivileges on the enclosing schema, andUSE CATALOGprivilege on the enclosing catalog. To create new model versions under a registered model, you must be the owner of the registered model and haveUSE SCHEMAandUSE CATALOGprivileges on the schema and catalog containing the model.
+CREATE_MODEL
+USE SCHEMA
+USE CATALOG
+USE SCHEMA
+USE CATALOG
+ML model versions in UC must have amodel signature. If youâre not already logging MLflow models with signatures in your model training workloads, you can either:
+UseDatabricks autologging, which automatically logs models with signatures for many popular ML frameworks. See supported frameworks in theMLflow docs.
+With MLflow 2.5.0 and above, you can specify an input example in yourmlflow.<flavor>.log_modelcall, and the model signature is automatically inferred. For further information, refer tothe MLflow documentation.
+mlflow.<flavor>.log_model
+Then, pass the three-level name of the model to MLflow APIs, in the form<catalog>.<schema>.<model>.
+<catalog>.<schema>.<model>
+The examples in this section create and access models in theml_teamschema under theprodcatalog.
+ml_team
+prod
+The model training examples in this section create a new model version and register it in theprodcatalog. Using theprodcatalog doesnât necessarily mean that the model version serves production traffic. The model versionâs enclosing catalog, schema, and registered model reflect its environment (prod) and associated governance rules (for example, privileges can be set up so that only admins can delete from theprodcatalog), but not its deployment status. To manage the deployment status, usemodel aliases.
+prod
+prod
+prod
+prod
+Register a model to Unity Catalog using autologging
+To register a model, use MLflow Client APIregister_model()method. Seemlflow.register_model.
+register_model()
+from sklearn import datasets
+from sklearn.ensemble import RandomForestClassifier
+
+# Train a sklearn model on the iris dataset
+X, y = datasets.load_iris(return_X_y=True, as_frame=True)
+clf = RandomForestClassifier(max_depth=7)
+clf.fit(X, y)
+
+# Note that the UC model name follows the pattern
+# <catalog_name>.<schema_name>.<model_name>, corresponding to
+# the catalog, schema, and registered model name
+# in Unity Catalog under which to create the version
+# The registered model will be created if it doesn't already exist
+autolog_run = mlflow.last_active_run()
+model_uri = "runs:/{}/model".format(autolog_run.info.run_id)
+mlflow.register_model(model_uri, "prod.ml_team.iris_model")
+from sklearn import datasets
+from sklearn.ensemble import RandomForestClassifier
+
+# Train a sklearn model on the iris dataset
+X, y = datasets.load_iris(return_X_y=True, as_frame=True)
+clf = RandomForestClassifier(max_depth=7)
+clf.fit(X, y)
+
+# Note that the UC model name follows the pattern
+# <catalog_name>.<schema_name>.<model_name>, corresponding to
+# the catalog, schema, and registered model name
+# in Unity Catalog under which to create the version
+# The registered model will be created if it doesn't already exist
+autolog_run = mlflow.last_active_run()
+model_uri = "runs:/{}/model".format(autolog_run.info.run_id)
+mlflow.register_model(model_uri, "prod.ml_team.iris_model")
+Register a model using the API
+mlflow.register_model(
+  "runs:/<run_uuid>/model", "prod.ml_team.iris_model"
+)
+mlflow.register_model(
+  "runs:/<run_uuid>/model", "prod.ml_team.iris_model"
+)
+Register a model to Unity Catalog with automatically inferred signature
+Support for automatically inferred signatures is available in MLflow version 2.5.0 and above, and is supported in Databricks Runtime 11.3 LTS ML and above. To use automatically inferred signatures, use the following code to install the latest MLflow Python client in your notebook:
+%pip install --upgrade "mlflow-skinny[databricks]"
+dbutils.library.restartPython()
+%pip install --upgrade "mlflow-skinny[databricks]"
+dbutils.library.restartPython()
+The following code shows an example of an automatically inferred signature.
+from sklearn import datasets
+from sklearn.ensemble import RandomForestClassifier
+
+with mlflow.start_run():
+    # Train a sklearn model on the iris dataset
+    X, y = datasets.load_iris(return_X_y=True, as_frame=True)
+    clf = RandomForestClassifier(max_depth=7)
+    clf.fit(X, y)
+    # Take the first row of the training dataset as the model input example.
+    input_example = X.iloc[[0]]
+    # Log the model and register it as a new version in UC.
+    mlflow.sklearn.log_model(
+        sk_model=clf,
+        artifact_path="model",
+        # The signature is automatically inferred from the input example and its predicted output.
+        input_example=input_example,
+        registered_model_name="prod.ml_team.iris_model",
+    )
+from sklearn import datasets
+from sklearn.ensemble import RandomForestClassifier
+
+with mlflow.start_run():
+    # Train a sklearn model on the iris dataset
+    X, y = datasets.load_iris(return_X_y=True, as_frame=True)
+    clf = RandomForestClassifier(max_depth=7)
+    clf.fit(X, y)
+    # Take the first row of the training dataset as the model input example.
+    input_example = X.iloc[[0]]
+    # Log the model and register it as a new version in UC.
+    mlflow.sklearn.log_model(
+        sk_model=clf,
+        artifact_path="model",
+        # The signature is automatically inferred from the input example and its predicted output.
+        input_example=input_example,
+        registered_model_name="prod.ml_team.iris_model",
+    )
+Register a model using the UI
+Follow these steps:
+From the experiment run page, clickRegister modelin the upper-right corner of the UI.
+From the experiment run page, clickRegister modelin the upper-right corner of the UI.
+In the dialog, selectUnity Catalog, and select a destination model from the drop down list.
+In the dialog, selectUnity Catalog, and select a destination model from the drop down list.
+
+ClickRegister.
+ClickRegister.
+
+Registering a model can take time. To monitor progress, navigate to the destination model in Unity Catalog and refresh periodically.
+Use model aliases
+Model aliases allow you to assign a mutable, named reference to a particular version of a registered model. You can use aliases to indicate the deployment status of a model version. For example, you could allocate a âChampionâ alias to the model version currently in production and target this alias in workloads that use the production model. You can then update the production model by reassigning the âChampionâ alias to a different model version.
+Set and delete aliases on models
+Permissions required: Owner of the registered model, plusUSE SCHEMAandUSE CATALOGprivileges on the schema and catalog containing the model.
+USE SCHEMA
+USE CATALOG
+You can set, update, and remove aliases for models in Unity Catalog using Catalog Explorer. SeeView and manage models in the UI.
+To set, update, and delete aliases using the MLflow Client API, see the examples below:
+from mlflow import MlflowClient
+client = MlflowClient()
+
+# create "Champion" alias for version 1 of model "prod.ml_team.iris_model"
+client.set_registered_model_alias("prod.ml_team.iris_model", "Champion", 1)
+
+# reassign the "Champion" alias to version 2
+client.set_registered_model_alias("prod.ml_team.iris_model", "Champion", 2)
+
+# get a model version by alias
+client.get_model_version_by_alias("prod.ml_team.iris_model", "Champion")
+
+# delete the alias
+client.delete_registered_model_alias("prod.ml_team.iris_model", "Champion")
+from mlflow import MlflowClient
+client = MlflowClient()
+
+# create "Champion" alias for version 1 of model "prod.ml_team.iris_model"
+client.set_registered_model_alias("prod.ml_team.iris_model", "Champion", 1)
+
+# reassign the "Champion" alias to version 2
+client.set_registered_model_alias("prod.ml_team.iris_model", "Champion", 2)
+
+# get a model version by alias
+client.get_model_version_by_alias("prod.ml_team.iris_model", "Champion")
+
+# delete the alias
+client.delete_registered_model_alias("prod.ml_team.iris_model", "Champion")
+For more details on alias client APIs, see theMLflow API documentation.
+Load model version by alias for inference workloads
+Permissions required:EXECUTEprivilege on the registered model, plusUSE SCHEMAandUSE CATALOGprivileges on the schema and catalog containing the model.
+EXECUTE
+USE SCHEMA
+USE CATALOG
+Batch inference workloads can reference a model version by alias. The snippet below loads and applies the âChampionâ model version for batch inference. If the âChampionâ version is updated to reference a new model version, the batch inference workload automatically picks it up on its next execution. This allows you to decouple model deployments from your batch inference workloads.
+import mlflow.pyfunc
+model_version_uri = "models:/prod.ml_team.iris_model@Champion"
+champion_version = mlflow.pyfunc.load_model(model_version_uri)
+champion_version.predict(test_x)
+import mlflow.pyfunc
+model_version_uri = "models:/prod.ml_team.iris_model@Champion"
+champion_version = mlflow.pyfunc.load_model(model_version_uri)
+champion_version.predict(test_x)
+Model serving endpoints can also reference a model version by alias. You can write deployment workflows to get a model version by alias and update a model serving endpoint to serve that version, using themodel serving REST API. For example:
+import mlflow
+import requests
+client = mlflow.tracking.MlflowClient()
+champion_version = client.get_model_version_by_alias("prod.ml_team.iris_model", "Champion")
+# Invoke the model serving REST API to update endpoint to serve the current "Champion" version
+model_name = champion_version.name
+model_version = champion_version.version
+requests.request(...)
+import mlflow
+import requests
+client = mlflow.tracking.MlflowClient()
+champion_version = client.get_model_version_by_alias("prod.ml_team.iris_model", "Champion")
+# Invoke the model serving REST API to update endpoint to serve the current "Champion" version
+model_name = champion_version.name
+model_version = champion_version.version
+requests.request(...)
+Load model version by version number for inference workloads
+You can also load model versions by version number:
+import mlflow.pyfunc
+# Load version 1 of the model "prod.ml_team.iris_model"
+model_version_uri = "models:/prod.ml_team.iris_model/1"
+first_version = mlflow.pyfunc.load_model(model_version_uri)
+first_version.predict(test_x)
+import mlflow.pyfunc
+# Load version 1 of the model "prod.ml_team.iris_model"
+model_version_uri = "models:/prod.ml_team.iris_model/1"
+first_version = mlflow.pyfunc.load_model(model_version_uri)
+first_version.predict(test_x)
+Share models across workspaces
+Share models with users in the same region
+As long as you have the appropriate privileges, you can access models in Unity Catalog from any workspace that is attached to the metastore containing the model. For example, you can access models from theprodcatalog in a dev workspace, to facilitate comparing newly-developed models to the production baseline.
+prod
+To collaborate with other users (share write privileges) on a registered model you created, you must grant ownership of the model to a group containing yourself and the users youâd like to collaborate with. Collaborators must also have theUSE CATALOGandUSE SCHEMAprivileges on the catalog and schema containing the model. SeeUnity Catalog privileges and securable objectsfor details.
+USE CATALOG
+USE SCHEMA
+Share models with users in another region or account
+To share models with users in other regions or accounts, use the Delta SharingDatabricks-to-Databricks sharing flow. SeeAdd models to a share(for providers) andGet access in the Databricks-to-Databricks model(for recipients). As a recipient, after you create a catalog from a share, you access models in that shared catalog the same way as any other model in Unity Catalog.
+Track the data lineage of a model in Unity Catalog
+Note
+Support for table to model lineage in Unity Catalog is available in MLflow 2.11.0 and above.
+When you train a model on a table in Unity Catalog, you can track the lineage of the model to the upstream dataset(s) it was trained and evaluated on. To do this, usemlflow.log_input. This saves the input table information with the MLflow run that generated the model. Data lineage is also automatically captured for models logged using feature store APIs. SeeFeature governance and lineage.
+When you register the model to Unity Catalog, lineage information is automatically saved and is visible in theLineagetab on the model version page in Catalog Explorer. SeeView model version information and model lineage.
+The following code shows an example.
+import mlflow
+import pandas as pd
+import pyspark.pandas as ps
+from sklearn.datasets import load_iris
+from sklearn.ensemble import RandomForestRegressor
+
+# Write a table to Unity Catalog
+iris = load_iris()
+iris_df = pd.DataFrame(iris.data, columns=iris.feature_names)
+iris_df.rename(
+  columns = {
+    'sepal length (cm)':'sepal_length',
+    'sepal width (cm)':'sepal_width',
+    'petal length (cm)':'petal_length',
+    'petal width (cm)':'petal_width'},
+  inplace = True
+)
+iris_df['species'] = iris.target
+ps.from_pandas(iris_df).to_table("prod.ml_team.iris", mode="overwrite")
+
+# Load a Unity Catalog table, train a model, and log the input table
+dataset = mlflow.data.load_delta(table_name="prod.ml_team.iris", version="0")
+pd_df = dataset.df.toPandas()
+X = pd_df.drop("species", axis=1)
+y = pd_df["species"]
+with mlflow.start_run():
+    clf = RandomForestRegressor(n_estimators=100)
+    clf.fit(X, y)
+    mlflow.log_input(dataset, "training")
+    # Take the first row of the training dataset as the model input example.
+    input_example = X.iloc[[0]]
+    # Log the model and register it as a new version in UC.
+    mlflow.sklearn.log_model(
+        sk_model=clf,
+        artifact_path="model",
+        # The signature is automatically inferred from the input example and its predicted output.
+        input_example=input_example,
+        registered_model_name="prod.ml_team.iris_classifier",
+    )
+import mlflow
+import pandas as pd
+import pyspark.pandas as ps
+from sklearn.datasets import load_iris
+from sklearn.ensemble import RandomForestRegressor
+
+# Write a table to Unity Catalog
+iris = load_iris()
+iris_df = pd.DataFrame(iris.data, columns=iris.feature_names)
+iris_df.rename(
+  columns = {
+    'sepal length (cm)':'sepal_length',
+    'sepal width (cm)':'sepal_width',
+    'petal length (cm)':'petal_length',
+    'petal width (cm)':'petal_width'},
+  inplace = True
+)
+iris_df['species'] = iris.target
+ps.from_pandas(iris_df).to_table("prod.ml_team.iris", mode="overwrite")
+
+# Load a Unity Catalog table, train a model, and log the input table
+dataset = mlflow.data.load_delta(table_name="prod.ml_team.iris", version="0")
+pd_df = dataset.df.toPandas()
+X = pd_df.drop("species", axis=1)
+y = pd_df["species"]
+with mlflow.start_run():
+    clf = RandomForestRegressor(n_estimators=100)
+    clf.fit(X, y)
+    mlflow.log_input(dataset, "training")
+    # Take the first row of the training dataset as the model input example.
+    input_example = X.iloc[[0]]
+    # Log the model and register it as a new version in UC.
+    mlflow.sklearn.log_model(
+        sk_model=clf,
+        artifact_path="model",
+        # The signature is automatically inferred from the input example and its predicted output.
+        input_example=input_example,
+        registered_model_name="prod.ml_team.iris_classifier",
+    )
+Control access to models
+In Unity Catalog, registered models are a subtype of theFUNCTIONsecurable object. To grant access to a model registered in Unity Catalog, you useGRANT ON FUNCTION. For details, seeUnity Catalog privileges and securable objects. For best practices on organizing models across catalogs and schemas, seeOrganize your data.
+FUNCTION
+GRANT ON FUNCTION
+You can configure model permissions programmatically using theGrants REST API. When you configure model permissions, setsecurable_typeto"FUNCTION"in REST API requests. For example, usePATCH /api/2.1/unity-catalog/permissions/function/{full_name}to update registered model permissions.
+securable_type
+"FUNCTION"
+PATCH /api/2.1/unity-catalog/permissions/function/{full_name}
+For information about using Catalog Explorer to set model ownership and permissions, seeManage Unity Catalog object ownershipandManage privileges in Unity Catalog.
+View and manage models in the UI
+Permissions required: To view a registered model and its model versions in the UI, you needEXECUTEprivilege on the registered model,
+plusUSE SCHEMAandUSE CATALOGprivileges on the schema and catalog containing the model
+EXECUTE
+USE SCHEMA
+USE CATALOG
+You can view and manage registered models and model versions in Unity Catalog using Catalog Explorer.
+View model information
+To view models in Catalog Explorer:
+ClickCatalogin the sidebar.
+ClickCatalogin the sidebar.
+Select a compute resource from the drop-down list at the top right.
+Select a compute resource from the drop-down list at the top right.
+In the Catalog Explorer tree at the left, open a catalog and select a schema.
+In the Catalog Explorer tree at the left, open a catalog and select a schema.
+If the schema contains any models, they appear in the tree underModels, as shown.
+If the schema contains any models, they appear in the tree underModels, as shown.
+
+Click a model to see more information. The model details page shows a list of model versions with additional information.
+Click a model to see more information. The model details page shows a list of model versions with additional information.
+
+Set model aliases
+To set a model alias using the UI:
+On the model details page, hover over the row for the model version to which you want to add an alias. TheAdd aliasbutton appears.
+ClickAdd alias.
+Enter an alias or select one from the drop-down menu. You can add multiple aliases in the dialog.
+ClickSave aliases.
+
+To remove an alias:
+Hover over the row for the model version and click the pencil icon next to the alias.
+In the dialog, click theXnext to the alias that you want to remove.
+X
+ClickSave aliases.
+
+View model version information and model lineage
+To view more information about a model version, click its name in the list of models. The model version page appears. This page includes a link to the MLflow source run that created the version.
+
+From this page, you can view the lineage of the model as follows:
+Select theLineagetab. The left sidebar shows components that were logged with the model.
+Select theLineagetab. The left sidebar shows components that were logged with the model.
+
+ClickSee lineage graph. The lineage graph appears. For details about exploring the lineage graph, seeCapture and explore lineage.
+ClickSee lineage graph. The lineage graph appears. For details about exploring the lineage graph, seeCapture and explore lineage.
+
+To close the lineage graph, clickin the upper-right corner.
+To close the lineage graph, clickin the upper-right corner.
+Rename a model
+Permissions required: Owner of the registered model,CREATE_MODELprivilege on the schema containing the registered model, andUSE SCHEMAandUSE CATALOGprivileges on the schema and catalog containing the model.
+CREATE_MODEL
+USE SCHEMA
+USE CATALOG
+To rename a registered model, use the MLflow Client APIrename_registered_model()method:
+rename_registered_model()
+client=MlflowClient()
+client.rename_registered_model("<full-model-name>", "<new-model-name>")
+client=MlflowClient()
+client.rename_registered_model("<full-model-name>", "<new-model-name>")
+Copy a model version
+You can copy a model version from one model to another in Unity Catalog.
+Copy a model version using the UI
+Follow these steps:
+From the model version page, clickCopy this versionin the upper-right corner of the UI.
+From the model version page, clickCopy this versionin the upper-right corner of the UI.
+Select a destination model from the drop down list and clickCopy.
+Select a destination model from the drop down list and clickCopy.
+
+Copying a model can take time. To monitor progress, navigate to the destination model in Unity Catalog and refresh periodically.
+Copy a model version using the API
+To copy a model version, use the MLflowâscopy_model_version()Python API:
+client = MlflowClient()
+client.copy_model_version(
+  "models:/<source-model-name>/<source-model-version>",
+  "<destination-model-name>",
+)
+client = MlflowClient()
+client.copy_model_version(
+  "models:/<source-model-name>/<source-model-version>",
+  "<destination-model-name>",
+)
+Delete a model or model version
+Permissions required: Owner of the registered model, plusUSE SCHEMAandUSE CATALOGprivileges on the schema and catalog containing the model.
+USE SCHEMA
+USE CATALOG
+You can delete a registered model or a model version within a registered model using the UI or the API.
+Warning
+You cannot undo this action. When you delete a model, all model artifacts stored by Unity Catalog and all the metadata associated with the registered model are deleted.
+Delete a model version or model using the UI
+To delete a model or model version in Unity Catalog, follow these steps.
+In Catalog Explorer, on the model page or model version page, click the kebab menuin the upper-right corner.From the model page:From the model version page:
+In Catalog Explorer, on the model page or model version page, click the kebab menuin the upper-right corner.
+From the model page:
+
+From the model version page:
+
+SelectDelete.
+SelectDelete.
+A confirmation dialog appears. ClickDeleteto confirm.
+A confirmation dialog appears. ClickDeleteto confirm.
+Delete a model version or model using the API
+To delete a model version, use the MLflow Client APIdelete_model_version()method:
+delete_model_version()
+# Delete versions 1,2, and 3 of the model
+client = MlflowClient()
+versions=[1, 2, 3]
+for version in versions:
+  client.delete_model_version(name="<model-name>", version=version)
+# Delete versions 1,2, and 3 of the model
+client = MlflowClient()
+versions=[1, 2, 3]
+for version in versions:
+  client.delete_model_version(name="<model-name>", version=version)
+To delete a model, use the MLflow Client APIdelete_registered_model()method:
+delete_registered_model()
+client = MlflowClient()
+client.delete_registered_model(name="<model-name>")
+client = MlflowClient()
+client.delete_registered_model(name="<model-name>")
+Use tags on models
+Tagsare key-value pairs that you associate with registered models and model versions, allowing you to label and categorize them by function or status. For example, you could apply a tag with key"task"and value"question-answering"(displayed in the UI astask:question-answering) to registered models intended for question answering tasks. At the model version level, you could tag versions undergoing pre-deployment validation withvalidation_status:pendingand those cleared for deployment withvalidation_status:approved.
+"task"
+"question-answering"
+task:question-answering
+validation_status:pending
+validation_status:approved
+Permissions required: Owner of or haveAPPLY_TAGprivilege on the registered model, plusUSE SCHEMAandUSE CATALOGprivileges on the schema and catalog containing the model.
+APPLY_TAG
+USE SCHEMA
+USE CATALOG
+SeeAdd and update tags using Catalog Exploreron how to set and delete tags using the UI.
+To set and delete tags using the MLflow Client API, see the examples below:
+from mlflow import MlflowClient
+client = MlflowClient()
+
+# Set registered model tag
+client.set_registered_model_tag("prod.ml_team.iris_model", "task", "classification")
+
+# Delete registered model tag
+client.delete_registered_model_tag("prod.ml_team.iris_model", "task")
+
+# Set model version tag
+client.set_model_version_tag("prod.ml_team.iris_model", "1", "validation_status", "approved")
+
+# Delete model version tag
+client.delete_model_version_tag("prod.ml_team.iris_model", "1", "validation_status")
+from mlflow import MlflowClient
+client = MlflowClient()
+
+# Set registered model tag
+client.set_registered_model_tag("prod.ml_team.iris_model", "task", "classification")
+
+# Delete registered model tag
+client.delete_registered_model_tag("prod.ml_team.iris_model", "task")
+
+# Set model version tag
+client.set_model_version_tag("prod.ml_team.iris_model", "1", "validation_status", "approved")
+
+# Delete model version tag
+client.delete_model_version_tag("prod.ml_team.iris_model", "1", "validation_status")
+Both registered model and model version tags must meet theplatform-wide constraints.
+For more details on tag client APIs, see theMLflow API documentation.
+Add a description (comments) to a model or model version
+Permissions required: Owner of the registered model, plusUSE SCHEMAandUSE CATALOGprivileges on the schema and catalog containing the model.
+USE SCHEMA
+USE CATALOG
+You can include a text description for any model or model version in Unity Catalog. For example, you can provide an overview of the problem or information about the methodology and algorithm used.
+For models, you also have the option of using AI-generated comments. SeeAdd AI-generated comments to Unity Catalog objects.
+Add a description to a model using the UI
+To add a description for a model, you can use AI-generated comments, or you can enter your own comments. You can edit AI-generated comments as necessary.
+To add automatically generated comments, click theAI generatebutton.
+To add your own comments, clickAdd. Enter your comments in the dialog, and clickSave.
+
+Add a description to a model version using the UI
+To add a description to a model version in Unity Catalog, follow these steps:
+On the model version page, click the pencil icon underDescription.
+On the model version page, click the pencil icon underDescription.
+
+Enter your comments in the dialog, and clickSave.
+Enter your comments in the dialog, and clickSave.
+Add a description to a model or model version using the API
+To update a registered model description, use the MLflow Client APIupdate_registered_model()method:
+update_registered_model()
+client = MlflowClient()
+client.update_registered_model(
+  name="<model-name>",
+  description="<description>"
+)
+client = MlflowClient()
+client.update_registered_model(
+  name="<model-name>",
+  description="<description>"
+)
+To update a model version description, use the MLflow Client APIupdate_model_version()method:
+update_model_version()
+client = MlflowClient()
+client.update_model_version(
+  name="<model-name>",
+  version=<model-version>,
+  description="<description>"
+)
+client = MlflowClient()
+client.update_model_version(
+  name="<model-name>",
+  version=<model-version>,
+  description="<description>"
+)
+List and search models
+To get a list of registered models in Unity Catalog, use MLflowâssearch_registered_models()Python API:
+client=MlflowClient()
+client.search_registered_models()
+client=MlflowClient()
+client.search_registered_models()
+To search for a specific model name and get information about that modelâs versions, usesearch_model_versions():
+search_model_versions()
+from pprint import pprint
+
+client=MlflowClient()
+[pprint(mv) for mv in client.search_model_versions("name='<model-name>'")]
+from pprint import pprint
+
+client=MlflowClient()
+[pprint(mv) for mv in client.search_model_versions("name='<model-name>'")]
+Note
+Not all search API fields and operators are supported for models in Unity Catalog. SeeLimitationsfor details.
+Download model files (advanced use case)
+In most cases, to load models, you should use MLflow APIs likemlflow.pyfunc.load_modelormlflow.<flavor>.load_model(for example,mlflow.transformers.load_modelfor HuggingFace models).
+mlflow.pyfunc.load_model
+mlflow.<flavor>.load_model
+mlflow.transformers.load_model
+In some cases you may need to download model files to debug model behavior or model loading issues. You can download model files usingmlflow.artifacts.download_artifacts, as follows:
+mlflow.artifacts.download_artifacts
+import mlflow
+mlflow.set_registry_uri("databricks-uc")
+model_uri = f"models:/{model_name}/{version}" # reference model by version or alias
+destination_path = "/local_disk0/model"
+mlflow.artifacts.download_artifacts(artifact_uri=model_uri, dst_path=destination_path)
+import mlflow
+mlflow.set_registry_uri("databricks-uc")
+model_uri = f"models:/{model_name}/{version}" # reference model by version or alias
+destination_path = "/local_disk0/model"
+mlflow.artifacts.download_artifacts(artifact_uri=model_uri, dst_path=destination_path)
+Promote a model across environments
+Databricks recommends that you deploy ML pipelines as code. This eliminates the need to promote models across environments, as all production models can be produced through automated training workflows in a production environment.
+However, in some cases, it may be too expensive to retrain models across environments. Instead, you can copy model versions across registered models in Unity Catalog to promote them across environments.
+You need the following privileges to execute the example code below:
+USE CATALOGon thestagingandprodcatalogs.
+USE CATALOG
+staging
+prod
+USE SCHEMAon thestaging.ml_teamandprod.ml_teamschemas.
+USE SCHEMA
+staging.ml_team
+prod.ml_team
+EXECUTEonstaging.ml_team.fraud_detection.
+EXECUTE
+staging.ml_team.fraud_detection
+In addition, you must be the owner of the registered modelprod.ml_team.fraud_detection.
+prod.ml_team.fraud_detection
+The following code snippet uses thecopy_model_versionMLflow Client API, available in MLflow version 2.8.0 and above.
+copy_model_version
+import mlflow
+mlflow.set_registry_uri("databricks-uc")
+
+client = mlflow.tracking.MlflowClient()
+src_model_name = "staging.ml_team.fraud_detection"
+src_model_version = "1"
+src_model_uri = f"models:/{src_model_name}/{src_model_version}"
+dst_model_name = "prod.ml_team.fraud_detection"
+copied_model_version = client.copy_model_version(src_model_uri, dst_model_name)
+import mlflow
+mlflow.set_registry_uri("databricks-uc")
+
+client = mlflow.tracking.MlflowClient()
+src_model_name = "staging.ml_team.fraud_detection"
+src_model_version = "1"
+src_model_uri = f"models:/{src_model_name}/{src_model_version}"
+dst_model_name = "prod.ml_team.fraud_detection"
+copied_model_version = client.copy_model_version(src_model_uri, dst_model_name)
+After the model version is in the production environment, you can perform any necessary pre-deployment validation. Then, you can mark the model version for deploymentusing aliases.
+client = mlflow.tracking.MlflowClient()
+client.set_registered_model_alias(name="prod.ml_team.fraud_detection", alias="Champion", version=copied_model_version.version)
+client = mlflow.tracking.MlflowClient()
+client.set_registered_model_alias(name="prod.ml_team.fraud_detection", alias="Champion", version=copied_model_version.version)
+In the example above, only users who can read from thestaging.ml_team.fraud_detectionregistered model and write to theprod.ml_team.fraud_detectionregistered model can promote staging models to the production environment. The same users can also use aliases to manage which model versions are deployed within the production environment. You donât need to configure any other rules or policies to govern model promotion and deployment.
+staging.ml_team.fraud_detection
+prod.ml_team.fraud_detection
+You can customize this flow to promote the model version across multiple environments that match your setup, such asdev,qa, andprod. Access control is enforced as configured in each environment.
+dev
+qa
+prod
+Example notebook
+This example notebook illustrates how to use Models in Unity Catalog APIs to manage models in Unity Catalog, including registering models and model versions, adding descriptions, loading and deploying models, using model aliases, and deleting models and model versions.
+Get notebook
+Migrate workflows and models to Unity Catalog
+Databricks recommends using Models in Unity Catalog for improved governance, easy sharing across workspaces and environments, and more flexible MLOps workflows. The table compares the capabilities of the Workspace Model Registry and Unity Catalog.
+Staging
+Production
+transition_model_version_stage()
+copy_model_version()
+The articles linked below describe how to migrate workflows (model training and batch inference jobs) and models from the Workspace Model Registry to Unity Catalog.
+Upgrade ML workflows to target models in Unity Catalog
+Upgrade models to Unity Catalog
+Limitations
+Stages are not supported for models in Unity Catalog. Databricks recommends using the three-level namespace in Unity Catalog to express the environment a model is in, and using aliases to promote models for deployment. SeePromote a model across environmentsfor details.
+Webhooks are not supported for models in Unity Catalog. See suggested alternatives inthe upgrade guide.
+Some search API fields and operators are not supported for models in Unity Catalog. This can be mitigated by calling the search APIs using supported filters and scanning the results. Following are some examples:Theorder_byparameter is not supported in thesearch_model_versionsorsearch_registered_modelsclient APIs.Tag-based filters (tags.mykey = 'myvalue') are not supported forsearch_model_versionsorsearch_registered_models.Operators other than exact equality (for example,LIKE,ILIKE,!=) are not supported forsearch_model_versionsorsearch_registered_models.Searching registered models by name (for example,MlflowClient().search_registered_models(filter_string="name='main.default.mymodel'")is not supported. To fetch a particular registered model by name, useget_registered_model.
+Theorder_byparameter is not supported in thesearch_model_versionsorsearch_registered_modelsclient APIs.
+order_by
+Tag-based filters (tags.mykey = 'myvalue') are not supported forsearch_model_versionsorsearch_registered_models.
+tags.mykey = 'myvalue'
+search_model_versions
+search_registered_models
+Operators other than exact equality (for example,LIKE,ILIKE,!=) are not supported forsearch_model_versionsorsearch_registered_models.
+LIKE
+ILIKE
+!=
+search_model_versions
+search_registered_models
+Searching registered models by name (for example,MlflowClient().search_registered_models(filter_string="name='main.default.mymodel'")is not supported. To fetch a particular registered model by name, useget_registered_model.
+MlflowClient().search_registered_models(filter_string="name='main.default.mymodel'")
+Email notifications and comment discussion threads on registered models and model versions are not supported in Unity Catalog.
+The activity log is not supported for models in Unity Catalog. To track activity on models in Unity Catalog, useaudit logs.
+search_registered_modelsmight return stale results for models shared through Delta Sharing. To ensure the most recent results, use the Databricks CLI orSDKto list the models in a schema.
+search_registered_models
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,990 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Perform safe rollout of new deployments for real-time inference
+Article
+2025-03-05
+7 contributors
+In this article
+APPLIES TO:Azure CLI ml extension v2 (current)Python SDK azure-ai-ml v2 (current)
+In this article, you see how to deploy a new version of a machine learning model in production without causing any disruption. You use a blue-green deployment strategy, which is also known as a safe rollout strategy, to introduce a new version of a web service to production. When you use this strategy, you can roll out your new version of the web service to a small subset of users or requests before rolling it out completely.
+This article assumes you use online endpoints, or endpoints that are used for online (real-time) inferencing. There are two types of online endpoints:managed online endpointsandKubernetes online endpoints. For more information about endpoints and the differences between endpoint types, seeManaged online endpoints vs. Kubernetes online endpoints.
+This article uses managed online endpoints for deployment. But it also includes notes that explain how to use Kubernetes endpoints instead of managed online endpoints.
+In this article, you see how to:
+Define an online endpoint with a deployment calledblueto serve the first version of a model.
+blue
+Scale thebluedeployment so that it can handle more requests.
+blue
+Deploy the second version of the model, which is called thegreendeployment, to the endpoint, but send the deployment no live traffic.
+green
+Test thegreendeployment in isolation.
+green
+Mirror a percentage of live traffic to thegreendeployment to validate it.
+green
+Send a small percentage of live traffic to thegreendeployment.
+green
+Send all live traffic to thegreendeployment.
+green
+Delete the unusedbluedeployment.
+blue
+Prerequisites
+Azure CLI
+Python SDK
+Studio
+TheAzure CLIand themlextension to the Azure CLI, installed and configured. For more information, seeInstall and set up the CLI (v2).
+TheAzure CLIand themlextension to the Azure CLI, installed and configured. For more information, seeInstall and set up the CLI (v2).
+ml
+A Bash shell or a compatible shell, for example, a shell on a Linux system orWindows Subsystem for Linux. The Azure CLI examples in this article assume that you use this type of shell.
+A Bash shell or a compatible shell, for example, a shell on a Linux system orWindows Subsystem for Linux. The Azure CLI examples in this article assume that you use this type of shell.
+An Azure Machine Learning workspace. For instructions to create a workspace, seeSet up.
+An Azure Machine Learning workspace. For instructions to create a workspace, seeSet up.
+A user account that has at least one of the following Azure role-based access control (Azure RBAC) roles:An Owner role for the Azure Machine Learning workspaceA Contributor role for the Azure Machine Learning workspaceA custom role that hasMicrosoft.MachineLearningServices/workspaces/onlineEndpoints/*permissionsFor more information, seeManage access to Azure Machine Learning workspaces.
+A user account that has at least one of the following Azure role-based access control (Azure RBAC) roles:
+An Owner role for the Azure Machine Learning workspace
+A Contributor role for the Azure Machine Learning workspace
+A custom role that hasMicrosoft.MachineLearningServices/workspaces/onlineEndpoints/*permissions
+Microsoft.MachineLearningServices/workspaces/onlineEndpoints/*
+For more information, seeManage access to Azure Machine Learning workspaces.
+Optionally,Docker Engine, installed and running locally. This prerequisite is highly recommended. You need it to deploy a model locally, and it's helpful for debugging.
+Optionally,Docker Engine, installed and running locally. This prerequisite is highly recommended. You need it to deploy a model locally, and it's helpful for debugging.
+APPLIES TO:Python SDK azure-ai-mlv2 (current)
+An Azure Machine Learning workspace. For steps for creating a workspace, seeCreate the workspace.
+An Azure Machine Learning workspace. For steps for creating a workspace, seeCreate the workspace.
+The Azure Machine Learning SDK for Python v2. To install the SDK, use the following command:pip install azure-ai-ml azure-identityTo update an existing installation of the SDK to the latest version, use the following command:pip install --upgrade azure-ai-ml azure-identityFor more information, seeAzure Machine Learning Package client library for Python.
+The Azure Machine Learning SDK for Python v2. To install the SDK, use the following command:
+pip install azure-ai-ml azure-identity
+pip install azure-ai-ml azure-identity
+To update an existing installation of the SDK to the latest version, use the following command:
+pip install --upgrade azure-ai-ml azure-identity
+pip install --upgrade azure-ai-ml azure-identity
+For more information, seeAzure Machine Learning Package client library for Python.
+A user account that has at least one of the following Azure role-based access control (Azure RBAC) roles:An Owner role for the Azure Machine Learning workspaceA Contributor role for the Azure Machine Learning workspaceA custom role that hasMicrosoft.MachineLearningServices/workspaces/onlineEndpoints/*permissionsFor more information, seeManage access to Azure Machine Learning workspaces.
+A user account that has at least one of the following Azure role-based access control (Azure RBAC) roles:
+An Owner role for the Azure Machine Learning workspace
+A Contributor role for the Azure Machine Learning workspace
+A custom role that hasMicrosoft.MachineLearningServices/workspaces/onlineEndpoints/*permissions
+Microsoft.MachineLearningServices/workspaces/onlineEndpoints/*
+For more information, seeManage access to Azure Machine Learning workspaces.
+Optionally,Docker Engine, installed and running locally. This prerequisite is highly recommended. You need it to deploy a model locally, and it's helpful for debugging.
+Optionally,Docker Engine, installed and running locally. This prerequisite is highly recommended. You need it to deploy a model locally, and it's helpful for debugging.
+An Azure subscription. If you don't have an Azure subscription, create afree accountbefore you begin.
+An Azure subscription. If you don't have an Azure subscription, create afree accountbefore you begin.
+An Azure Machine Learning workspace. For instructions for creating a workspace, seeCreate the workspace.
+An Azure Machine Learning workspace. For instructions for creating a workspace, seeCreate the workspace.
+A user account that has at least one of the following Azure role-based access control (Azure RBAC) roles:An Owner role for the Azure Machine Learning workspaceA Contributor role for the Azure Machine Learning workspaceA custom role that hasMicrosoft.MachineLearningServices/workspaces/onlineEndpoints/*permissionsFor more information, seeManage access to Azure Machine Learning workspaces.
+A user account that has at least one of the following Azure role-based access control (Azure RBAC) roles:
+An Owner role for the Azure Machine Learning workspace
+A Contributor role for the Azure Machine Learning workspace
+A custom role that hasMicrosoft.MachineLearningServices/workspaces/onlineEndpoints/*permissions
+Microsoft.MachineLearningServices/workspaces/onlineEndpoints/*
+For more information, seeManage access to Azure Machine Learning workspaces.
+Prepare your system
+Azure CLI
+Python SDK
+Studio
+Set environment variables
+You can configure default values to use with the Azure CLI. To avoid passing in values for your subscription, workspace, and resource group multiple times, run the following code:
+az account set --subscription <subscription-ID>
+az configure --defaults workspace=<Azure-Machine-Learning-workspace-name> group=<resource-group-name>
+az account set --subscription <subscription-ID>
+az configure --defaults workspace=<Azure-Machine-Learning-workspace-name> group=<resource-group-name>
+Clone the examples repository
+To follow along with this article, first clone theexamples repository (azureml-examples). Then go to the repository'scli/directory:
+cli/
+git clone --depth 1 https://github.com/Azure/azureml-examples
+cd azureml-examples
+cd cli
+git clone --depth 1 https://github.com/Azure/azureml-examples
+cd azureml-examples
+cd cli
+Tip
+Use--depth 1to clone only the latest commit to the repository, which reduces the time that's needed to complete the operation.
+--depth 1
+The commands in this tutorial are in the deploy-safe-rollout-online-endpoints.sh file in the cli directory, and the YAML configuration files are in the endpoints/online/managed/sample/ subdirectory.
+Note
+The YAML configuration files for Kubernetes online endpoints are in the endpoints/online/kubernetes/ subdirectory.
+Clone the examples repository
+To run the training examples, first clone theexamples repository (azureml-examples). Then go to the azureml-examples/sdk/python/endpoints/online/managed directory:
+git clone --depth 1 https://github.com/Azure/azureml-examples
+cd azureml-examples/sdk/python/endpoints/online/managed
+git clone --depth 1 https://github.com/Azure/azureml-examples
+cd azureml-examples/sdk/python/endpoints/online/managed
+Tip
+Use--depth 1to clone only the latest commit to the repository, which reduces the time that's needed to complete the operation.
+--depth 1
+The information in this article is based on theonline-endpoints-safe-rollout.ipynbnotebook. This article contains the same content as the notebook, but the order of the code blocks differs slightly between the two documents.
+Note
+The steps for the Kubernetes online endpoint are based on thekubernetes-online-endpoints-safe-rollout.ipynbnotebook.
+Connect to an Azure Machine Learning workspace
+Theworkspaceis the top-level resource for Azure Machine Learning. A workspace provides a centralized place to work with all the artifacts you create when you use Azure Machine Learning. In this section, you connect to your workspace, where you perform deployment tasks. To follow along, open your online-endpoints-safe-rollout.ipynb notebook.
+Import the required libraries:# import required libraries
+from azure.ai.ml import MLClient
+from azure.ai.ml.entities import (
+    ManagedOnlineEndpoint,
+    ManagedOnlineDeployment,
+    Model,
+    Environment,
+    CodeConfiguration,
+)
+from azure.identity import DefaultAzureCredentialNoteIf you're using a Kubernetes online endpoint, import theKubernetesOnlineEndpointandKubernetesOnlineDeploymentclass from theazure.ai.ml.entitieslibrary.
+Import the required libraries:
+# import required libraries
+from azure.ai.ml import MLClient
+from azure.ai.ml.entities import (
+    ManagedOnlineEndpoint,
+    ManagedOnlineDeployment,
+    Model,
+    Environment,
+    CodeConfiguration,
+)
+from azure.identity import DefaultAzureCredential
+# import required libraries
+from azure.ai.ml import MLClient
+from azure.ai.ml.entities import (
+    ManagedOnlineEndpoint,
+    ManagedOnlineDeployment,
+    Model,
+    Environment,
+    CodeConfiguration,
+)
+from azure.identity import DefaultAzureCredential
+Note
+If you're using a Kubernetes online endpoint, import theKubernetesOnlineEndpointandKubernetesOnlineDeploymentclass from theazure.ai.ml.entitieslibrary.
+KubernetesOnlineEndpoint
+KubernetesOnlineDeployment
+azure.ai.ml.entities
+Configure workspace settings and get a handle to the workspace:To connect to a workspace, you need identifier parametersâa subscription, a resource group, and a workspace name. You use this information in theMLClientclass from theazure.ai.mlmodule to get a handle to the required Azure Machine Learning workspace. This example uses thedefault Azure authentication.# enter details of your AML workspace
+subscription_id = "<SUBSCRIPTION_ID>"
+resource_group = "<RESOURCE_GROUP>"
+workspace = "<AML_WORKSPACE_NAME>"# get a handle to the workspace
+ml_client = MLClient(
+    DefaultAzureCredential(), subscription_id, resource_group, workspace
+)
+Configure workspace settings and get a handle to the workspace:
+To connect to a workspace, you need identifier parametersâa subscription, a resource group, and a workspace name. You use this information in theMLClientclass from theazure.ai.mlmodule to get a handle to the required Azure Machine Learning workspace. This example uses thedefault Azure authentication.
+MLClient
+azure.ai.ml
+# enter details of your AML workspace
+subscription_id = "<SUBSCRIPTION_ID>"
+resource_group = "<RESOURCE_GROUP>"
+workspace = "<AML_WORKSPACE_NAME>"
+# enter details of your AML workspace
+subscription_id = "<SUBSCRIPTION_ID>"
+resource_group = "<RESOURCE_GROUP>"
+workspace = "<AML_WORKSPACE_NAME>"
+# get a handle to the workspace
+ml_client = MLClient(
+    DefaultAzureCredential(), subscription_id, resource_group, workspace
+)
+# get a handle to the workspace
+ml_client = MLClient(
+    DefaultAzureCredential(), subscription_id, resource_group, workspace
+)
+If you have Git installed on your local machine, you can follow the instructions to clone the examples repository. Otherwise, follow the instructions to download files from the examples repository.
+Clone the examples repository
+To follow along with this article, clone theazureml-examples repository, and then go to the azureml-examples/cli/endpoints/online/model-1 folder.
+git clone --depth 1 https://github.com/Azure/azureml-examples
+cd azureml-examples/cli/endpoints/online/model-1
+git clone --depth 1 https://github.com/Azure/azureml-examples
+cd azureml-examples/cli/endpoints/online/model-1
+Tip
+Use--depth 1to clone only the latest commit to the repository, which reduces the time that's needed to complete the operation.
+--depth 1
+Download files from the examples repository
+Instead of cloning the examples repository, you can download the repository to your local machine:
+Go tohttps://github.com/Azure/azureml-examples/.
+Select<> Code, and then go to theLocaltab and selectDownload ZIP.
+Define the endpoint and deployment
+Online endpoints are used for online (real-time) inferencing. Online endpoints contain deployments that are ready to receive data from clients and send responses back in real time.
+Define an endpoint
+The following table lists key attributes to specify when you define an endpoint.
+key
+aml_token
+To see a full list of attributes that you can specify when you create an endpoint, seeCLI (v2) online endpoint YAML schema. For version 2 of the Azure Machine Learning SDK for Python, seeManagedOnlineEndpoint Class.
+Define a deployment
+Adeploymentis a set of resources that are required for hosting the model that does the actual inferencing. The following table describes key attributes to specify when you define a deployment.
+scikit-learn
+init
+run
+init
+run
+To see a full list of attributes that you can specify when you create a deployment, seeCLI (v2) managed online deployment YAML schema. For version 2 of the Python SDK, seeManagedOnlineDeployment Class.
+Azure CLI
+Python SDK
+Studio
+Create an online endpoint
+You first set the endpoint name and then configure it. In this article, you use the endpoints/online/managed/sample/endpoint.yml file to configure the endpoint. That file contains the following lines:
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schema.json
+name: my-endpoint
+auth_mode: key
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineEndpoint.schema.json
+name: my-endpoint
+auth_mode: key
+The following table describes keys that the endpoint YAML format uses. To see how to specify these attributes, seeCLI (v2) online endpoint YAML schema. For information about limits related to managed online endpoints, seeAzure Machine Learning online endpoints and batch endpoints.
+$schema
+name
+auth_mode
+key
+aml_token
+az ml online-endpoint get-credentials
+To create an online endpoint:
+Set your endpoint name by running the following Unix command. ReplaceYOUR_ENDPOINT_NAMEwith a unique name.export ENDPOINT_NAME="<YOUR_ENDPOINT_NAME>"ImportantEndpoint names must be unique within an Azure region. For example, in the Azurewestus2region, there can be only one endpoint with the namemy-endpoint.
+Set your endpoint name by running the following Unix command. ReplaceYOUR_ENDPOINT_NAMEwith a unique name.
+YOUR_ENDPOINT_NAME
+export ENDPOINT_NAME="<YOUR_ENDPOINT_NAME>"
+export ENDPOINT_NAME="<YOUR_ENDPOINT_NAME>"
+Important
+Endpoint names must be unique within an Azure region. For example, in the Azurewestus2region, there can be only one endpoint with the namemy-endpoint.
+westus2
+my-endpoint
+Create the endpoint in the cloud by running the following code. This code uses the endpoint.yml file to configure the endpoint:az ml online-endpoint create --name $ENDPOINT_NAME -f endpoints/online/managed/sample/endpoint.yml
+Create the endpoint in the cloud by running the following code. This code uses the endpoint.yml file to configure the endpoint:
+az ml online-endpoint create --name $ENDPOINT_NAME -f endpoints/online/managed/sample/endpoint.yml
+az ml online-endpoint create --name $ENDPOINT_NAME -f endpoints/online/managed/sample/endpoint.yml
+Create the blue deployment
+You can use the endpoints/online/managed/sample/blue-deployment.yml file to configure the key aspects of a deployment namedblue. That file contains the following lines:
+blue
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+name: blue
+endpoint_name: my-endpoint
+model:
+  path: ../../model-1/model/
+code_configuration:
+  code: ../../model-1/onlinescoring/
+  scoring_script: score.py
+environment: 
+  conda_file: ../../model-1/environment/conda.yaml
+  image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04:latest
+instance_type: Standard_DS3_v2
+instance_count: 1
+$schema: https://azuremlschemas.azureedge.net/latest/managedOnlineDeployment.schema.json
+name: blue
+endpoint_name: my-endpoint
+model:
+  path: ../../model-1/model/
+code_configuration:
+  code: ../../model-1/onlinescoring/
+  scoring_script: score.py
+environment: 
+  conda_file: ../../model-1/environment/conda.yaml
+  image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04:latest
+instance_type: Standard_DS3_v2
+instance_count: 1
+To use the blue-deployment.yml file to create thebluedeployment for your endpoint, run the following command:
+blue
+az ml online-deployment create --name blue --endpoint-name $ENDPOINT_NAME -f endpoints/online/managed/sample/blue-deployment.yml --all-traffic
+az ml online-deployment create --name blue --endpoint-name $ENDPOINT_NAME -f endpoints/online/managed/sample/blue-deployment.yml --all-traffic
+Important
+The--all-trafficflag in theaz ml online-deployment createcommand allocates 100 percent of the endpoint traffic to the newly createdbluedeployment.
+--all-traffic
+az ml online-deployment create
+blue
+In the blue-deployment.yaml file, thepathline specifies where to upload files from. The Azure Machine Learning CLI uses this information to upload the files and register the model and environment. As a best practice for production, you should register the model and environment and specify the registered name and version separately in the YAML code. Use the formatmodel: azureml:<model-name>:<model-version>for the model, for example,model: azureml:my-model:1. For the environment, use the formatenvironment: azureml:<environment-name>:<environment-version>, for example,environment: azureml:my-env:1.
+path
+model: azureml:<model-name>:<model-version>
+model: azureml:my-model:1
+environment: azureml:<environment-name>:<environment-version>
+environment: azureml:my-env:1
+For registration, you can extract the YAML definitions ofmodelandenvironmentinto separate YAML files and use the commandsaz ml model createandaz ml environment create. To find out more about these commands, runaz ml model create -handaz ml environment create -h.
+model
+environment
+az ml model create
+az ml environment create
+az ml model create -h
+az ml environment create -h
+For more information about registering your model as an asset, seeRegister a model by using the Azure CLI or Python SDK. For more information about creating an environment, seeCreate a custom environment.
+Create an online endpoint
+To create a managed online endpoint, use theManagedOnlineEndpointclass. This class provides a way for you to configure the key aspects of the endpoint.
+ManagedOnlineEndpoint
+Configure the endpoint:# Creating a unique endpoint name with current datetime to avoid conflicts
+import random
+
+online_endpoint_name = "endpt-moe-" + str(random.randint(0, 10000))
+
+# create an online endpoint
+endpoint = ManagedOnlineEndpoint(
+    name=online_endpoint_name,
+    description="this is a sample online endpoint",
+    auth_mode="key",
+    tags={"foo": "bar"},
+)NoteTo create a Kubernetes online endpoint, use theKubernetesOnlineEndpointclass.
+Configure the endpoint:
+# Creating a unique endpoint name with current datetime to avoid conflicts
+import random
+
+online_endpoint_name = "endpt-moe-" + str(random.randint(0, 10000))
+
+# create an online endpoint
+endpoint = ManagedOnlineEndpoint(
+    name=online_endpoint_name,
+    description="this is a sample online endpoint",
+    auth_mode="key",
+    tags={"foo": "bar"},
+)
+# Creating a unique endpoint name with current datetime to avoid conflicts
+import random
+
+online_endpoint_name = "endpt-moe-" + str(random.randint(0, 10000))
+
+# create an online endpoint
+endpoint = ManagedOnlineEndpoint(
+    name=online_endpoint_name,
+    description="this is a sample online endpoint",
+    auth_mode="key",
+    tags={"foo": "bar"},
+)
+Note
+To create a Kubernetes online endpoint, use theKubernetesOnlineEndpointclass.
+KubernetesOnlineEndpoint
+Create the endpoint:ml_client.online_endpoints.begin_create_or_update(endpoint).result()
+Create the endpoint:
+ml_client.online_endpoints.begin_create_or_update(endpoint).result()
+ml_client.online_endpoints.begin_create_or_update(endpoint).result()
+Create the blue deployment
+To create a deployment for your managed online endpoint, use theManagedOnlineDeploymentclass. This class provides a way for you to configure the key aspects of the deployment.
+ManagedOnlineDeployment
+Configure thebluedeployment:# create blue deployment
+model = Model(path="../model-1/model/sklearn_regression_model.pkl")
+env = Environment(
+    conda_file="../model-1/environment/conda.yaml",
+    image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04",
+)
+
+blue_deployment = ManagedOnlineDeployment(
+    name="blue",
+    endpoint_name=online_endpoint_name,
+    model=model,
+    environment=env,
+    code_configuration=CodeConfiguration(
+        code="../model-1/onlinescoring", scoring_script="score.py"
+    ),
+    instance_type="Standard_DS3_v2",
+    instance_count=1,
+)In this example, thepathparameter specifies where to upload files from. The Python SDK uses this information to upload the files and register the model and environment. As a best practice for production, you should register the model and environment and specify the registered name and version separately in the code.For more information about registering your model as an asset, seeRegister a model by using the Azure CLI or Python SDK.For more information about creating an environment, seeCreate a custom environment.NoteTo create a deployment for a Kubernetes online endpoint, use theKubernetesOnlineDeploymentclass.
+Configure thebluedeployment:
+blue
+# create blue deployment
+model = Model(path="../model-1/model/sklearn_regression_model.pkl")
+env = Environment(
+    conda_file="../model-1/environment/conda.yaml",
+    image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04",
+)
+
+blue_deployment = ManagedOnlineDeployment(
+    name="blue",
+    endpoint_name=online_endpoint_name,
+    model=model,
+    environment=env,
+    code_configuration=CodeConfiguration(
+        code="../model-1/onlinescoring", scoring_script="score.py"
+    ),
+    instance_type="Standard_DS3_v2",
+    instance_count=1,
+)
+# create blue deployment
+model = Model(path="../model-1/model/sklearn_regression_model.pkl")
+env = Environment(
+    conda_file="../model-1/environment/conda.yaml",
+    image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04",
+)
+
+blue_deployment = ManagedOnlineDeployment(
+    name="blue",
+    endpoint_name=online_endpoint_name,
+    model=model,
+    environment=env,
+    code_configuration=CodeConfiguration(
+        code="../model-1/onlinescoring", scoring_script="score.py"
+    ),
+    instance_type="Standard_DS3_v2",
+    instance_count=1,
+)
+In this example, thepathparameter specifies where to upload files from. The Python SDK uses this information to upload the files and register the model and environment. As a best practice for production, you should register the model and environment and specify the registered name and version separately in the code.
+path
+For more information about registering your model as an asset, seeRegister a model by using the Azure CLI or Python SDK.
+For more information about creating an environment, seeCreate a custom environment.
+Note
+To create a deployment for a Kubernetes online endpoint, use theKubernetesOnlineDeploymentclass.
+KubernetesOnlineDeployment
+Create the deployment:ml_client.online_deployments.begin_create_or_update(blue_deployment).result()# blue deployment takes 100 traffic
+endpoint.traffic = {"blue": 100}
+ml_client.online_endpoints.begin_create_or_update(endpoint).result()
+Create the deployment:
+ml_client.online_deployments.begin_create_or_update(blue_deployment).result()
+ml_client.online_deployments.begin_create_or_update(blue_deployment).result()
+# blue deployment takes 100 traffic
+endpoint.traffic = {"blue": 100}
+ml_client.online_endpoints.begin_create_or_update(endpoint).result()
+# blue deployment takes 100 traffic
+endpoint.traffic = {"blue": 100}
+ml_client.online_endpoints.begin_create_or_update(endpoint).result()
+When you create a managed online endpoint in Azure Machine Learning studio, you must define an initial deployment for the endpoint. Before you can define a deployment, you must have a registered model in your workspace. The following section shows you how to register a model to use for the deployment.
+Register your model
+A model registration is a logical entity in the workspace. This entity can contain a single model file or a directory of multiple files. As a best practice for production, you should register your model and environment.
+To register the example model, take the steps in the following sections.
+Go toAzure Machine Learning studio.
+Go toAzure Machine Learning studio.
+SelectModels.
+SelectModels.
+SelectRegister, and then selectFrom local files.
+SelectRegister, and then selectFrom local files.
+UnderModel type, selectUnspecified type.
+UnderModel type, selectUnspecified type.
+SelectBrowse, and then selectBrowse folder.
+SelectBrowse, and then selectBrowse folder.
+
+Go to the local copy of the repository you cloned or downloaded earlier, and then select\azureml-examples\cli\endpoints\online\model-1\model. When prompted, selectUploadand wait for the upload to finish.
+Go to the local copy of the repository you cloned or downloaded earlier, and then select\azureml-examples\cli\endpoints\online\model-1\model. When prompted, selectUploadand wait for the upload to finish.
+SelectNext.
+SelectNext.
+On theModel settingspage, underName, enter a friendly name for the model. The steps in this article assume the model is namedmodel-1.
+On theModel settingspage, underName, enter a friendly name for the model. The steps in this article assume the model is namedmodel-1.
+model-1
+SelectNext, and then selectRegisterto complete the registration.
+SelectNext, and then selectRegisterto complete the registration.
+For later examples in this article, you also need to register a model from the \azureml-examples\cli\endpoints\online\model-2\model folder in your local copy of the repository. To register that model, repeat the steps in the previous two sections, but name the modelmodel-2.
+model-2
+For more information about working with registered models, seeWork with registered models in Azure Machine Learning.
+For information about creating an environment in the studio, seeCreate an environment.
+Create a managed online endpoint and the blue deployment
+You can use Azure Machine Learning studio to create a managed online endpoint directly in your browser. When you create a managed online endpoint in the studio, you must define an initial deployment. You can't create an empty managed online endpoint.
+One way to create a managed online endpoint in the studio is from theModelspage. This method also provides an easy way to add a model to an existing managed online deployment. To deploy the model namedmodel-1that you registered previously in theRegister your modelsection, take the steps in the following sections.
+model-1
+Go toAzure Machine Learning studio, and then selectModels.
+Go toAzure Machine Learning studio, and then selectModels.
+In the list, select themodel-1model.
+In the list, select themodel-1model.
+model-1
+SelectDeploy>Real-time endpoint.A window opens that you can use to specify detailed information about your endpoint.
+SelectDeploy>Real-time endpoint.
+
+A window opens that you can use to specify detailed information about your endpoint.
+
+UnderEndpoint name, enter a name for your endpoint.
+UnderEndpoint name, enter a name for your endpoint.
+UnderCompute type, keep the default value ofManaged.
+UnderCompute type, keep the default value ofManaged.
+UnderAuthentication type, keep the default value ofkey-based authentication.
+UnderAuthentication type, keep the default value ofkey-based authentication.
+SelectNext, and then on theModelpage, selectNext.
+SelectNext, and then on theModelpage, selectNext.
+On theDeploymentpage, take the following steps:UnderDeployment name, enterblue.If you want to view graphs of your endpoint activities in the studio later:UnderInferencing data collection, turn on the toggle.UnderApplication Insights diagnostics, turn on the toggle.SelectNext.
+On theDeploymentpage, take the following steps:
+UnderDeployment name, enterblue.
+If you want to view graphs of your endpoint activities in the studio later:UnderInferencing data collection, turn on the toggle.UnderApplication Insights diagnostics, turn on the toggle.
+UnderInferencing data collection, turn on the toggle.
+UnderApplication Insights diagnostics, turn on the toggle.
+SelectNext.
+On theCode and environment for inferencingpage, take the following steps:UnderSelect a scoring script for inferencing, selectBrowse, and then select the \azureml-examples\cli\endpoints\online\model-1\onlinescoring\score.py file from the repository you cloned or downloaded earlier.In the search box above the list of environments, start enteringsklearn, and then select thesklearn-1.5:19curated environment.SelectNext.
+On theCode and environment for inferencingpage, take the following steps:
+UnderSelect a scoring script for inferencing, selectBrowse, and then select the \azureml-examples\cli\endpoints\online\model-1\onlinescoring\score.py file from the repository you cloned or downloaded earlier.
+In the search box above the list of environments, start enteringsklearn, and then select thesklearn-1.5:19curated environment.
+SelectNext.
+On theComputepage, take the following steps:UnderVirtual machine, keep the default value.UnderInstance count, replace the default value with1.SelectNext.
+On theComputepage, take the following steps:
+UnderVirtual machine, keep the default value.
+UnderInstance count, replace the default value with1.
+SelectNext.
+On theLive Trafficpage, selectNextto accept the default traffic allocation of 100 percent to thebluedeployment.
+On theLive Trafficpage, selectNextto accept the default traffic allocation of 100 percent to thebluedeployment.
+blue
+On theReviewpage, review your deployment settings, and then selectCreate.
+On theReviewpage, review your deployment settings, and then selectCreate.
+
+Alternatively, you can create a managed online endpoint from theEndpointspage in the studio.
+Go toAzure Machine Learning studio.
+Go toAzure Machine Learning studio.
+SelectEndpoints.
+SelectEndpoints.
+SelectCreate.A window opens that you can use to specify detailed information about your endpoint and deployment.
+SelectCreate.
+
+A window opens that you can use to specify detailed information about your endpoint and deployment.
+Select a model, and then selectSelect.
+Select a model, and then selectSelect.
+Enter settings for your endpoint and deployment as described in the previous two sections. In each step, use the default values, and in the last step, selectCreateto create the deployment.
+Enter settings for your endpoint and deployment as described in the previous two sections. In each step, use the default values, and in the last step, selectCreateto create the deployment.
+Confirm your existing deployment
+One way to confirm your existing deployment is to invoke your endpoint so that it can score your model for a given input request. When you invoke your endpoint via the Azure CLI or the Python SDK, you can choose to specify the name of the deployment to receive incoming traffic.
+Note
+Unlike the Azure CLI or Python SDK, Azure Machine Learning studio requires you to specify a deployment when you invoke an endpoint.
+Invoke an endpoint with a deployment name
+When you invoke an endpoint, you can specify the name of a deployment that you want to receive traffic. In this case, Azure Machine Learning routes the endpoint traffic directly to the specified deployment and returns its output. You can use the--deployment-nameoptionfor the Azure Machine Learning CLI v2, or thedeployment_nameoptionfor the Python SDK v2to specify the deployment.
+--deployment-name
+deployment_name
+Invoke the endpoint without specifying a deployment
+If you invoke the endpoint without specifying the deployment that you want to receive traffic, Azure Machine Learning routes the endpoint's incoming traffic to the deployments in the endpoint based on traffic control settings.
+Traffic control settings allocate specified percentages of incoming traffic to each deployment in the endpoint. For example, if your traffic rules specify that a particular deployment in your endpoint should receive incoming traffic 40 percent of the time, Azure Machine Learning routes 40 percent of the endpoint traffic to that deployment.
+Azure CLI
+Python SDK
+Studio
+To view the status of your existing endpoint and deployment, run the following commands:
+az ml online-endpoint show --name $ENDPOINT_NAME 
+
+az ml online-deployment show --name blue --endpoint $ENDPOINT_NAME
+az ml online-endpoint show --name $ENDPOINT_NAME 
+
+az ml online-deployment show --name blue --endpoint $ENDPOINT_NAME
+The output lists information about the$ENDPOINT_NAMEendpoint and thebluedeployment.
+$ENDPOINT_NAME
+blue
+Test the endpoint by using sample data
+You can invoke the endpoint by using theinvokecommand. The following command uses thesample-request.jsonJSON file to send a sample request:
+invoke
+az ml online-endpoint invoke --name $ENDPOINT_NAME --request-file endpoints/online/model-1/sample-request.json
+az ml online-endpoint invoke --name $ENDPOINT_NAME --request-file endpoints/online/model-1/sample-request.json
+Use the following code to check the status of the model deployment:
+ml_client.online_endpoints.get(name=online_endpoint_name)
+ml_client.online_endpoints.get(name=online_endpoint_name)
+Test the endpoint by using sample data
+You can use the instance ofMLClientthat you created earlier to get a handle to the endpoint. To invoke the endpoint, you can use theinvokecommand with the following parameters:
+MLClient
+invoke
+endpoint_name: The name of the endpoint
+endpoint_name
+request_file: A file that contains request data
+request_file
+deployment_name: The name of a deployment to test in the endpoint
+deployment_name
+The following code uses thesample-request.jsonJSON file to send a sample request.
+# test the blue deployment with some sample data
+ml_client.online_endpoints.invoke(
+    endpoint_name=online_endpoint_name,
+    deployment_name="blue",
+    request_file="../model-1/sample-request.json",
+)
+# test the blue deployment with some sample data
+ml_client.online_endpoints.invoke(
+    endpoint_name=online_endpoint_name,
+    deployment_name="blue",
+    request_file="../model-1/sample-request.json",
+)
+View managed online endpoints
+You can view all your managed online endpoints in the studio endpoints page. TheDetailstab of each endpoint's page displays critical information, such as the endpoint URI, status, testing tools, activity monitors, deployment logs, and sample consumption code. To see this information, take the following steps:
+In the studio, selectEndpoints. A list of all the endpoints in the workspace is displayed.
+In the studio, selectEndpoints. A list of all the endpoints in the workspace is displayed.
+Optionally, create a filter on the compute instance type to show only managed types.
+Optionally, create a filter on the compute instance type to show only managed types.
+Select an endpoint name to view the endpoint'sDetailspage.
+Select an endpoint name to view the endpoint'sDetailspage.
+
+Test the endpoint by using sample data
+On the endpoint page, you can use theTesttab to test your managed online deployment. To enter sample input and view the results, take the following steps:
+On the endpoint page, go to theTesttab. In theDeploymentlist, thebluedeployment is already selected.
+On the endpoint page, go to theTesttab. In theDeploymentlist, thebluedeployment is already selected.
+blue
+Go to thesample-request.json fileand copy its sample input.
+Go to thesample-request.json fileand copy its sample input.
+In the studio, paste the sample input into theInputbox.
+In the studio, paste the sample input into theInputbox.
+SelectTest.
+SelectTest.
+
+Scale your existing deployment to handle more traffic
+Azure CLI
+Python SDK
+Studio
+In the deployment described inDeploy and score a machine learning model by using an online endpoint, you set theinstance_countvalue to1in the deployment YAML file. You can scale out by using theupdatecommand:
+instance_count
+1
+update
+az ml online-deployment update --name blue --endpoint-name $ENDPOINT_NAME --set instance_count=2
+az ml online-deployment update --name blue --endpoint-name $ENDPOINT_NAME --set instance_count=2
+Note
+In the previous command, the--setoption overrides the deployment configuration. Alternatively, you can update the YAML file and pass it as input to theupdatecommand by using the--fileoption.
+--set
+update
+--file
+You can use the instance ofMLClientthat you created earlier to get a handle to the deployment. To scale the deployment, you can increase or decrease the value ofinstance_count.
+MLClient
+instance_count
+# scale the deployment
+blue_deployment = ml_client.online_deployments.get(
+    name="blue", endpoint_name=online_endpoint_name
+)
+blue_deployment.instance_count = 2
+ml_client.online_deployments.begin_create_or_update(blue_deployment).result()
+# scale the deployment
+blue_deployment = ml_client.online_deployments.get(
+    name="blue", endpoint_name=online_endpoint_name
+)
+blue_deployment.instance_count = 2
+ml_client.online_deployments.begin_create_or_update(blue_deployment).result()
+Get detailed information about the endpoint
+# Get the details for online endpoint
+endpoint = ml_client.online_endpoints.get(name=online_endpoint_name)
+
+# existing traffic details
+print(endpoint.traffic)
+
+# Get the scoring URI
+print(endpoint.scoring_uri)
+# Get the details for online endpoint
+endpoint = ml_client.online_endpoints.get(name=online_endpoint_name)
+
+# existing traffic details
+print(endpoint.traffic)
+
+# Get the scoring URI
+print(endpoint.scoring_uri)
+To scale the deployment up or down by adjusting the number of instances, take the following steps:
+On the endpoint page, go to theDetailstab, and find the card for thebluedeployment.
+On the endpoint page, go to theDetailstab, and find the card for thebluedeployment.
+blue
+On the header of thebluedeployment card, select the edit icon.
+On the header of thebluedeployment card, select the edit icon.
+blue
+UnderInstance count, enter2.
+UnderInstance count, enter2.
+SelectUpdate.
+SelectUpdate.
+
+Deploy a new model but don't send it traffic
+Azure CLI
+Python SDK
+Studio
+Create a new deployment namedgreen:
+green
+az ml online-deployment create --name green --endpoint-name $ENDPOINT_NAME -f endpoints/online/managed/sample/green-deployment.yml
+az ml online-deployment create --name green --endpoint-name $ENDPOINT_NAME -f endpoints/online/managed/sample/green-deployment.yml
+Because you don't explicitly allocate any traffic to thegreendeployment, it has zero traffic allocated to it. You can verify that fact by using the following command:
+green
+az ml online-endpoint show -n $ENDPOINT_NAME --query traffic
+az ml online-endpoint show -n $ENDPOINT_NAME --query traffic
+Test the new deployment
+Even though thegreendeployment has 0 percent of traffic allocated to it, you can invoke it directly by using the--deploymentoption:
+green
+--deployment
+az ml online-endpoint invoke --name $ENDPOINT_NAME --deployment-name green --request-file endpoints/online/model-2/sample-request.json
+az ml online-endpoint invoke --name $ENDPOINT_NAME --deployment-name green --request-file endpoints/online/model-2/sample-request.json
+If you want to use a REST client to invoke the deployment directly without going through traffic rules, set the following HTTP header:azureml-model-deployment: <deployment-name>. The following code uses Client for URL (cURL) to invoke the deployment directly. You can run the code in a Unix or Windows Subsystem for Linux (WSL) environment. For instructions for retrieving the$ENDPOINT_KEYvalue, seeGet the key or token for data plane operations.
+azureml-model-deployment: <deployment-name>
+$ENDPOINT_KEY
+# get the scoring uri
+SCORING_URI=$(az ml online-endpoint show -n $ENDPOINT_NAME -o tsv --query scoring_uri)
+# use curl to invoke the endpoint
+curl --request POST "$SCORING_URI" --header "Authorization: Bearer $ENDPOINT_KEY" --header 'Content-Type: application/json' --header "azureml-model-deployment: green" --data @endpoints/online/model-2/sample-request.json
+# get the scoring uri
+SCORING_URI=$(az ml online-endpoint show -n $ENDPOINT_NAME -o tsv --query scoring_uri)
+# use curl to invoke the endpoint
+curl --request POST "$SCORING_URI" --header "Authorization: Bearer $ENDPOINT_KEY" --header 'Content-Type: application/json' --header "azureml-model-deployment: green" --data @endpoints/online/model-2/sample-request.json
+Create a new deployment for your managed online endpoint, and name the deploymentgreen:
+green
+# create green deployment
+model2 = Model(path="../model-2/model/sklearn_regression_model.pkl")
+env2 = Environment(
+    conda_file="../model-2/environment/conda.yaml",
+    image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04",
+)
+
+green_deployment = ManagedOnlineDeployment(
+    name="green",
+    endpoint_name=online_endpoint_name,
+    model=model2,
+    environment=env2,
+    code_configuration=CodeConfiguration(
+        code="../model-2/onlinescoring", scoring_script="score.py"
+    ),
+    instance_type="Standard_DS3_v2",
+    instance_count=1,
+)
+# create green deployment
+model2 = Model(path="../model-2/model/sklearn_regression_model.pkl")
+env2 = Environment(
+    conda_file="../model-2/environment/conda.yaml",
+    image="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04",
+)
+
+green_deployment = ManagedOnlineDeployment(
+    name="green",
+    endpoint_name=online_endpoint_name,
+    model=model2,
+    environment=env2,
+    code_configuration=CodeConfiguration(
+        code="../model-2/onlinescoring", scoring_script="score.py"
+    ),
+    instance_type="Standard_DS3_v2",
+    instance_count=1,
+)
+# use MLClient to create green deployment
+ml_client.online_deployments.begin_create_or_update(green_deployment).result()
+# use MLClient to create green deployment
+ml_client.online_deployments.begin_create_or_update(green_deployment).result()
+Note
+If you're creating a deployment for a Kubernetes online endpoint, use theKubernetesOnlineDeploymentclass, and specify aKubernetes instance typein your Kubernetes cluster.
+KubernetesOnlineDeployment
+Test the new deployment
+Even though thegreendeployment has 0 percent of the traffic allocated to it, you can still invoke the endpoint and deployment. The following code uses thesample-request.jsonJSON file to send a sample request.
+green
+ml_client.online_endpoints.invoke(
+    endpoint_name=online_endpoint_name,
+    deployment_name="green",
+    request_file="../model-2/sample-request.json",
+)
+ml_client.online_endpoints.invoke(
+    endpoint_name=online_endpoint_name,
+    deployment_name="green",
+    request_file="../model-2/sample-request.json",
+)
+You can create a new deployment to add to your managed online endpoint. To create a deployment namedgreen, take the steps in the following sections.
+green
+Configure initial settings
+On the endpoint page, go to theDetailstab, and then selectAdd Deployment.
+On the endpoint page, go to theDetailstab, and then selectAdd Deployment.
+On theSelect a modelpage, selectmodel-2, and then selectSelect.
+On theSelect a modelpage, selectmodel-2, and then selectSelect.
+On theEndpointpage and on theModelpage, selectNext.
+On theEndpointpage and on theModelpage, selectNext.
+On theDeploymentpage, take the following steps:UnderDeployment name, entergreen.UnderInferencing data collection, turn on the toggle.UnderApplication Insights diagnostics, turn on the toggle.SelectNext.
+On theDeploymentpage, take the following steps:
+UnderDeployment name, entergreen.
+UnderInferencing data collection, turn on the toggle.
+UnderApplication Insights diagnostics, turn on the toggle.
+SelectNext.
+On theCode and environment for inferencingpage, take the following steps:UnderSelect a scoring script for inferencing, selectBrowse, and then select the \azureml-examples\cli\endpoints\online\model-2\onlinescoring\score.py file from the repository you cloned or downloaded earlier.In the search box above the list of environments, start enteringsklearn, and then select thesklearn-1.5:19curated environment.SelectNext.
+On theCode and environment for inferencingpage, take the following steps:
+UnderSelect a scoring script for inferencing, selectBrowse, and then select the \azureml-examples\cli\endpoints\online\model-2\onlinescoring\score.py file from the repository you cloned or downloaded earlier.
+In the search box above the list of environments, start enteringsklearn, and then select thesklearn-1.5:19curated environment.
+SelectNext.
+On theComputepage, take the following steps:UnderVirtual machine, keep the default value.UnderInstance count, replace the default value with1.SelectNext.
+On theComputepage, take the following steps:
+UnderVirtual machine, keep the default value.
+UnderInstance count, replace the default value with1.
+SelectNext.
+Configure remaining settings and create the deployment
+On theLive Trafficpage, selectNextto accept the default traffic allocation of 100 percent to thebluedeployment and 0 percent togreen.
+On theLive Trafficpage, selectNextto accept the default traffic allocation of 100 percent to thebluedeployment and 0 percent togreen.
+blue
+green
+On theReviewpage, review your deployment settings, and then selectCreate.
+On theReviewpage, review your deployment settings, and then selectCreate.
+
+Add a deployment from the Models page
+Alternatively, you can use theModelspage to add a deployment:
+In the studio, selectModels.
+In the studio, selectModels.
+Select a model in the list.
+Select a model in the list.
+SelectDeploy>Real-time endpoint.
+SelectDeploy>Real-time endpoint.
+UnderEndpoint, selectExisting.
+UnderEndpoint, selectExisting.
+In the list of endpoints, select the managed online endpoint that you want to deploy the model to, and then selectNext.
+In the list of endpoints, select the managed online endpoint that you want to deploy the model to, and then selectNext.
+
+On theModelpage, selectNext.
+On theModelpage, selectNext.
+To finish creating thegreendeployment, follow steps 4 through 6 in theConfigure initial settingssection and all the steps in theConfigure remaining settings and create the deploymentsection.
+To finish creating thegreendeployment, follow steps 4 through 6 in theConfigure initial settingssection and all the steps in theConfigure remaining settings and create the deploymentsection.
+green
+Note
+When you add a new deployment to an endpoint, you can use theUpdate traffic allocationpage to adjust the traffic balance between the deployments. But to follow the rest of the procedures in this article, keep the default traffic allocation of 100 percent to thebluedeployment for now and 0 percent to thegreendeployment.
+blue
+green
+Test the new deployment
+Even though 0 percent of the traffic goes to thegreendeployment, you can still invoke the endpoint and that deployment. On the endpoint page, you can use theTesttab to test your managed online deployment. To enter sample input and view the results, take the following steps:
+green
+On the endpoint page, go to theTesttab.
+On the endpoint page, go to theTesttab.
+In theDeploymentlist, selectgreen.
+In theDeploymentlist, selectgreen.
+Go to thesample-request.json fileand copy its sample input.
+Go to thesample-request.json fileand copy its sample input.
+In the studio, paste the sample input into theInputbox.
+In the studio, paste the sample input into theInputbox.
+SelectTest.
+SelectTest.
+Test the deployment with mirrored traffic
+After you test yourgreendeployment, you canmirrora percentage of the live traffic to your endpoint by copying that percentage of traffic and sending it to thegreendeployment. Traffic mirroring, which is also calledshadowing, doesn't change the results returned to clientsâ100 percent of requests still flow to thebluedeployment. The mirrored percentage of the traffic is copied and also submitted to thegreendeployment so that you can gather metrics and logging without impacting your clients.
+green
+green
+blue
+green
+Mirroring is useful when you want to validate a new deployment without impacting clients. For example, you can use mirroring to check whether latency is within acceptable bounds or to check that there are no HTTP errors. The use of traffic mirroring, or shadowing, to test a new deployment is also known asshadow testing. The deployment that receives the mirrored traffic, in this case, thegreendeployment, can also be called theshadow deployment.
+green
+Mirroring has the following limitations:
+Mirroring is supported for versions 2.4.0 and later of the Azure Machine Learning CLI and versions 1.0.0 and later of the Python SDK. If you use an older version of the Azure Machine Learning CLI or the Python SDK to update an endpoint, you lose the mirror traffic setting.
+Mirroring isn't currently supported for Kubernetes online endpoints.
+You can mirror traffic to only one deployment in an endpoint.
+The maximum percentage of traffic you can mirror is 50 percent. This cap limits the effect on yourendpoint bandwidth quota, which has a default value of 5 MBps. Your endpoint bandwidth is throttled if you exceed the allocated quota. For information about monitoring bandwidth throttling, seeBandwidth throttling.
+Also note the following behavior:
+You can configure a deployment to receive only live traffic or mirrored traffic, not both.
+When you invoke an endpoint, you can specify the name of any of its deploymentsâeven a shadow deploymentâto return the prediction.
+When you invoke an endpoint and specify the name of a deployment to receive incoming traffic, Azure Machine Learning doesn't mirror traffic to the shadow deployment. Azure Machine Learning mirrors traffic to the shadow deployment from traffic sent to the endpoint when you don't specify a deployment.
+If you set thegreendeployment to receive 10 percent of mirrored traffic, clients still receive predictions from thebluedeployment only.
+green
+blue
+
+Azure CLI
+Python SDK
+Studio
+Use the following command to mirror 10 percent of the traffic and send it to thegreendeployment:
+green
+az ml online-endpoint update --name $ENDPOINT_NAME --mirror-traffic "green=10"
+az ml online-endpoint update --name $ENDPOINT_NAME --mirror-traffic "green=10"
+You can test mirrored traffic by invoking the endpoint several times without specifying a deployment to receive the incoming traffic:
+for i in {1..20} ; do
+    az ml online-endpoint invoke --name $ENDPOINT_NAME --request-file endpoints/online/model-1/sample-request.json
+done
+for i in {1..20} ; do
+    az ml online-endpoint invoke --name $ENDPOINT_NAME --request-file endpoints/online/model-1/sample-request.json
+done
+You can confirm that the specified percentage of the traffic is sent to thegreendeployment by checking the logs from the deployment:
+green
+az ml online-deployment get-logs --name green --endpoint $ENDPOINT_NAME
+az ml online-deployment get-logs --name green --endpoint $ENDPOINT_NAME
+After testing, you can set the mirror traffic to zero to disable mirroring:
+az ml online-endpoint update --name $ENDPOINT_NAME --mirror-traffic "green=0"
+az ml online-endpoint update --name $ENDPOINT_NAME --mirror-traffic "green=0"
+Use the following code to mirror 10 percent of the traffic and send it to thegreendeployment:
+green
+endpoint.mirror_traffic = {"green": 10}
+ml_client.begin_create_or_update(endpoint).result()
+endpoint.mirror_traffic = {"green": 10}
+ml_client.begin_create_or_update(endpoint).result()
+You can test mirrored traffic by invoking the endpoint several times without specifying a deployment to receive the incoming traffic:
+# You can test mirror traffic by invoking the endpoint several times
+for i in range(20):
+    ml_client.online_endpoints.invoke(
+        endpoint_name=online_endpoint_name,
+        request_file="../model-1/sample-request.json",
+    )
+# You can test mirror traffic by invoking the endpoint several times
+for i in range(20):
+    ml_client.online_endpoints.invoke(
+        endpoint_name=online_endpoint_name,
+        request_file="../model-1/sample-request.json",
+    )
+You can confirm that the specified percentage of the traffic is sent to thegreendeployment by checking the logs from the deployment:
+green
+ml_client.online_deployments.get_logs(
+    name="green", endpoint_name=online_endpoint_name, lines=50
+)
+ml_client.online_deployments.get_logs(
+    name="green", endpoint_name=online_endpoint_name, lines=50
+)
+After testing, you can set the mirror traffic to zero to disable mirroring:
+endpoint.mirror_traffic = {"green": 0}
+ml_client.begin_create_or_update(endpoint).result()
+endpoint.mirror_traffic = {"green": 0}
+ml_client.begin_create_or_update(endpoint).result()
+To mirror 10 percent of the traffic and send it to thegreendeployment, take the following steps:
+green
+On the endpoint page, go to theDetailstab, and then selectUpdate traffic.
+On the endpoint page, go to theDetailstab, and then selectUpdate traffic.
+Turn on theEnable mirrored traffictoggle.
+Turn on theEnable mirrored traffictoggle.
+In theDeployment namelist, selectgreen.
+In theDeployment namelist, selectgreen.
+UnderTraffic allocation %, keep the default value of 10 percent.
+UnderTraffic allocation %, keep the default value of 10 percent.
+SelectUpdate.
+SelectUpdate.
+
+The endpoint details page now shows a mirrored traffic allocation of 10 percent to thegreendeployment.
+green
+
+To test mirrored traffic, see the Azure CLI or Python tabs to invoke the endpoint several times. Confirm that the specified percentage of traffic is sent to thegreendeployment by checking the logs from the deployment. You can access the deployment logs on the endpoint page by going to theLogstab.
+green
+You can also use metrics and logs to monitor the performance of the mirrored traffic. For more information, seeMonitor online endpoints.
+After testing, you can disable mirroring by taking the following steps:
+On the endpoint page, go to theDetailstab, and then selectUpdate traffic.
+On the endpoint page, go to theDetailstab, and then selectUpdate traffic.
+Turn off theEnable mirrored traffictoggle.
+Turn off theEnable mirrored traffictoggle.
+SelectUpdate.
+SelectUpdate.
+
+Allocate a small percentage of live traffic to the new deployment
+After you test yourgreendeployment, allocate a small percentage of traffic to it:
+green
+Azure CLI
+Python SDK
+Studio
+az ml online-endpoint update --name $ENDPOINT_NAME --traffic "blue=90 green=10"
+az ml online-endpoint update --name $ENDPOINT_NAME --traffic "blue=90 green=10"
+endpoint.traffic = {"blue": 90, "green": 10}
+ml_client.begin_create_or_update(endpoint).result()
+endpoint.traffic = {"blue": 90, "green": 10}
+ml_client.begin_create_or_update(endpoint).result()
+On the endpoint page, go to theDetailstab, and then selectUpdate traffic.
+On the endpoint page, go to theDetailstab, and then selectUpdate traffic.
+Adjust the deployment traffic by allocating 10 percent to thegreendeployment and 90 percent to thebluedeployment.
+Adjust the deployment traffic by allocating 10 percent to thegreendeployment and 90 percent to thebluedeployment.
+green
+blue
+SelectUpdate.
+SelectUpdate.
+Tip
+The total traffic percentage must be either 0 percent, to disable traffic, or 100 percent, to enable traffic.
+Yourgreendeployment now receives 10 percent of all live traffic. Clients receive predictions from both theblueandgreendeployments.
+green
+blue
+green
+
+Send all traffic to the new deployment
+When you're fully satisfied with yourgreendeployment, switch all traffic to it.
+green
+Azure CLI
+Python SDK
+Studio
+az ml online-endpoint update --name $ENDPOINT_NAME --traffic "blue=0 green=100"
+az ml online-endpoint update --name $ENDPOINT_NAME --traffic "blue=0 green=100"
+endpoint.traffic = {"blue": 0, "green": 100}
+ml_client.begin_create_or_update(endpoint).result()
+endpoint.traffic = {"blue": 0, "green": 100}
+ml_client.begin_create_or_update(endpoint).result()
+On the endpoint page, go to theDetailstab, and then selectUpdate traffic.
+On the endpoint page, go to theDetailstab, and then selectUpdate traffic.
+Adjust the deployment traffic by allocating 100 percent to thegreendeployment and 0 percent to thebluedeployment.
+Adjust the deployment traffic by allocating 100 percent to thegreendeployment and 0 percent to thebluedeployment.
+green
+blue
+SelectUpdate.
+SelectUpdate.
+Remove the old deployment
+Use the following steps to delete an individual deployment from a managed online endpoint. Deleting an individual deployment doesn't affect the other deployments in the managed online endpoint:
+Azure CLI
+Python SDK
+Studio
+az ml online-deployment delete --name blue --endpoint $ENDPOINT_NAME --yes --no-wait
+az ml online-deployment delete --name blue --endpoint $ENDPOINT_NAME --yes --no-wait
+ml_client.online_deployments.begin_delete(
+    name="blue", endpoint_name=online_endpoint_name
+).wait()
+ml_client.online_deployments.begin_delete(
+    name="blue", endpoint_name=online_endpoint_name
+).wait()
+Note
+You can't delete a deployment that has live traffic allocated to it. Before you delete the deployment, you mustset the traffic allocationfor the deployment to 0 percent.
+On the endpoint page, go to theDetailstab, and then go to thebluedeployment card.
+On the endpoint page, go to theDetailstab, and then go to thebluedeployment card.
+blue
+Next to the deployment name, select the delete icon.
+Next to the deployment name, select the delete icon.
+Delete the endpoint and deployment
+If you aren't going to use the endpoint and deployment, you should delete them. When you delete an endpoint, all its underlying deployments are also deleted.
+Azure CLI
+Python SDK
+Studio
+az ml online-endpoint delete --name $ENDPOINT_NAME --yes --no-wait
+az ml online-endpoint delete --name $ENDPOINT_NAME --yes --no-wait
+ml_client.online_endpoints.begin_delete(name=online_endpoint_name)
+ml_client.online_endpoints.begin_delete(name=online_endpoint_name)
+Go toAzure Machine Learning studio.
+Go toAzure Machine Learning studio.
+SelectEndpoints.
+SelectEndpoints.
+Select an endpoint in the list.
+Select an endpoint in the list.
+SelectDelete.
+SelectDelete.
+Alternatively, you can delete a managed online endpoint directly in the endpoint page by going to theDetailstabs and selecting the delete icon.
+Related content
+Deploy models with REST
+Online endpoint samples
+Use network isolation with managed online endpoints
+Access Azure resources from an online endpoint with a managed identity
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,662 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Ingest and query monitoring data in Azure Data Explorer
+Article
+2023-03-17
+21 contributors
+In this article
+This tutorial will teach you how to ingest data from diagnostic and activity logs to an Azure Data Explorer cluster without writing code. With this simple ingestion method, you can quickly begin querying Azure Data Explorer for data analysis.
+In this tutorial, you'll learn how to:
+Create tables and ingestion mapping in an Azure Data Explorer database.
+Format the ingested data by using an update policy.
+Create anevent huband connect it to Azure Data Explorer.
+Stream data to an event hub from Azure Monitordiagnostic metrics and logsandactivity logs.
+Query the ingested data by using Azure Data Explorer.
+Note
+Create all resources in the same Azure location or region.
+Prerequisites
+An Azure subscription. Create afree Azure account.
+An Azure Data Explorer cluster and database.Create a cluster and database. In this tutorial, the database name isTestDatabase.
+Azure Monitor data provider: diagnostic metrics and logs and activity logs
+View and understand the data provided by the Azure Monitor diagnostic metrics and logs and activity logs below. You'll create an ingestion pipeline based on these data schemas. Note that each event in a log has an array of records. This array of records will be split later in the tutorial.
+Examples of diagnostic metrics and logs and activity logs
+Azure diagnostic metrics and logs and activity logs are emitted by an Azure service and provide data about the operation of that service.
+Diagnostic metrics
+Diagnostic logs
+Activity logs
+Diagnostic metrics are aggregated with a time grain of 1 minute. Following is an example of an Azure Data Explorer metric-event schema on query duration:
+{
+    "records": [
+    {
+        "count": 14,
+        "total": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "average": 0,
+        "resourceId": "/SUBSCRIPTIONS/<subscriptionID>/RESOURCEGROUPS/<resource-group>/PROVIDERS/MICROSOFT.KUSTO/CLUSTERS/<cluster-name>",
+        "time": "2018-12-20T17:00:00.0000000Z",
+        "metricName": "QueryDuration",
+        "timeGrain": "PT1M"
+    },
+    {
+        "count": 12,
+        "total": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "average": 0,
+        "resourceId": "/SUBSCRIPTIONS/<subscriptionID>/RESOURCEGROUPS/<resource-group>/PROVIDERS/MICROSOFT.KUSTO/CLUSTERS/<cluster-name>",
+        "time": "2018-12-21T17:00:00.0000000Z",
+        "metricName": "QueryDuration",
+        "timeGrain": "PT1M"
+    }
+    ]
+}
+{
+    "records": [
+    {
+        "count": 14,
+        "total": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "average": 0,
+        "resourceId": "/SUBSCRIPTIONS/<subscriptionID>/RESOURCEGROUPS/<resource-group>/PROVIDERS/MICROSOFT.KUSTO/CLUSTERS/<cluster-name>",
+        "time": "2018-12-20T17:00:00.0000000Z",
+        "metricName": "QueryDuration",
+        "timeGrain": "PT1M"
+    },
+    {
+        "count": 12,
+        "total": 0,
+        "minimum": 0,
+        "maximum": 0,
+        "average": 0,
+        "resourceId": "/SUBSCRIPTIONS/<subscriptionID>/RESOURCEGROUPS/<resource-group>/PROVIDERS/MICROSOFT.KUSTO/CLUSTERS/<cluster-name>",
+        "time": "2018-12-21T17:00:00.0000000Z",
+        "metricName": "QueryDuration",
+        "timeGrain": "PT1M"
+    }
+    ]
+}
+Following is an example of an Azure Data Explorerdiagnostic ingestion log:
+{
+    "time": "2019-08-26T13:22:36.8804326Z",
+    "resourceId": "/SUBSCRIPTIONS/<subscriptionID>/RESOURCEGROUPS/<resource-group>/PROVIDERS/MICROSOFT.KUSTO/CLUSTERS/<cluster-name>",
+    "operationName": "MICROSOFT.KUSTO/CLUSTERS/INGEST/ACTION",
+    "operationVersion": "1.0",
+    "category": "FailedIngestion",
+    "resultType": "Failed",
+    "correlationId": "d59882f1-ad64-4fc4-b2ef-d663b6cc1cc5",
+    "properties": {
+        "OperationId": "00000000-0000-0000-0000-000000000000",
+        "Database": "Kusto",
+        "Table": "Table_13_20_prod",
+        "FailedOn": "2019-08-26T13:22:36.8804326Z",
+        "IngestionSourceId": "d59882f1-ad64-4fc4-b2ef-d663b6cc1cc5",
+        "Details":
+        {
+            "error":
+            {
+                "code": "BadRequest_DatabaseNotExist",
+                "message": "Request is invalid and cannot be executed.",
+                "@type": "Kusto.Data.Exceptions.DatabaseNotFoundException",
+                "@message": "Database 'Kusto' was not found.",
+                "@context":
+                {
+                    "timestamp": "2019-08-26T13:22:36.7179157Z",
+                    "serviceAlias": "<cluster-name>",
+                    "machineName": "KEngine000001",
+                    "processName": "Kusto.WinSvc.Svc",
+                    "processId": 5336,
+                    "threadId": 6528,
+                    "appDomainName": "Kusto.WinSvc.Svc.exe",
+                    "clientRequestd": "DM.IngestionExecutor;a70ddfdc-b471-4fc7-beac-bb0f6e569fe8",
+                    "activityId": "f13e7718-1153-4e65-bf82-8583d712976f",
+                    "subActivityId": "2cdad9d0-737b-4c69-ac9a-22cf9af0c41b",
+                    "activityType": "DN.AdminCommand.DataIngestPullCommand",
+                    "parentActivityId": "2f65e533-a364-44dd-8d45-d97460fb5795",
+                    "activityStack": "(Activity stack: CRID=DM.IngestionExecutor;a70ddfdc-b471-4fc7-beac-bb0f6e569fe8 ARID=f13e7718-1153-4e65-bf82-8583d712976f > DN.Admin.Client.ExecuteControlCommand/5b764b32-6017-44a2-89e7-860eda515d40 > P.WCF.Service.ExecuteControlCommandInternal..IAdminClientServiceCommunicationContract/c2ef9344-069d-44c4-88b1-a3570697ec77 > DN.FE.ExecuteControlCommand/2f65e533-a364-44dd-8d45-d97460fb5795 > DN.AdminCommand.DataIngestPullCommand/2cdad9d0-737b-4c69-ac9a-22cf9af0c41b)"
+                },
+                "@permanent": true
+            }
+        },
+        "ErrorCode": "BadRequest_DatabaseNotExist",
+        "FailureStatus": "Permanent",
+        "RootActivityId": "00000000-0000-0000-0000-000000000000",
+        "OriginatesFromUpdatePolicy": false,
+        "ShouldRetry": false,
+        "IngestionSourcePath": "https://c0skstrldkereneus01.blob.core.windows.net/aam-20190826-temp-e5c334ee145d4b43a3a2d3a96fbac1df/3216_test_3_columns_invalid_8f57f0d161ed4a8c903c6d1073005732_59951f9ca5d143b6bdefe52fa381a8ca.zip"
+    }
+}
+{
+    "time": "2019-08-26T13:22:36.8804326Z",
+    "resourceId": "/SUBSCRIPTIONS/<subscriptionID>/RESOURCEGROUPS/<resource-group>/PROVIDERS/MICROSOFT.KUSTO/CLUSTERS/<cluster-name>",
+    "operationName": "MICROSOFT.KUSTO/CLUSTERS/INGEST/ACTION",
+    "operationVersion": "1.0",
+    "category": "FailedIngestion",
+    "resultType": "Failed",
+    "correlationId": "d59882f1-ad64-4fc4-b2ef-d663b6cc1cc5",
+    "properties": {
+        "OperationId": "00000000-0000-0000-0000-000000000000",
+        "Database": "Kusto",
+        "Table": "Table_13_20_prod",
+        "FailedOn": "2019-08-26T13:22:36.8804326Z",
+        "IngestionSourceId": "d59882f1-ad64-4fc4-b2ef-d663b6cc1cc5",
+        "Details":
+        {
+            "error":
+            {
+                "code": "BadRequest_DatabaseNotExist",
+                "message": "Request is invalid and cannot be executed.",
+                "@type": "Kusto.Data.Exceptions.DatabaseNotFoundException",
+                "@message": "Database 'Kusto' was not found.",
+                "@context":
+                {
+                    "timestamp": "2019-08-26T13:22:36.7179157Z",
+                    "serviceAlias": "<cluster-name>",
+                    "machineName": "KEngine000001",
+                    "processName": "Kusto.WinSvc.Svc",
+                    "processId": 5336,
+                    "threadId": 6528,
+                    "appDomainName": "Kusto.WinSvc.Svc.exe",
+                    "clientRequestd": "DM.IngestionExecutor;a70ddfdc-b471-4fc7-beac-bb0f6e569fe8",
+                    "activityId": "f13e7718-1153-4e65-bf82-8583d712976f",
+                    "subActivityId": "2cdad9d0-737b-4c69-ac9a-22cf9af0c41b",
+                    "activityType": "DN.AdminCommand.DataIngestPullCommand",
+                    "parentActivityId": "2f65e533-a364-44dd-8d45-d97460fb5795",
+                    "activityStack": "(Activity stack: CRID=DM.IngestionExecutor;a70ddfdc-b471-4fc7-beac-bb0f6e569fe8 ARID=f13e7718-1153-4e65-bf82-8583d712976f > DN.Admin.Client.ExecuteControlCommand/5b764b32-6017-44a2-89e7-860eda515d40 > P.WCF.Service.ExecuteControlCommandInternal..IAdminClientServiceCommunicationContract/c2ef9344-069d-44c4-88b1-a3570697ec77 > DN.FE.ExecuteControlCommand/2f65e533-a364-44dd-8d45-d97460fb5795 > DN.AdminCommand.DataIngestPullCommand/2cdad9d0-737b-4c69-ac9a-22cf9af0c41b)"
+                },
+                "@permanent": true
+            }
+        },
+        "ErrorCode": "BadRequest_DatabaseNotExist",
+        "FailureStatus": "Permanent",
+        "RootActivityId": "00000000-0000-0000-0000-000000000000",
+        "OriginatesFromUpdatePolicy": false,
+        "ShouldRetry": false,
+        "IngestionSourcePath": "https://c0skstrldkereneus01.blob.core.windows.net/aam-20190826-temp-e5c334ee145d4b43a3a2d3a96fbac1df/3216_test_3_columns_invalid_8f57f0d161ed4a8c903c6d1073005732_59951f9ca5d143b6bdefe52fa381a8ca.zip"
+    }
+}
+Azure activity logs are subscription-level logs that provide insight into the operations performed on resources in your subscription. Following is an example of an activity-log event for checking access:
+{
+    "records": [
+    {
+        "time": "2018-12-26T16:23:06.1090193Z",
+        "resourceId": "/SUBSCRIPTIONS/<subscriptionID>/RESOURCEGROUPS/<resource-group>/PROVIDERS/MICROSOFT.WEB/SITES/CLNB5F73B70-DCA2-47C2-BB24-77B1A2CAAB4D/PROVIDERS/MICROSOFT.AUTHORIZATION",
+        "operationName": "MICROSOFT.AUTHORIZATION/CHECKACCESS/ACTION",
+        "category": "Action",
+        "resultType": "Start",
+        "resultSignature": "Started.",
+        "durationMs": 0,
+        "callerIpAddress": "13.66.225.188",
+        "correlationId": "0de9f4bc-4adc-4209-a774-1b4f4ae573ed",
+        "identity": {
+            "authorization": {
+                ...
+            },
+            "claims": {
+                ...
+            }
+        },
+        "level": "Information",
+        "location": "global",
+        "properties": {
+            ...
+        }
+    },
+    {
+        "time": "2018-12-26T16:23:06.3040244Z",
+        "resourceId": "/SUBSCRIPTIONS/<subscriptionID>/RESOURCEGROUPS/<resource-group>/PROVIDERS/MICROSOFT.WEB/SITES/CLNB5F73B70-DCA2-47C2-BB24-77B1A2CAAB4D/PROVIDERS/MICROSOFT.AUTHORIZATION",
+        "operationName": "MICROSOFT.AUTHORIZATION/CHECKACCESS/ACTION",
+        "category": "Action",
+        "resultType": "Success",
+        "resultSignature": "Succeeded.OK",
+        "durationMs": 194,
+        "callerIpAddress": "13.66.225.188",
+        "correlationId": "0de9f4bc-4adc-4209-a774-1b4f4ae573ed",
+        "identity": {
+            "authorization": {
+                ...
+            },
+            "claims": {
+                ...
+            }
+        },
+        "level": "Information",
+        "location": "global",
+        "properties": {
+            "statusCode": "OK",
+            "serviceRequestId": "87acdebc-945f-4c0c-b931-03050e085626"
+        }
+    }]
+}
+{
+    "records": [
+    {
+        "time": "2018-12-26T16:23:06.1090193Z",
+        "resourceId": "/SUBSCRIPTIONS/<subscriptionID>/RESOURCEGROUPS/<resource-group>/PROVIDERS/MICROSOFT.WEB/SITES/CLNB5F73B70-DCA2-47C2-BB24-77B1A2CAAB4D/PROVIDERS/MICROSOFT.AUTHORIZATION",
+        "operationName": "MICROSOFT.AUTHORIZATION/CHECKACCESS/ACTION",
+        "category": "Action",
+        "resultType": "Start",
+        "resultSignature": "Started.",
+        "durationMs": 0,
+        "callerIpAddress": "13.66.225.188",
+        "correlationId": "0de9f4bc-4adc-4209-a774-1b4f4ae573ed",
+        "identity": {
+            "authorization": {
+                ...
+            },
+            "claims": {
+                ...
+            }
+        },
+        "level": "Information",
+        "location": "global",
+        "properties": {
+            ...
+        }
+    },
+    {
+        "time": "2018-12-26T16:23:06.3040244Z",
+        "resourceId": "/SUBSCRIPTIONS/<subscriptionID>/RESOURCEGROUPS/<resource-group>/PROVIDERS/MICROSOFT.WEB/SITES/CLNB5F73B70-DCA2-47C2-BB24-77B1A2CAAB4D/PROVIDERS/MICROSOFT.AUTHORIZATION",
+        "operationName": "MICROSOFT.AUTHORIZATION/CHECKACCESS/ACTION",
+        "category": "Action",
+        "resultType": "Success",
+        "resultSignature": "Succeeded.OK",
+        "durationMs": 194,
+        "callerIpAddress": "13.66.225.188",
+        "correlationId": "0de9f4bc-4adc-4209-a774-1b4f4ae573ed",
+        "identity": {
+            "authorization": {
+                ...
+            },
+            "claims": {
+                ...
+            }
+        },
+        "level": "Information",
+        "location": "global",
+        "properties": {
+            "statusCode": "OK",
+            "serviceRequestId": "87acdebc-945f-4c0c-b931-03050e085626"
+        }
+    }]
+}
+Set up an ingestion pipeline in Azure Data Explorer
+Setting up an Azure Data Explorer pipeline involves several steps, such astable creation and data ingestion. You can also manipulate, map, and update the data.
+Connect to the Azure Data Explorer web UI
+In your Azure Data ExplorerTestDatabasedatabase, selectQueryto open the Azure Data Explorer web UI.
+
+Create the target tables
+The structure of the Azure Monitor logs isn't tabular. You'll manipulate the data and expand each event to one or more records. The raw data will be ingested to an intermediate table namedActivityLogsRawRecordsfor activity logs andDiagnosticRawRecordsfor diagnostic metrics and logs. At that time, the data will be manipulated and expanded. Using an update policy, the expanded data will then be ingested into theActivityLogstable for activity logs,DiagnosticMetricsfor diagnostic metrics andDiagnosticLogsfor diagnostic logs. This means that you'll need to create two separate tables for ingesting activity logs and three separate tables for ingesting diagnostic metrics and logs.
+Use the Azure Data Explorer web UI to create the target tables in the Azure Data Explorer database.
+Diagnostic metrics
+Diagnostic logs
+Activity logs
+In theTestDatabasedatabase, create a table namedDiagnosticMetricsto store the diagnostic metrics records. Use the following.create tablemanagement command:.create table DiagnosticMetrics (Timestamp:datetime, ResourceId:string, MetricName:string, Count:int, Total:double, Minimum:double, Maximum:double, Average:double, TimeGrain:string)
+In theTestDatabasedatabase, create a table namedDiagnosticMetricsto store the diagnostic metrics records. Use the following.create tablemanagement command:
+.create table
+.create table DiagnosticMetrics (Timestamp:datetime, ResourceId:string, MetricName:string, Count:int, Total:double, Minimum:double, Maximum:double, Average:double, TimeGrain:string)
+.create table DiagnosticMetrics (Timestamp:datetime, ResourceId:string, MetricName:string, Count:int, Total:double, Minimum:double, Maximum:double, Average:double, TimeGrain:string)
+SelectRunto create the table.
+SelectRunto create the table.
+
+Create the intermediate data table namedDiagnosticRawRecordsin theTestDatabasedatabase for data manipulation using the following query. SelectRunto create the table..create table DiagnosticRawRecords (Records:dynamic)
+Create the intermediate data table namedDiagnosticRawRecordsin theTestDatabasedatabase for data manipulation using the following query. SelectRunto create the table.
+.create table DiagnosticRawRecords (Records:dynamic)
+.create table DiagnosticRawRecords (Records:dynamic)
+Set zeroretention policyfor the intermediate table:.alter-merge table DiagnosticRawRecords policy retention softdelete = 0d
+Set zeroretention policyfor the intermediate table:
+.alter-merge table DiagnosticRawRecords policy retention softdelete = 0d
+.alter-merge table DiagnosticRawRecords policy retention softdelete = 0d
+In theTestDatabasedatabase, create a table namedDiagnosticLogsto store the diagnostic log records. Use the following.create tablemanagement command:.create table DiagnosticLogs (Timestamp:datetime, ResourceId:string, OperationName:string, Result:string, OperationId:string, Database:string, Table:string, IngestionSourceId:string, IngestionSourcePath:string, RootActivityId:string, ErrorCode:string, FailureStatus:string, Details:string)
+In theTestDatabasedatabase, create a table namedDiagnosticLogsto store the diagnostic log records. Use the following.create tablemanagement command:
+.create table
+.create table DiagnosticLogs (Timestamp:datetime, ResourceId:string, OperationName:string, Result:string, OperationId:string, Database:string, Table:string, IngestionSourceId:string, IngestionSourcePath:string, RootActivityId:string, ErrorCode:string, FailureStatus:string, Details:string)
+.create table DiagnosticLogs (Timestamp:datetime, ResourceId:string, OperationName:string, Result:string, OperationId:string, Database:string, Table:string, IngestionSourceId:string, IngestionSourcePath:string, RootActivityId:string, ErrorCode:string, FailureStatus:string, Details:string)
+SelectRunto create the table.
+SelectRunto create the table.
+Create the intermediate data table namedDiagnosticRawRecordsin theTestDatabasedatabase for data manipulation using the following query. SelectRunto create the table..create table DiagnosticRawRecords (Records:dynamic)
+Create the intermediate data table namedDiagnosticRawRecordsin theTestDatabasedatabase for data manipulation using the following query. SelectRunto create the table.
+.create table DiagnosticRawRecords (Records:dynamic)
+.create table DiagnosticRawRecords (Records:dynamic)
+Set zeroretention policyfor the intermediate table:.alter-merge table DiagnosticRawRecords policy retention softdelete = 0d
+Set zeroretention policyfor the intermediate table:
+.alter-merge table DiagnosticRawRecords policy retention softdelete = 0d
+.alter-merge table DiagnosticRawRecords policy retention softdelete = 0d
+Create a table namedActivityLogsin theTestDatabasedatabase to receive activity log records. To create the table, run the following Azure Data Explorer query:.create table ActivityLogs (Timestamp:datetime, ResourceId:string, OperationName:string, Category:string, ResultType:string, ResultSignature:string, DurationMs:int, IdentityAuthorization:dynamic, IdentityClaims:dynamic, Location:string, Level:string)
+Create a table namedActivityLogsin theTestDatabasedatabase to receive activity log records. To create the table, run the following Azure Data Explorer query:
+.create table ActivityLogs (Timestamp:datetime, ResourceId:string, OperationName:string, Category:string, ResultType:string, ResultSignature:string, DurationMs:int, IdentityAuthorization:dynamic, IdentityClaims:dynamic, Location:string, Level:string)
+.create table ActivityLogs (Timestamp:datetime, ResourceId:string, OperationName:string, Category:string, ResultType:string, ResultSignature:string, DurationMs:int, IdentityAuthorization:dynamic, IdentityClaims:dynamic, Location:string, Level:string)
+Create the intermediate data table namedActivityLogsRawRecordsin theTestDatabasedatabase for data manipulation:.create table ActivityLogsRawRecords (Records:dynamic)
+Create the intermediate data table namedActivityLogsRawRecordsin theTestDatabasedatabase for data manipulation:
+.create table ActivityLogsRawRecords (Records:dynamic)
+.create table ActivityLogsRawRecords (Records:dynamic)
+Set zeroretention policyfor the intermediate table:.alter-merge table ActivityLogsRawRecords policy retention softdelete = 0d
+Set zeroretention policyfor the intermediate table:
+.alter-merge table ActivityLogsRawRecords policy retention softdelete = 0d
+.alter-merge table ActivityLogsRawRecords policy retention softdelete = 0d
+Create table mappings
+Because the data format isjson, data mapping is required. Thejsonmapping maps each json path to a table column name. JSON paths that include special characters should be escaped as ['Property Name']. For more information, seeJSONPath syntax.
+json
+json
+Diagnostic metrics / Diagnostic logs
+Activity logs
+To map the diagnostic metric and log data to the table, use the following query:
+.create table DiagnosticRawRecords ingestion json mapping 'DiagnosticRawRecordsMapping' '[{"column":"Records","Properties":{"path":"$.records"}}]'
+.create table DiagnosticRawRecords ingestion json mapping 'DiagnosticRawRecordsMapping' '[{"column":"Records","Properties":{"path":"$.records"}}]'
+To map the activity log data to the table, use the following query:
+.create table ActivityLogsRawRecords ingestion json mapping 'ActivityLogsRawRecordsMapping' '[{"column":"Records","Properties":{"path":"$.records"}}]'
+.create table ActivityLogsRawRecords ingestion json mapping 'ActivityLogsRawRecordsMapping' '[{"column":"Records","Properties":{"path":"$.records"}}]'
+Create the update policy for metric and log data
+Diagnostic metrics
+Diagnostic logs
+Activity logs
+Create afunctionthat expands the collection of diagnostic metric records so that each value in the collection receives a separate row. Use themv-expandoperator:.create function DiagnosticMetricsExpand() {
+   DiagnosticRawRecords
+   | mv-expand events = Records
+   | where isnotempty(events.metricName)
+   | project
+       Timestamp = todatetime(events['time']),
+       ResourceId = tostring(events.resourceId),
+       MetricName = tostring(events.metricName),
+       Count = toint(events['count']),
+       Total = todouble(events.total),
+       Minimum = todouble(events.minimum),
+       Maximum = todouble(events.maximum),
+       Average = todouble(events.average),
+       TimeGrain = tostring(events.timeGrain)
+}
+Create afunctionthat expands the collection of diagnostic metric records so that each value in the collection receives a separate row. Use themv-expandoperator:
+mv-expand
+.create function DiagnosticMetricsExpand() {
+   DiagnosticRawRecords
+   | mv-expand events = Records
+   | where isnotempty(events.metricName)
+   | project
+       Timestamp = todatetime(events['time']),
+       ResourceId = tostring(events.resourceId),
+       MetricName = tostring(events.metricName),
+       Count = toint(events['count']),
+       Total = todouble(events.total),
+       Minimum = todouble(events.minimum),
+       Maximum = todouble(events.maximum),
+       Average = todouble(events.average),
+       TimeGrain = tostring(events.timeGrain)
+}
+.create function DiagnosticMetricsExpand() {
+   DiagnosticRawRecords
+   | mv-expand events = Records
+   | where isnotempty(events.metricName)
+   | project
+       Timestamp = todatetime(events['time']),
+       ResourceId = tostring(events.resourceId),
+       MetricName = tostring(events.metricName),
+       Count = toint(events['count']),
+       Total = todouble(events.total),
+       Minimum = todouble(events.minimum),
+       Maximum = todouble(events.maximum),
+       Average = todouble(events.average),
+       TimeGrain = tostring(events.timeGrain)
+}
+Add theupdate policyto the target table. This policy will automatically run the query on any newly ingested data in theDiagnosticRawRecordsintermediate data table and ingest its results into theDiagnosticMetricstable:.alter table DiagnosticMetrics policy update @'[{"Source": "DiagnosticRawRecords", "Query": "DiagnosticMetricsExpand()", "IsEnabled": "True", "IsTransactional": true}]'
+Add theupdate policyto the target table. This policy will automatically run the query on any newly ingested data in theDiagnosticRawRecordsintermediate data table and ingest its results into theDiagnosticMetricstable:
+.alter table DiagnosticMetrics policy update @'[{"Source": "DiagnosticRawRecords", "Query": "DiagnosticMetricsExpand()", "IsEnabled": "True", "IsTransactional": true}]'
+.alter table DiagnosticMetrics policy update @'[{"Source": "DiagnosticRawRecords", "Query": "DiagnosticMetricsExpand()", "IsEnabled": "True", "IsTransactional": true}]'
+Create afunctionthat expands the collection of diagnostic logs records so that each value in the collection receives a separate row. You'll enable ingestion logs on an Azure Data Explorer cluster, and useingestion logs schema. You'll create one table for succeeded and for failed ingestion, while some of the fields will be empty for succeeded ingestion (ErrorCode for example). Use themv-expandoperator:.create function DiagnosticLogsExpand() {
+    DiagnosticRawRecords
+    | mv-expand events = Records
+    | where isnotempty(events.operationName)
+    | project
+        Timestamp = todatetime(events['time']),
+        ResourceId = tostring(events.resourceId),
+        OperationName = tostring(events.operationName),
+        Result = tostring(events.resultType),
+        OperationId = tostring(events.properties.OperationId),
+        Database = tostring(events.properties.Database),
+        Table = tostring(events.properties.Table),
+        IngestionSourceId = tostring(events.properties.IngestionSourceId),
+        IngestionSourcePath = tostring(events.properties.IngestionSourcePath),
+        RootActivityId = tostring(events.properties.RootActivityId),
+        ErrorCode = tostring(events.properties.ErrorCode),
+        FailureStatus = tostring(events.properties.FailureStatus),
+        Details = tostring(events.properties.Details)
+}
+Create afunctionthat expands the collection of diagnostic logs records so that each value in the collection receives a separate row. You'll enable ingestion logs on an Azure Data Explorer cluster, and useingestion logs schema. You'll create one table for succeeded and for failed ingestion, while some of the fields will be empty for succeeded ingestion (ErrorCode for example). Use themv-expandoperator:
+mv-expand
+.create function DiagnosticLogsExpand() {
+    DiagnosticRawRecords
+    | mv-expand events = Records
+    | where isnotempty(events.operationName)
+    | project
+        Timestamp = todatetime(events['time']),
+        ResourceId = tostring(events.resourceId),
+        OperationName = tostring(events.operationName),
+        Result = tostring(events.resultType),
+        OperationId = tostring(events.properties.OperationId),
+        Database = tostring(events.properties.Database),
+        Table = tostring(events.properties.Table),
+        IngestionSourceId = tostring(events.properties.IngestionSourceId),
+        IngestionSourcePath = tostring(events.properties.IngestionSourcePath),
+        RootActivityId = tostring(events.properties.RootActivityId),
+        ErrorCode = tostring(events.properties.ErrorCode),
+        FailureStatus = tostring(events.properties.FailureStatus),
+        Details = tostring(events.properties.Details)
+}
+.create function DiagnosticLogsExpand() {
+    DiagnosticRawRecords
+    | mv-expand events = Records
+    | where isnotempty(events.operationName)
+    | project
+        Timestamp = todatetime(events['time']),
+        ResourceId = tostring(events.resourceId),
+        OperationName = tostring(events.operationName),
+        Result = tostring(events.resultType),
+        OperationId = tostring(events.properties.OperationId),
+        Database = tostring(events.properties.Database),
+        Table = tostring(events.properties.Table),
+        IngestionSourceId = tostring(events.properties.IngestionSourceId),
+        IngestionSourcePath = tostring(events.properties.IngestionSourcePath),
+        RootActivityId = tostring(events.properties.RootActivityId),
+        ErrorCode = tostring(events.properties.ErrorCode),
+        FailureStatus = tostring(events.properties.FailureStatus),
+        Details = tostring(events.properties.Details)
+}
+Add theupdate policyto the target table. This policy will automatically run the query on any newly ingested data in theDiagnosticRawRecordsintermediate data table and ingest its results into theDiagnosticLogstable:.alter table DiagnosticLogs policy update @'[{"Source": "DiagnosticRawRecords", "Query": "DiagnosticLogsExpand()", "IsEnabled": "True", "IsTransactional": true}]'
+Add theupdate policyto the target table. This policy will automatically run the query on any newly ingested data in theDiagnosticRawRecordsintermediate data table and ingest its results into theDiagnosticLogstable:
+.alter table DiagnosticLogs policy update @'[{"Source": "DiagnosticRawRecords", "Query": "DiagnosticLogsExpand()", "IsEnabled": "True", "IsTransactional": true}]'
+.alter table DiagnosticLogs policy update @'[{"Source": "DiagnosticRawRecords", "Query": "DiagnosticLogsExpand()", "IsEnabled": "True", "IsTransactional": true}]'
+Create afunctionthat expands the collection of activity log records so that each value in the collection receives a separate row. Use themv-expandoperator:.create function ActivityLogRecordsExpand() {
+    ActivityLogsRawRecords
+    | mv-expand events = Records
+    | project
+        Timestamp = todatetime(events['time']),
+        ResourceId = tostring(events.resourceId),
+        OperationName = tostring(events.operationName),
+        Category = tostring(events.category),
+        ResultType = tostring(events.resultType),
+        ResultSignature = tostring(events.resultSignature),
+        DurationMs = toint(events.durationMs),
+        IdentityAuthorization = events.identity.authorization,
+        IdentityClaims = events.identity.claims,
+        Location = tostring(events.location),
+        Level = tostring(events.level)
+}
+Create afunctionthat expands the collection of activity log records so that each value in the collection receives a separate row. Use themv-expandoperator:
+mv-expand
+.create function ActivityLogRecordsExpand() {
+    ActivityLogsRawRecords
+    | mv-expand events = Records
+    | project
+        Timestamp = todatetime(events['time']),
+        ResourceId = tostring(events.resourceId),
+        OperationName = tostring(events.operationName),
+        Category = tostring(events.category),
+        ResultType = tostring(events.resultType),
+        ResultSignature = tostring(events.resultSignature),
+        DurationMs = toint(events.durationMs),
+        IdentityAuthorization = events.identity.authorization,
+        IdentityClaims = events.identity.claims,
+        Location = tostring(events.location),
+        Level = tostring(events.level)
+}
+.create function ActivityLogRecordsExpand() {
+    ActivityLogsRawRecords
+    | mv-expand events = Records
+    | project
+        Timestamp = todatetime(events['time']),
+        ResourceId = tostring(events.resourceId),
+        OperationName = tostring(events.operationName),
+        Category = tostring(events.category),
+        ResultType = tostring(events.resultType),
+        ResultSignature = tostring(events.resultSignature),
+        DurationMs = toint(events.durationMs),
+        IdentityAuthorization = events.identity.authorization,
+        IdentityClaims = events.identity.claims,
+        Location = tostring(events.location),
+        Level = tostring(events.level)
+}
+Add theupdate policyto the target table. This policy will automatically run the query on any newly ingested data in theActivityLogsRawRecordsintermediate data table and ingest its results into theActivityLogstable:.alter table ActivityLogs policy update @'[{"Source": "ActivityLogsRawRecords", "Query": "ActivityLogRecordsExpand()", "IsEnabled": "True", "IsTransactional": true}]'
+Add theupdate policyto the target table. This policy will automatically run the query on any newly ingested data in theActivityLogsRawRecordsintermediate data table and ingest its results into theActivityLogstable:
+.alter table ActivityLogs policy update @'[{"Source": "ActivityLogsRawRecords", "Query": "ActivityLogRecordsExpand()", "IsEnabled": "True", "IsTransactional": true}]'
+.alter table ActivityLogs policy update @'[{"Source": "ActivityLogsRawRecords", "Query": "ActivityLogRecordsExpand()", "IsEnabled": "True", "IsTransactional": true}]'
+Create an Azure Event Hubs namespace
+Azure diagnostic settings enable exporting metrics and logs to a storage account or to an event hub. In this tutorial, we'll route the metrics and logs via an event hub. You'll create an event hub namespace and an event hub for the diagnostic metrics and logs in the following steps. Azure Monitor will create the event hubinsights-operational-logsfor the activity logs.
+Create an event hub by using an Azure Resource Manager template in the Azure portal. To follow the rest of the steps in this article, right-click theDeploy to Azurebutton, and then selectOpen in new window. TheDeploy to Azurebutton takes you to the Azure portal.
+Create an event hub by using an Azure Resource Manager template in the Azure portal. To follow the rest of the steps in this article, right-click theDeploy to Azurebutton, and then selectOpen in new window. TheDeploy to Azurebutton takes you to the Azure portal.
+
+Create an event hubs namespace and an event hub for the diagnostic logs. Learn how tocreate an event hubs namespace.
+Create an event hubs namespace and an event hub for the diagnostic logs. Learn how tocreate an event hubs namespace.
+Fill out the form with the following information. For any settings not listed in the following table, use the default values.SettingSuggested valueDescriptionSubscriptionYour subscriptionSelect the Azure subscription that you want to use for your event hub.Resource grouptest-resource-groupCreate a new resource group.LocationSelect the region that best meets your needs.Create the event hub namespace in the same location as other resources.Namespace nameAzureMonitoringDataChoose a unique name that identifies your namespace.Event hub nameDiagnosticDataThe event hub sits under the namespace, which provides a unique scoping container.Consumer group nameadxpipelineCreate a consumer group name. Consumer groups enable multiple consuming applications to each have a separate view of the event stream.
+Fill out the form with the following information. For any settings not listed in the following table, use the default values.
+Connect Azure Monitor metrics and logs to your event hub
+Now you need to connect your diagnostic metrics and logs and your activity logs to the event hub.
+Diagnostic metrics / Diagnostic logs
+Activity logs
+Select a resource from which to export metrics. Several resource types support exporting diagnostic data, including event hubs namespace, Azure Key Vault, Azure IoT Hub, and Azure Data Explorer clusters. In this tutorial, we'll use an Azure Data Explorer cluster as our resource, we'll review query performance metrics and ingestion results logs.
+Select your Kusto cluster in the Azure portal.
+Select your Kusto cluster in the Azure portal.
+SelectDiagnostic settings, and then select theTurn on diagnosticslink.
+SelectDiagnostic settings, and then select theTurn on diagnosticslink.
+
+TheDiagnostics settingspane opens. Take the following steps:Give your diagnostics log data the nameADXExportedData.UnderLOG, select bothSucceededIngestionandFailedIngestioncheck boxes.UnderMETRIC, select theQuery performancecheck box.Select theStream to an event hubcheck box.SelectConfigure.
+TheDiagnostics settingspane opens. Take the following steps:
+Give your diagnostics log data the nameADXExportedData.
+Give your diagnostics log data the nameADXExportedData.
+UnderLOG, select bothSucceededIngestionandFailedIngestioncheck boxes.
+UnderLOG, select bothSucceededIngestionandFailedIngestioncheck boxes.
+UnderMETRIC, select theQuery performancecheck box.
+UnderMETRIC, select theQuery performancecheck box.
+Select theStream to an event hubcheck box.
+Select theStream to an event hubcheck box.
+SelectConfigure.
+SelectConfigure.
+
+In theSelect event hubpane, configure how to export data from diagnostic logs to the event hub you created:In theSelect event hub namespacelist, selectAzureMonitoringData.In theSelect event hub namelist, selectDiagnosticData.In theSelect event hub policy namelist, selectRootManagerSharedAccessKey.SelectOK.
+In theSelect event hubpane, configure how to export data from diagnostic logs to the event hub you created:
+In theSelect event hub namespacelist, selectAzureMonitoringData.
+In theSelect event hub namelist, selectDiagnosticData.
+In theSelect event hub policy namelist, selectRootManagerSharedAccessKey.
+SelectOK.
+SelectSave.
+SelectSave.
+In the left menu of the Azure portal, selectActivity log.
+In the left menu of the Azure portal, selectActivity log.
+TheActivity logwindow opens. SelectDiagnostics settings.
+TheActivity logwindow opens. SelectDiagnostics settings.
+
+TheDiagnostics settingswindow opens. Select+ Add diagnostic setting.
+TheDiagnostics settingswindow opens. Select+ Add diagnostic setting.
+
+A newDiagnostic settingwindow opens.Do the following steps:Enter a name in theDiagnostic setting namefield.On the left-hand side of check boxes, select the platform log(s) you wish to collect from a subscription.Select theStream to an event hubcheck box.Select your subscription.In theEvent hub namespacelist, selectAzureMonitoringData.Optionally, select yourEvent hub name.In theEvent hub policy namelist, select the default event hub policy name.In the upper-left corner of the window, selectSave. An event hub with the nameinsights-operational-logswill be created (unless you've selected an Event hub name above).
+A newDiagnostic settingwindow opens.
+
+Do the following steps:
+Enter a name in theDiagnostic setting namefield.
+On the left-hand side of check boxes, select the platform log(s) you wish to collect from a subscription.
+Select theStream to an event hubcheck box.
+Select your subscription.
+In theEvent hub namespacelist, selectAzureMonitoringData.
+Optionally, select yourEvent hub name.
+In theEvent hub policy namelist, select the default event hub policy name.
+In the upper-left corner of the window, selectSave. An event hub with the nameinsights-operational-logswill be created (unless you've selected an Event hub name above).
+See data flowing to your event hubs
+Wait a few minutes until the connection is defined, and the activity-log export to the event hub is finished. Go to your event hubs namespace to see the event hubs you created.
+Wait a few minutes until the connection is defined, and the activity-log export to the event hub is finished. Go to your event hubs namespace to see the event hubs you created.
+
+See data flowing to your event hub:
+See data flowing to your event hub:
+
+Connect an event hub to Azure Data Explorer
+Now you need to create the data connections for your diagnostic metrics and logs and activity logs.
+Create the data connection for diagnostic metrics and logs and activity logs
+In your Azure Data Explorer cluster namedkustodocs, selectDatabasesin the left menu.
+In your Azure Data Explorer cluster namedkustodocs, selectDatabasesin the left menu.
+In theDatabaseswindow, select yourTestDatabasedatabase.
+In theDatabaseswindow, select yourTestDatabasedatabase.
+In the left menu, selectData ingestion.
+In the left menu, selectData ingestion.
+In theData ingestionwindow, select+ Add Data Connection.
+In theData ingestionwindow, select+ Add Data Connection.
+In theData connectionwindow, enter the following information:
+In theData connectionwindow, enter the following information:
+
+Diagnostic metrics / Diagnostic logs
+Activity logs
+Use the following settings in theData Connectionwindow:Data source:SettingSuggested valueField descriptionData connection nameDiagnosticsLogsConnectionThe name of the connection you want to create in Azure Data Explorer.Event hub namespaceAzureMonitoringDataThe name you chose earlier that identifies your namespace.Event hubDiagnosticDataThe event hub you created.Consumer groupadxpipelineThe consumer group defined in the event hub you created.Target table:There are two options for routing:staticanddynamic. For this tutorial, you'll use static routing (the default), where you specify the table name, the data format, and the mapping. LeaveMy data includes routing infounselected.SettingSuggested valueField descriptionTableDiagnosticRawRecordsThe table you created in theTestDatabasedatabase.Data formatJSONThe format used in the table.Column mappingDiagnosticRawRecordsMappingThe mapping you created in theTestDatabasedatabase, which maps incoming JSON data to the column names and data types of theDiagnosticRawRecordstable.
+Use the following settings in theData Connectionwindow:
+Data source:
+Target table:
+There are two options for routing:staticanddynamic. For this tutorial, you'll use static routing (the default), where you specify the table name, the data format, and the mapping. LeaveMy data includes routing infounselected.
+SelectCreate.
+SelectCreate.
+Use the following settings in theData Connectionwindow:Data source:SettingSuggested valueField descriptionData connection nameActivityLogsConnectionThe name of the connection you want to create in Azure Data Explorer.Event hub namespaceAzureMonitoringDataThe name you chose earlier that identifies your namespace.Event hubinsights-operational-logsThe event hub you created.Consumer group$DefaultThe default consumer group. If needed, you can create a different consumer group.Target table:There are two options for routing:staticanddynamic. For this tutorial, you'll use static routing (the default), where you specify the table name, data format, and mapping. LeaveMy data includes routing infounselected.SettingSuggested valueField descriptionTableActivityLogsRawRecordsThe table you created in theTestDatabasedatabase.Data formatJSONThe format used in the table.Column mappingActivityLogsRawRecordsMappingThe mapping you created in theTestDatabasedatabase, which maps incoming JSON data to the column names and data types of theActivityLogsRawRecordstable.
+Use the following settings in theData Connectionwindow:
+Data source:
+Target table:
+There are two options for routing:staticanddynamic. For this tutorial, you'll use static routing (the default), where you specify the table name, data format, and mapping. LeaveMy data includes routing infounselected.
+SelectCreate.
+SelectCreate.
+Query the new tables
+You now have a pipeline with data flowing. Ingestion via the cluster takes 5 minutes by default, so allow the data to flow for a few minutes before beginning to query.
+Diagnostic metrics
+Diagnostic logs
+Activity logs
+The following query analyzes query duration data from diagnostic metric records in Azure Data Explorer:
+DiagnosticMetrics
+| where Timestamp > ago(15m) and MetricName == 'QueryDuration'
+| summarize avg(Average)
+DiagnosticMetrics
+| where Timestamp > ago(15m) and MetricName == 'QueryDuration'
+| summarize avg(Average)
+Query results:
+This pipeline produces ingestions via an event hub. You'll review the results of these ingestions.
+The following query analyzes how many ingestions accrued in a minute, including a sample ofDatabase,TableandIngestionSourcePathfor each interval:
+Database
+Table
+IngestionSourcePath
+DiagnosticLogs
+| where Timestamp > ago(15m) and OperationName has 'INGEST'
+| summarize count(), take_any(Database, Table, IngestionSourcePath) by bin(Timestamp, 1m)
+DiagnosticLogs
+| where Timestamp > ago(15m) and OperationName has 'INGEST'
+| summarize count(), take_any(Database, Table, IngestionSourcePath) by bin(Timestamp, 1m)
+Query results:
+https://rtmkstrldkereneus00.blob.core.windows.net/20190827-readyforaggregation/1133_TestDatabase_DiagnosticRawRecords_6cf02098c0c74410bd8017c2d458b45d.json.zip
+The following query analyzes data from activity log records in Azure Data Explorer:
+ActivityLogs
+| where OperationName == 'MICROSOFT.EVENTHUB/NAMESPACES/AUTHORIZATIONRULES/LISTKEYS/ACTION'
+| where ResultType == 'Success'
+| summarize avg(DurationMs)
+ActivityLogs
+| where OperationName == 'MICROSOFT.EVENTHUB/NAMESPACES/AUTHORIZATIONRULES/LISTKEYS/ACTION'
+| where ResultType == 'Success'
+| summarize avg(DurationMs)
+Query results:
+Related content
+Write queries for Azure Data Explorer.
+Monitor Azure Data Explorer ingestion operations using diagnostic logs
+Use metrics to monitor cluster health
+Feedback
+Was this page helpful?
+Additional resources

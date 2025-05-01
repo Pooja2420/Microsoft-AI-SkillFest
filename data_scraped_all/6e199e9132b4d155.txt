@@ -1,0 +1,461 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use Kubernetes role-based access control with Microsoft Entra ID in Azure Kubernetes Service
+Article
+2024-08-01
+20 contributors
+In this article
+Azure Kubernetes Service (AKS) can be configured to use Microsoft Entra ID for user authentication. In this configuration, you sign in to an AKS cluster using a Microsoft Entra authentication token. Once authenticated, you can use the built-in Kubernetes role-based access control (Kubernetes RBAC) to manage access to namespaces and cluster resources based on a user's identity or group membership.
+This article shows you how to:
+Control access using Kubernetes RBAC in an AKS cluster based on Microsoft Entra group membership.
+Create example groups and users in Microsoft Entra ID.
+Create Roles and RoleBindings in an AKS cluster to grant the appropriate permissions to create and view resources.
+Before you begin
+You have an existing AKS cluster with Microsoft Entra integration enabled. If you need an AKS cluster with this configuration, seeIntegrate Microsoft Entra ID with AKS.
+Kubernetes RBAC is enabled by default during AKS cluster creation. To upgrade your cluster with Microsoft Entra integration and Kubernetes RBAC,Enable Microsoft Entra integration on your existing AKS cluster.
+Make sure that Azure CLI version 2.0.61 or later is installed and configured. Runaz --versionto find the version. If you need to install or upgrade, seeInstall Azure CLI.
+az --version
+If using Terraform, installTerraformversion 2.99.0 or later.
+Use the Azure portal or Azure CLI to verify Microsoft Entra integration with Kubernetes RBAC is enabled.
+Azure portal
+Azure CLI
+To verify using the Azure portal:
+Sign in to theAzure portaland navigate to your AKS cluster resource.
+In the service menu, underSettings, selectSecurity configuration.
+Under theAuthentication and Authorizationsection, verify theMicrosoft Entra authentication with Kubernetes RBACoption is selected.
+You can verify using the Azure CLIaz aks showcommand. Replace the valuemyResourceGroupwith the resource group name hosting the AKS cluster resource, and replacemyAKSClusterwith the actual name of your AKS cluster.
+az aks show
+az aks show --resource-group myResourceGroup --name myAKSCluster
+az aks show --resource-group myResourceGroup --name myAKSCluster
+If it's enabled, the output shows the value forenableAzureRbacisfalse.
+enableAzureRbac
+false
+
+Create demo groups in Microsoft Entra ID
+In this article, we'll create two user roles to show how Kubernetes RBAC and Microsoft Entra ID control access to cluster resources. The following two example roles are used:
+Application developerA user namedaksdevthat's part of theappdevgroup.
+A user namedaksdevthat's part of theappdevgroup.
+Site reliability engineerA user namedakssrethat's part of theopssregroup.
+A user namedakssrethat's part of theopssregroup.
+In production environments, you can use existing users and groups within a Microsoft Entra tenant.
+First, get the resource ID of your AKS cluster using theaz aks showcommand. Then, assign the resource ID to a variable namedAKS_IDso it can be referenced in other commands.AKS_ID=$(az aks show \
+    --resource-group myResourceGroup \
+    --name myAKSCluster \
+    --query id -o tsv)
+First, get the resource ID of your AKS cluster using theaz aks showcommand. Then, assign the resource ID to a variable namedAKS_IDso it can be referenced in other commands.
+az aks show
+AKS_ID=$(az aks show \
+    --resource-group myResourceGroup \
+    --name myAKSCluster \
+    --query id -o tsv)
+AKS_ID=$(az aks show \
+    --resource-group myResourceGroup \
+    --name myAKSCluster \
+    --query id -o tsv)
+Create the first example group in Microsoft Entra ID for the application developers using theaz ad group createcommand. The following example creates a group namedappdev:APPDEV_ID=$(az ad group create --display-name appdev --mail-nickname appdev --query id -o tsv)
+Create the first example group in Microsoft Entra ID for the application developers using theaz ad group createcommand. The following example creates a group namedappdev:
+az ad group create
+APPDEV_ID=$(az ad group create --display-name appdev --mail-nickname appdev --query id -o tsv)
+APPDEV_ID=$(az ad group create --display-name appdev --mail-nickname appdev --query id -o tsv)
+Create an Azure role assignment for theappdevgroup using theaz role assignment createcommand. This assignment lets any member of the group usekubectlto interact with an AKS cluster by granting them theAzure Kubernetes Service Cluster UserRole.az role assignment create \
+  --assignee $APPDEV_ID \
+  --role "Azure Kubernetes Service Cluster User Role" \
+  --scope $AKS_ID
+Create an Azure role assignment for theappdevgroup using theaz role assignment createcommand. This assignment lets any member of the group usekubectlto interact with an AKS cluster by granting them theAzure Kubernetes Service Cluster UserRole.
+az role assignment create
+kubectl
+az role assignment create \
+  --assignee $APPDEV_ID \
+  --role "Azure Kubernetes Service Cluster User Role" \
+  --scope $AKS_ID
+az role assignment create \
+  --assignee $APPDEV_ID \
+  --role "Azure Kubernetes Service Cluster User Role" \
+  --scope $AKS_ID
+Tip
+If you receive an error such asPrincipal 35bfec9328bd4d8d9b54dea6dac57b82 doesn't exist in the directory a5443dcd-cd0e-494d-a387-3039b419f0d5., wait a few seconds for the Microsoft Entra group object ID to propagate through the directory then try theaz role assignment createcommand again.
+Principal 35bfec9328bd4d8d9b54dea6dac57b82 doesn't exist in the directory a5443dcd-cd0e-494d-a387-3039b419f0d5.
+az role assignment create
+Create a second example group for SREs namedopssre.OPSSRE_ID=$(az ad group create --display-name opssre --mail-nickname opssre --query id -o tsv)
+Create a second example group for SREs namedopssre.
+OPSSRE_ID=$(az ad group create --display-name opssre --mail-nickname opssre --query id -o tsv)
+OPSSRE_ID=$(az ad group create --display-name opssre --mail-nickname opssre --query id -o tsv)
+Create an Azure role assignment to grant members of the group theAzure Kubernetes Service Cluster UserRole.az role assignment create \
+  --assignee $OPSSRE_ID \
+  --role "Azure Kubernetes Service Cluster User Role" \
+  --scope $AKS_ID
+Create an Azure role assignment to grant members of the group theAzure Kubernetes Service Cluster UserRole.
+az role assignment create \
+  --assignee $OPSSRE_ID \
+  --role "Azure Kubernetes Service Cluster User Role" \
+  --scope $AKS_ID
+az role assignment create \
+  --assignee $OPSSRE_ID \
+  --role "Azure Kubernetes Service Cluster User Role" \
+  --scope $AKS_ID
+
+Create demo users in Microsoft Entra ID
+Now that we have two example groups created in Microsoft Entra ID for our application developers and SREs, we'll create two example users. To test the Kubernetes RBAC integration at the end of the article, you'll sign in to the AKS cluster with these accounts.
+Set the user principal name and password for application developers
+Set the user principal name (UPN) and password for the application developers. The UPN must include the verified domain name of your tenant, for exampleaksdev@contoso.com.
+aksdev@contoso.com
+The following command prompts you for the UPN and sets it toAAD_DEV_UPNso it can be used in a later command:
+echo "Please enter the UPN for application developers: " && read AAD_DEV_UPN
+echo "Please enter the UPN for application developers: " && read AAD_DEV_UPN
+The following command prompts you for the password and sets it toAAD_DEV_PWfor use in a later command:
+echo "Please enter the secure password for application developers: " && read AAD_DEV_PW
+echo "Please enter the secure password for application developers: " && read AAD_DEV_PW
+Create the user accounts
+Create the first user account in Microsoft Entra ID using theaz ad user createcommand. The following example creates a user with the display nameAKS Devand the UPN and secure password using the values inAAD_DEV_UPNandAAD_DEV_PW:
+az ad user create
+AKSDEV_ID=$(az ad user create \
+  --display-name "AKS Dev" \
+  --user-principal-name $AAD_DEV_UPN \
+  --password $AAD_DEV_PW \
+  --query id -o tsv)
+AKSDEV_ID=$(az ad user create \
+  --display-name "AKS Dev" \
+  --user-principal-name $AAD_DEV_UPN \
+  --password $AAD_DEV_PW \
+  --query id -o tsv)
+Add the user to theappdevgroup created in the previous section using theaz ad group member addcommand.
+az ad group member add
+az ad group member add --group appdev --member-id $AKSDEV_ID
+az ad group member add --group appdev --member-id $AKSDEV_ID
+Set the UPN and password for SREs. The UPN must include the verified domain name of your tenant, for exampleakssre@contoso.com. The following command prompts you for the UPN and sets it toAAD_SRE_UPNfor use in a later command:
+akssre@contoso.com
+echo "Please enter the UPN for SREs: " && read AAD_SRE_UPN
+echo "Please enter the UPN for SREs: " && read AAD_SRE_UPN
+The following command prompts you for the password and sets it toAAD_SRE_PWfor use in a later command:
+echo "Please enter the secure password for SREs: " && read AAD_SRE_PW
+echo "Please enter the secure password for SREs: " && read AAD_SRE_PW
+Create a second user account. The following example creates a user with the display nameAKS SREand the UPN and secure password using the values inAAD_SRE_UPNandAAD_SRE_PW:
+# Create a user for the SRE role
+AKSSRE_ID=$(az ad user create \
+  --display-name "AKS SRE" \
+  --user-principal-name $AAD_SRE_UPN \
+  --password $AAD_SRE_PW \
+  --query id -o tsv)
+
+# Add the user to the opssre Azure AD group
+az ad group member add --group opssre --member-id $AKSSRE_ID
+# Create a user for the SRE role
+AKSSRE_ID=$(az ad user create \
+  --display-name "AKS SRE" \
+  --user-principal-name $AAD_SRE_UPN \
+  --password $AAD_SRE_PW \
+  --query id -o tsv)
+
+# Add the user to the opssre Azure AD group
+az ad group member add --group opssre --member-id $AKSSRE_ID
+Create AKS cluster resources for app devs
+We have our Microsoft Entra groups, users, and Azure role assignments created. Now, we'll configure the AKS cluster to allow these different groups access to specific resources.
+Get the cluster admin credentials using theaz aks get-credentialscommand. In one of the following sections, you get the regularusercluster credentials to see the Microsoft Entra authentication flow in action.
+az aks get-credentials
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster --admin
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster --admin
+Create a namespace in the AKS cluster using thekubectl create namespacecommand. The following example creates a namespace namedev:
+kubectl create namespace
+kubectl create namespace dev
+kubectl create namespace dev
+Note
+In Kubernetes,Rolesdefine the permissions to grant, andRoleBindingsapply them to desired users or groups. These assignments can be applied to a given namespace, or across the entire cluster. For more information, seeUsing Kubernetes RBAC authorization.
+If the user you grant the Kubernetes RBAC binding for is in the same Microsoft Entra tenant, assign permissions based on theuserPrincipalName (UPN). If the user is in a different Microsoft Entra tenant, query for and use theobjectIdproperty instead.
+Create a Role for thedevnamespace, which grants full permissions to the namespace. In production environments, you can specify more granular permissions for different users or groups. Create a file namedrole-dev-namespace.yamland paste the following YAML manifest:
+role-dev-namespace.yaml
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: dev-user-full-access
+  namespace: dev
+rules:
+- apiGroups: ["", "extensions", "apps"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["batch"]
+  resources:
+  - jobs
+  - cronjobs
+  verbs: ["*"]
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: dev-user-full-access
+  namespace: dev
+rules:
+- apiGroups: ["", "extensions", "apps"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["batch"]
+  resources:
+  - jobs
+  - cronjobs
+  verbs: ["*"]
+Create the Role using thekubectl applycommand and specify the filename of your YAML manifest.
+kubectl apply
+kubectl apply -f role-dev-namespace.yaml
+kubectl apply -f role-dev-namespace.yaml
+Get the resource ID for theappdevgroup using theaz ad group showcommand. This group is set as the subject of a RoleBinding in the next step.
+az ad group show
+az ad group show --group appdev --query id -o tsv
+az ad group show --group appdev --query id -o tsv
+Create a RoleBinding for theappdevgroup to use the previously created Role for namespace access. Create a file namedrolebinding-dev-namespace.yamland paste the following YAML manifest. On the last line, replacegroupObjectIdwith the group object ID output from the previous command.
+rolebinding-dev-namespace.yaml
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: dev-user-access
+  namespace: dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dev-user-full-access
+subjects:
+- kind: Group
+  namespace: dev
+  name: groupObjectId
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: dev-user-access
+  namespace: dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dev-user-full-access
+subjects:
+- kind: Group
+  namespace: dev
+  name: groupObjectId
+Tip
+If you want to create the RoleBinding for a single user, specifykind: Userand replacegroupObjectIdwith the user principal name (UPN) in the above sample.
+Create the RoleBinding using thekubectl applycommand and specify the filename of your YAML manifest:
+kubectl apply
+kubectl apply -f rolebinding-dev-namespace.yaml
+kubectl apply -f rolebinding-dev-namespace.yaml
+Create the AKS cluster resources for SREs
+Now, we'll repeat the previous steps to create a namespace, Role, and RoleBinding for the SREs.
+Create a namespace forsreusing thekubectl create namespacecommand.
+kubectl create namespace
+kubectl create namespace sre
+kubectl create namespace sre
+Create a file namedrole-sre-namespace.yamland paste the following YAML manifest:
+role-sre-namespace.yaml
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: sre-user-full-access
+  namespace: sre
+rules:
+- apiGroups: ["", "extensions", "apps"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["batch"]
+  resources:
+  - jobs
+  - cronjobs
+  verbs: ["*"]
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: sre-user-full-access
+  namespace: sre
+rules:
+- apiGroups: ["", "extensions", "apps"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["batch"]
+  resources:
+  - jobs
+  - cronjobs
+  verbs: ["*"]
+Create the Role using thekubectl applycommand and specify the filename of your YAML manifest.
+kubectl apply
+kubectl apply -f role-sre-namespace.yaml
+kubectl apply -f role-sre-namespace.yaml
+Get the resource ID for theopssregroup using theaz ad group showcommand.
+az ad group show --group opssre --query id -o tsv
+az ad group show --group opssre --query id -o tsv
+Create a RoleBinding for theopssregroup to use the previously created Role for namespace access. Create a file namedrolebinding-sre-namespace.yamland paste the following YAML manifest. On the last line, replacegroupObjectIdwith the group object ID output from the previous command.
+rolebinding-sre-namespace.yaml
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: sre-user-access
+  namespace: sre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-user-full-access
+subjects:
+- kind: Group
+  namespace: sre
+  name: groupObjectId
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: sre-user-access
+  namespace: sre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-user-full-access
+subjects:
+- kind: Group
+  namespace: sre
+  name: groupObjectId
+Create the RoleBinding using thekubectl applycommand and specify the filename of your YAML manifest.
+kubectl apply
+kubectl apply -f rolebinding-sre-namespace.yaml
+kubectl apply -f rolebinding-sre-namespace.yaml
+
+Interact with cluster resources using Microsoft Entra identities
+Now, we'll test that the expected permissions work when you create and manage resources in an AKS cluster. In these examples, we'll schedule and view pods in the user's assigned namespace, and try to schedule and view pods outside of the assigned namespace.
+Reset thekubeconfigcontext using theaz aks get-credentialscommand. In a previous section, you set the context using the cluster admin credentials. The admin user bypasses Microsoft Entra sign-in prompts. Without the--adminparameter, the user context is applied that requires all requests to be authenticated using Microsoft Entra ID.
+az aks get-credentials
+--admin
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster --overwrite-existing
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster --overwrite-existing
+Schedule a basic NGINX pod using thekubectl runcommand in thedevnamespace.
+kubectl run
+kubectl run nginx-dev --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace dev
+kubectl run nginx-dev --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace dev
+Enter the credentials for your ownappdev@contoso.comaccount created at the start of the article as the sign-in prompt. Once you're successfully signed in, the account token is cached for futurekubectlcommands. The NGINX is successfully schedule, as shown in the following example output:
+appdev@contoso.com
+kubectl
+$ kubectl run nginx-dev --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace dev
+
+To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code B24ZD6FP8 to authenticate.
+
+pod/nginx-dev created
+$ kubectl run nginx-dev --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace dev
+
+To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code B24ZD6FP8 to authenticate.
+
+pod/nginx-dev created
+Use thekubectl get podscommand to view pods in thedevnamespace.
+kubectl get pods
+kubectl get pods --namespace dev
+kubectl get pods --namespace dev
+Ensure the status of the NGINX pod isRunning. The output will look similar to the following output:
+$ kubectl get pods --namespace dev
+
+NAME        READY   STATUS    RESTARTS   AGE
+nginx-dev   1/1     Running   0          4m
+$ kubectl get pods --namespace dev
+
+NAME        READY   STATUS    RESTARTS   AGE
+nginx-dev   1/1     Running   0          4m
+Create and view cluster resources outside of the assigned namespace
+Try to view pods outside of thedevnamespace. Use thekubectl get podscommand again, this time to see--all-namespaces.
+kubectl get pods
+--all-namespaces
+kubectl get pods --all-namespaces
+kubectl get pods --all-namespaces
+The user's group membership doesn't have a Kubernetes Role that allows this action, as shown in the following example output:
+Error from server (Forbidden): pods is forbidden: User "aksdev@contoso.com" cannot list resource "pods" in API group "" at the cluster scope
+Error from server (Forbidden): pods is forbidden: User "aksdev@contoso.com" cannot list resource "pods" in API group "" at the cluster scope
+In the same way, try to schedule a pod in a different namespace, such as thesrenamespace. The user's group membership doesn't align with a Kubernetes Role and RoleBinding to grant these permissions, as shown in the following example output:
+$ kubectl run nginx-dev --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace sre
+
+Error from server (Forbidden): pods is forbidden: User "aksdev@contoso.com" cannot create resource "pods" in API group "" in the namespace "sre"
+$ kubectl run nginx-dev --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace sre
+
+Error from server (Forbidden): pods is forbidden: User "aksdev@contoso.com" cannot create resource "pods" in API group "" in the namespace "sre"
+Test the SRE access to the AKS cluster resources
+To confirm that our Microsoft Entra group membership and Kubernetes RBAC work correctly between different users and groups, try the previous commands when signed in as theopssreuser.
+Reset thekubeconfigcontext using theaz aks get-credentialscommand that clears the previously cached authentication token for theaksdevuser.
+az aks get-credentials
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster --overwrite-existing
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster --overwrite-existing
+Try to schedule and view pods in the assignedsrenamespace. When prompted, sign in with your ownopssre@contoso.comcredentials created at the start of the article.
+opssre@contoso.com
+kubectl run nginx-sre --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace sre
+kubectl get pods --namespace sre
+kubectl run nginx-sre --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace sre
+kubectl get pods --namespace sre
+As shown in the following example output, you can successfully create and view the pods:
+$ kubectl run nginx-sre --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace sre
+
+3. To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code BM4RHP3FD to authenticate.
+
+pod/nginx-sre created
+
+$ kubectl get pods --namespace sre
+
+NAME        READY   STATUS    RESTARTS   AGE
+nginx-sre   1/1     Running   0
+$ kubectl run nginx-sre --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace sre
+
+3. To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code BM4RHP3FD to authenticate.
+
+pod/nginx-sre created
+
+$ kubectl get pods --namespace sre
+
+NAME        READY   STATUS    RESTARTS   AGE
+nginx-sre   1/1     Running   0
+Try to view or schedule pods outside of assigned SRE namespace.
+kubectl get pods --all-namespaces
+kubectl run nginx-sre --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace dev
+kubectl get pods --all-namespaces
+kubectl run nginx-sre --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace dev
+Thesekubectlcommands fail, as shown in the following example output. The user's group membership and Kubernetes Role and RoleBindings don't grant permissions to create or manager resources in other namespaces.
+kubectl
+$ kubectl get pods --all-namespaces
+Error from server (Forbidden): pods is forbidden: User "akssre@contoso.com" cannot list pods at the cluster scope
+
+$ kubectl run nginx-sre --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace dev
+Error from server (Forbidden): pods is forbidden: User "akssre@contoso.com" cannot create pods in the namespace "dev"
+$ kubectl get pods --all-namespaces
+Error from server (Forbidden): pods is forbidden: User "akssre@contoso.com" cannot list pods at the cluster scope
+
+$ kubectl run nginx-sre --image=mcr.microsoft.com/oss/nginx/nginx:1.15.5-alpine --namespace dev
+Error from server (Forbidden): pods is forbidden: User "akssre@contoso.com" cannot create pods in the namespace "dev"
+Clean up resources
+In this article, you created resources in the AKS cluster and users and groups in Microsoft Entra ID. To clean up all of the resources, run the following commands:
+# Get the admin kubeconfig context to delete the necessary cluster resources.
+
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster --admin
+
+# Delete the dev and sre namespaces. This also deletes the pods, Roles, and RoleBindings.
+
+kubectl delete namespace dev
+kubectl delete namespace sre
+
+# Delete the Azure AD user accounts for aksdev and akssre.
+
+az ad user delete --upn-or-object-id $AKSDEV_ID
+az ad user delete --upn-or-object-id $AKSSRE_ID
+
+# Delete the Azure AD groups for appdev and opssre. This also deletes the Azure role assignments.
+
+az ad group delete --group appdev
+az ad group delete --group opssre
+# Get the admin kubeconfig context to delete the necessary cluster resources.
+
+az aks get-credentials --resource-group myResourceGroup --name myAKSCluster --admin
+
+# Delete the dev and sre namespaces. This also deletes the pods, Roles, and RoleBindings.
+
+kubectl delete namespace dev
+kubectl delete namespace sre
+
+# Delete the Azure AD user accounts for aksdev and akssre.
+
+az ad user delete --upn-or-object-id $AKSDEV_ID
+az ad user delete --upn-or-object-id $AKSSRE_ID
+
+# Delete the Azure AD groups for appdev and opssre. This also deletes the Azure role assignments.
+
+az ad group delete --group appdev
+az ad group delete --group opssre
+Next steps
+For more information about how to secure Kubernetes clusters, seeAccess and identity options for AKS.
+For more information about how to secure Kubernetes clusters, seeAccess and identity options for AKS.
+For best practices on identity and resource control, seeBest practices for authentication and authorization in AKS.
+For best practices on identity and resource control, seeBest practices for authentication and authorization in AKS.
+Azure Kubernetes Service
+
+Additional resources

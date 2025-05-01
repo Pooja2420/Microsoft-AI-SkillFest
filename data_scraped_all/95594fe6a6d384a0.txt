@@ -1,0 +1,352 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Resize node pools in Azure Kubernetes Service (AKS)
+Article
+2024-12-09
+10 contributors
+In this article
+Due to an increasing number of deployments or to run a larger workload, you may want to change the virtual machine scale set plan or resize AKS instances. However, as persupport policies for AKS:
+AKS agent nodes appear in the Azure portal as regular Azure IaaS resources. But these virtual machines are deployed into a custom Azure resource group (usually prefixed with MC_*). You cannot do any direct customizations to these nodes using the IaaS APIs or resources. Any custom changes that are not done via the AKS API will not persist through an upgrade, scale, update or reboot.
+This lack of persistence also applies to the resize operation, thus, resizing AKS instances in this manner isn't supported. In this how-to guide, you'll learn the recommended method to address this scenario.
+Important
+This method is specific to virtual machine scale set-based AKS clusters. When using virtual machine availability sets, you are limited to only one node pool per cluster.
+Example resources
+Assume you want to resize an existing node pool, callednodepool1, from SKU size Standard_DS2_v2 to Standard_DS3_v2. To accomplish this task, you'll need to create a new node pool using Standard_DS3_v2, move workloads fromnodepool1to the new node pool, and removenodepool1. In this example, we'll call this new node poolmynodepool.
+nodepool1
+nodepool1
+nodepool1
+mynodepool
+
+kubectl get nodes
+
+NAME                                STATUS   ROLES   AGE   VERSION
+aks-nodepool1-31721111-vmss000000   Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000001   Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000002   Ready    agent   10d   v1.21.9
+kubectl get nodes
+
+NAME                                STATUS   ROLES   AGE   VERSION
+aks-nodepool1-31721111-vmss000000   Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000001   Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000002   Ready    agent   10d   v1.21.9
+kubectl get pods -o wide -A
+
+NAMESPACE     NAME                                  READY   STATUS    RESTARTS   AGE     IP           NODE                                NOMINATED NODE   READINESS GATES
+default       sampleapp2-74b4b974ff-676sz           1/1     Running   0          93m     10.244.1.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+default       sampleapp2-76b6c4c59b-pfgbh           1/1     Running   0          94m     10.244.1.5   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   azure-ip-masq-agent-4n66k             1/1     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   azure-ip-masq-agent-9p4c8             1/1     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   azure-ip-masq-agent-nb7mx             1/1     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   coredns-845757d86-dtvvs               1/1     Running   0          10d     10.244.0.2   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   coredns-845757d86-x27pp               1/1     Running   0          10d     10.244.2.3   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   coredns-autoscaler-5f85dc856b-nfrmh   1/1     Running   0          10d     10.244.2.4   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   csi-azuredisk-node-9nfzt              3/3     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   csi-azuredisk-node-bblsb              3/3     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   csi-azuredisk-node-tjhj4              3/3     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   csi-azurefile-node-9pcr8              3/3     Running   0          3d10h   10.240.0.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   csi-azurefile-node-bh2pc              3/3     Running   0          3d10h   10.240.0.5   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   csi-azurefile-node-h75gq              3/3     Running   0          3d10h   10.240.0.4   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   konnectivity-agent-6cd55c69cf-ngdlb   1/1     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   konnectivity-agent-6cd55c69cf-rvvqt   1/1     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   kube-proxy-4wzx7                      1/1     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   kube-proxy-g5tvr                      1/1     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   kube-proxy-mrv54                      1/1     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   metrics-server-774f99dbf4-h52hn       1/1     Running   1          3d10h   10.244.1.3   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kubectl get pods -o wide -A
+
+NAMESPACE     NAME                                  READY   STATUS    RESTARTS   AGE     IP           NODE                                NOMINATED NODE   READINESS GATES
+default       sampleapp2-74b4b974ff-676sz           1/1     Running   0          93m     10.244.1.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+default       sampleapp2-76b6c4c59b-pfgbh           1/1     Running   0          94m     10.244.1.5   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   azure-ip-masq-agent-4n66k             1/1     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   azure-ip-masq-agent-9p4c8             1/1     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   azure-ip-masq-agent-nb7mx             1/1     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   coredns-845757d86-dtvvs               1/1     Running   0          10d     10.244.0.2   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   coredns-845757d86-x27pp               1/1     Running   0          10d     10.244.2.3   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   coredns-autoscaler-5f85dc856b-nfrmh   1/1     Running   0          10d     10.244.2.4   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   csi-azuredisk-node-9nfzt              3/3     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   csi-azuredisk-node-bblsb              3/3     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   csi-azuredisk-node-tjhj4              3/3     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   csi-azurefile-node-9pcr8              3/3     Running   0          3d10h   10.240.0.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   csi-azurefile-node-bh2pc              3/3     Running   0          3d10h   10.240.0.5   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   csi-azurefile-node-h75gq              3/3     Running   0          3d10h   10.240.0.4   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   konnectivity-agent-6cd55c69cf-ngdlb   1/1     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   konnectivity-agent-6cd55c69cf-rvvqt   1/1     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   kube-proxy-4wzx7                      1/1     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000   <none>           <none>
+kube-system   kube-proxy-g5tvr                      1/1     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002   <none>           <none>
+kube-system   kube-proxy-mrv54                      1/1     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001   <none>           <none>
+kube-system   metrics-server-774f99dbf4-h52hn       1/1     Running   1          3d10h   10.244.1.3   aks-nodepool1-31721111-vmss000002   <none>           <none>
+Create a new node pool with the desired SKU
+Azure CLI
+Azure PowerShell
+When resizing, be sure to consider all workload requirements, such as availability zones, and configure your node pool accordingly. You might need to modify the following command to best fit your needs. For a full list of the configuration options, see theaz aks nodepool addreference page.
+az aks nodepool add
+Use theaz aks nodepool addcommand to create a new node pool calledmynodepoolwith three nodes using theStandard_DS3_v2VM SKU:
+az aks nodepool add
+mynodepool
+Standard_DS3_v2
+az aks nodepool add \
+    --resource-group myResourceGroup \
+    --cluster-name myAKSCluster \
+    --name mynodepool \
+    --node-count 3 \
+    --node-vm-size Standard_DS3_v2 \
+    --mode System \
+    --no-wait
+az aks nodepool add \
+    --resource-group myResourceGroup \
+    --cluster-name myAKSCluster \
+    --name mynodepool \
+    --node-count 3 \
+    --node-vm-size Standard_DS3_v2 \
+    --mode System \
+    --no-wait
+Note
+Every AKS cluster must contain at least one system node pool with at least one node. In the example above, we are using a--modeofSystem, as the cluster is assumed to have only one node pool, necessitating aSystemnode pool to replace it. A node pool's mode can beupdated at any time.
+--mode
+System
+System
+After a few minutes, the new node pool has been created:
+
+kubectl get nodes
+
+NAME                                 STATUS   ROLES   AGE   VERSION
+aks-mynodepool-20823458-vmss000000   Ready    agent   23m   v1.21.9
+aks-mynodepool-20823458-vmss000001   Ready    agent   23m   v1.21.9
+aks-mynodepool-20823458-vmss000002   Ready    agent   23m   v1.21.9
+aks-nodepool1-31721111-vmss000000    Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000001    Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000002    Ready    agent   10d   v1.21.9
+kubectl get nodes
+
+NAME                                 STATUS   ROLES   AGE   VERSION
+aks-mynodepool-20823458-vmss000000   Ready    agent   23m   v1.21.9
+aks-mynodepool-20823458-vmss000001   Ready    agent   23m   v1.21.9
+aks-mynodepool-20823458-vmss000002   Ready    agent   23m   v1.21.9
+aks-nodepool1-31721111-vmss000000    Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000001    Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000002    Ready    agent   10d   v1.21.9
+When resizing, be sure to consider all workload requirements, such as availability zones, and configure your node pool accordingly. You might need to modify the following command to best fit your needs. For a full list of the configuration options, see theNew-AzAksNodePoolreference page.
+New-AzAksNodePool
+Use theNew-AzAksNodePoolcmdlet to create a new node pool calledmynodepoolwith three nodes using theStandard_DS3_v2VM SKU:
+New-AzAksNodePool
+mynodepool
+Standard_DS3_v2
+$params = @{
+    ResourceGroupName = 'myResourceGroup'
+    ClusterName       = 'myAKSCluster'
+    Name              = 'mynodepool'
+    Count             = 3
+    VMSize            = 'Standard_DS3_v2'
+}
+New-AzAksNodePool @params
+$params = @{
+    ResourceGroupName = 'myResourceGroup'
+    ClusterName       = 'myAKSCluster'
+    Name              = 'mynodepool'
+    Count             = 3
+    VMSize            = 'Standard_DS3_v2'
+}
+New-AzAksNodePool @params
+After a few minutes, the new node pool has been created:
+
+kubectl get nodes
+
+NAME                                 STATUS   ROLES   AGE   VERSION
+aks-mynodepool-20823458-vmss000000   Ready    agent   23m   v1.21.9
+aks-mynodepool-20823458-vmss000001   Ready    agent   23m   v1.21.9
+aks-mynodepool-20823458-vmss000002   Ready    agent   23m   v1.21.9
+aks-nodepool1-31721111-vmss000000    Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000001    Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000002    Ready    agent   10d   v1.21.9
+kubectl get nodes
+
+NAME                                 STATUS   ROLES   AGE   VERSION
+aks-mynodepool-20823458-vmss000000   Ready    agent   23m   v1.21.9
+aks-mynodepool-20823458-vmss000001   Ready    agent   23m   v1.21.9
+aks-mynodepool-20823458-vmss000002   Ready    agent   23m   v1.21.9
+aks-nodepool1-31721111-vmss000000    Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000001    Ready    agent   10d   v1.21.9
+aks-nodepool1-31721111-vmss000002    Ready    agent   10d   v1.21.9
+Note
+Every AKS cluster must contain at least one system node pool with at least one node. In the example below, we are updating a node pool's mode toSystem, as the cluster is assumed to have only one node pool, necessitating aSystemnode pool to replace it. A node pool's mode can beupdated at any time.
+System
+System
+$myAKSCluster = Get-AzAksCluster -ResourceGroupName myResourceGroup -Name myAKSCluster
+($myAKSCluster.AgentPoolProfiles | Where-Object Name -eq 'mynodepool').Mode = 'System'
+$myAKSCluster | Set-AzAksCluster
+$myAKSCluster = Get-AzAksCluster -ResourceGroupName myResourceGroup -Name myAKSCluster
+($myAKSCluster.AgentPoolProfiles | Where-Object Name -eq 'mynodepool').Mode = 'System'
+$myAKSCluster | Set-AzAksCluster
+Cordon the existing nodes
+Cordoning marks specified nodes as unschedulable and prevents any more pods from being added to the nodes.
+First, obtain the names of the nodes you'd like to cordon withkubectl get nodes. Your output should look similar to the following:
+kubectl get nodes
+NAME                                STATUS   ROLES   AGE     VERSION
+aks-nodepool1-31721111-vmss000000   Ready    agent   7d21h   v1.21.9
+aks-nodepool1-31721111-vmss000001   Ready    agent   7d21h   v1.21.9
+aks-nodepool1-31721111-vmss000002   Ready    agent   7d21h   v1.21.9
+NAME                                STATUS   ROLES   AGE     VERSION
+aks-nodepool1-31721111-vmss000000   Ready    agent   7d21h   v1.21.9
+aks-nodepool1-31721111-vmss000001   Ready    agent   7d21h   v1.21.9
+aks-nodepool1-31721111-vmss000002   Ready    agent   7d21h   v1.21.9
+Next, usingkubectl cordon <node-names>, specify the desired nodes in a space-separated list:
+kubectl cordon <node-names>
+kubectl cordon aks-nodepool1-31721111-vmss000000 aks-nodepool1-31721111-vmss000001 aks-nodepool1-31721111-vmss000002
+kubectl cordon aks-nodepool1-31721111-vmss000000 aks-nodepool1-31721111-vmss000001 aks-nodepool1-31721111-vmss000002
+node/aks-nodepool1-31721111-vmss000000 cordoned
+node/aks-nodepool1-31721111-vmss000001 cordoned
+node/aks-nodepool1-31721111-vmss000002 cordoned
+node/aks-nodepool1-31721111-vmss000000 cordoned
+node/aks-nodepool1-31721111-vmss000001 cordoned
+node/aks-nodepool1-31721111-vmss000002 cordoned
+Drain the existing nodes
+Important
+To successfully drain nodes and evict running pods, ensure that any PodDisruptionBudgets (PDBs) allow for at least one pod replica to be moved at a time. Otherwise, the drain/evict operation will fail. To check this, you can runkubectl get pdb -Aand verifyALLOWED DISRUPTIONSis at least one or higher.
+kubectl get pdb -A
+ALLOWED DISRUPTIONS
+Draining nodes will cause pods running on them to be evicted and recreated on the other, schedulable nodes.
+To drain nodes, usekubectl drain <node-names> --ignore-daemonsets --delete-emptydir-data, again using a space-separated list of node names:
+kubectl drain <node-names> --ignore-daemonsets --delete-emptydir-data
+Important
+Using--delete-emptydir-datais required to evict the AKS-createdcorednsandmetrics-serverpods. If this flag isn't used, an error is expected. For more information, see thedocumentation on emptydir.
+--delete-emptydir-data
+coredns
+metrics-server
+kubectl drain aks-nodepool1-31721111-vmss000000 aks-nodepool1-31721111-vmss000001 aks-nodepool1-31721111-vmss000002 --ignore-daemonsets --delete-emptydir-data
+kubectl drain aks-nodepool1-31721111-vmss000000 aks-nodepool1-31721111-vmss000001 aks-nodepool1-31721111-vmss000002 --ignore-daemonsets --delete-emptydir-data
+After the drain operation finishes, all pods other than those controlled by daemon sets are running on the new node pool:
+kubectl get pods -o wide -A
+
+NAMESPACE     NAME                                  READY   STATUS    RESTARTS   AGE     IP           NODE                                 NOMINATED NODE   READINESS GATES
+default       sampleapp2-74b4b974ff-676sz           1/1     Running   0          15m     10.244.4.5   aks-mynodepool-20823458-vmss000002   <none>           <none>
+default       sampleapp2-76b6c4c59b-rhmzq           1/1     Running   0          16m     10.244.4.3   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   azure-ip-masq-agent-4n66k             1/1     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002    <none>           <none>
+kube-system   azure-ip-masq-agent-9p4c8             1/1     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000    <none>           <none>
+kube-system   azure-ip-masq-agent-nb7mx             1/1     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001    <none>           <none>
+kube-system   azure-ip-masq-agent-sxn96             1/1     Running   0          49m     10.240.0.9   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   azure-ip-masq-agent-tsq98             1/1     Running   0          49m     10.240.0.8   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   azure-ip-masq-agent-xzrdl             1/1     Running   0          49m     10.240.0.7   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   coredns-845757d86-d2pkc               1/1     Running   0          17m     10.244.3.2   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   coredns-845757d86-f8g9s               1/1     Running   0          17m     10.244.5.2   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   coredns-autoscaler-5f85dc856b-f8xh2   1/1     Running   0          17m     10.244.4.2   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   csi-azuredisk-node-7md2w              3/3     Running   0          49m     10.240.0.7   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   csi-azuredisk-node-9nfzt              3/3     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000    <none>           <none>
+kube-system   csi-azuredisk-node-bblsb              3/3     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001    <none>           <none>
+kube-system   csi-azuredisk-node-lcmtz              3/3     Running   0          49m     10.240.0.9   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   csi-azuredisk-node-mmncr              3/3     Running   0          49m     10.240.0.8   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   csi-azuredisk-node-tjhj4              3/3     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002    <none>           <none>
+kube-system   csi-azurefile-node-29w6z              3/3     Running   0          49m     10.240.0.9   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   csi-azurefile-node-4nrx7              3/3     Running   0          49m     10.240.0.7   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   csi-azurefile-node-9pcr8              3/3     Running   0          3d11h   10.240.0.6   aks-nodepool1-31721111-vmss000002    <none>           <none>
+kube-system   csi-azurefile-node-bh2pc              3/3     Running   0          3d11h   10.240.0.5   aks-nodepool1-31721111-vmss000001    <none>           <none>
+kube-system   csi-azurefile-node-gqqnv              3/3     Running   0          49m     10.240.0.8   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   csi-azurefile-node-h75gq              3/3     Running   0          3d11h   10.240.0.4   aks-nodepool1-31721111-vmss000000    <none>           <none>
+kube-system   konnectivity-agent-6cd55c69cf-2bbp5   1/1     Running   0          17m     10.240.0.7   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   konnectivity-agent-6cd55c69cf-7xzxj   1/1     Running   0          16m     10.240.0.8   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   kube-proxy-4wzx7                      1/1     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000    <none>           <none>
+kube-system   kube-proxy-7h8r5                      1/1     Running   0          49m     10.240.0.7   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   kube-proxy-g5tvr                      1/1     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002    <none>           <none>
+kube-system   kube-proxy-mrv54                      1/1     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001    <none>           <none>
+kube-system   kube-proxy-nqmnj                      1/1     Running   0          49m     10.240.0.9   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   kube-proxy-zn77s                      1/1     Running   0          49m     10.240.0.8   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   metrics-server-774f99dbf4-2x6x8       1/1     Running   0          16m     10.244.4.4   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kubectl get pods -o wide -A
+
+NAMESPACE     NAME                                  READY   STATUS    RESTARTS   AGE     IP           NODE                                 NOMINATED NODE   READINESS GATES
+default       sampleapp2-74b4b974ff-676sz           1/1     Running   0          15m     10.244.4.5   aks-mynodepool-20823458-vmss000002   <none>           <none>
+default       sampleapp2-76b6c4c59b-rhmzq           1/1     Running   0          16m     10.244.4.3   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   azure-ip-masq-agent-4n66k             1/1     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002    <none>           <none>
+kube-system   azure-ip-masq-agent-9p4c8             1/1     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000    <none>           <none>
+kube-system   azure-ip-masq-agent-nb7mx             1/1     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001    <none>           <none>
+kube-system   azure-ip-masq-agent-sxn96             1/1     Running   0          49m     10.240.0.9   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   azure-ip-masq-agent-tsq98             1/1     Running   0          49m     10.240.0.8   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   azure-ip-masq-agent-xzrdl             1/1     Running   0          49m     10.240.0.7   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   coredns-845757d86-d2pkc               1/1     Running   0          17m     10.244.3.2   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   coredns-845757d86-f8g9s               1/1     Running   0          17m     10.244.5.2   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   coredns-autoscaler-5f85dc856b-f8xh2   1/1     Running   0          17m     10.244.4.2   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   csi-azuredisk-node-7md2w              3/3     Running   0          49m     10.240.0.7   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   csi-azuredisk-node-9nfzt              3/3     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000    <none>           <none>
+kube-system   csi-azuredisk-node-bblsb              3/3     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001    <none>           <none>
+kube-system   csi-azuredisk-node-lcmtz              3/3     Running   0          49m     10.240.0.9   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   csi-azuredisk-node-mmncr              3/3     Running   0          49m     10.240.0.8   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   csi-azuredisk-node-tjhj4              3/3     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002    <none>           <none>
+kube-system   csi-azurefile-node-29w6z              3/3     Running   0          49m     10.240.0.9   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   csi-azurefile-node-4nrx7              3/3     Running   0          49m     10.240.0.7   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   csi-azurefile-node-9pcr8              3/3     Running   0          3d11h   10.240.0.6   aks-nodepool1-31721111-vmss000002    <none>           <none>
+kube-system   csi-azurefile-node-bh2pc              3/3     Running   0          3d11h   10.240.0.5   aks-nodepool1-31721111-vmss000001    <none>           <none>
+kube-system   csi-azurefile-node-gqqnv              3/3     Running   0          49m     10.240.0.8   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   csi-azurefile-node-h75gq              3/3     Running   0          3d11h   10.240.0.4   aks-nodepool1-31721111-vmss000000    <none>           <none>
+kube-system   konnectivity-agent-6cd55c69cf-2bbp5   1/1     Running   0          17m     10.240.0.7   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   konnectivity-agent-6cd55c69cf-7xzxj   1/1     Running   0          16m     10.240.0.8   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   kube-proxy-4wzx7                      1/1     Running   0          10d     10.240.0.4   aks-nodepool1-31721111-vmss000000    <none>           <none>
+kube-system   kube-proxy-7h8r5                      1/1     Running   0          49m     10.240.0.7   aks-mynodepool-20823458-vmss000000   <none>           <none>
+kube-system   kube-proxy-g5tvr                      1/1     Running   0          10d     10.240.0.6   aks-nodepool1-31721111-vmss000002    <none>           <none>
+kube-system   kube-proxy-mrv54                      1/1     Running   0          10d     10.240.0.5   aks-nodepool1-31721111-vmss000001    <none>           <none>
+kube-system   kube-proxy-nqmnj                      1/1     Running   0          49m     10.240.0.9   aks-mynodepool-20823458-vmss000002   <none>           <none>
+kube-system   kube-proxy-zn77s                      1/1     Running   0          49m     10.240.0.8   aks-mynodepool-20823458-vmss000001   <none>           <none>
+kube-system   metrics-server-774f99dbf4-2x6x8       1/1     Running   0          16m     10.244.4.4   aks-mynodepool-20823458-vmss000002   <none>           <none>
+Troubleshooting
+You may see an error like the following:
+Error when evicting pods/[podname] -n [namespace] (will retry after 5s): Cannot evict pod as it would violate the pod's disruption budget.
+By default, your cluster has AKS_managed pod disruption budgets (such ascoredns-pdborkonnectivity-agent) with aMinAvailableof 1. If, for example, there are twocorednspods running, while one of them is getting recreated and is unavailable, the other is unable to be affected due to the pod disruption budget. This resolves itself after the initialcorednspod is scheduled and running, allowing the second pod to be properly evicted and recreated.
+coredns-pdb
+konnectivity-agent
+MinAvailable
+coredns
+coredns
+Tip
+Consider draining nodes one-by-one for a smoother eviction experience and to avoid throttling. For more information, see:
+Plan for availability using a pod disruption budget
+Specifying a Disruption Budget for your Application
+Disruptions
+Remove the existing node pool
+Azure CLI
+Azure PowerShell
+To delete the existing node pool, use the Azure portal or theaz aks nodepool deletecommand:
+az aks nodepool delete
+az aks nodepool delete \
+    --resource-group myResourceGroup \
+    --cluster-name myAKSCluster \
+    --name nodepool1
+az aks nodepool delete \
+    --resource-group myResourceGroup \
+    --cluster-name myAKSCluster \
+    --name nodepool1
+To delete the existing node pool, use the Azure portal or theRemove-AzAksNodePoolcmdlet:
+Remove-AzAksNodePool
+Important
+When you delete a node pool, AKS doesn't perform cordon and drain. To minimize the disruption of rescheduling pods currently running on the node pool you are going to delete, perform a cordon and drain on all nodes in the node pool before deleting.
+$params = @{
+    ResourceGroupName = 'myResourceGroup'
+    ClusterName       = 'myAKSCluster'
+    Name              = 'nodepool1'
+    Force             = $true
+}
+Remove-AzAksNodePool @params
+$params = @{
+    ResourceGroupName = 'myResourceGroup'
+    ClusterName       = 'myAKSCluster'
+    Name              = 'nodepool1'
+    Force             = $true
+}
+Remove-AzAksNodePool @params
+After completion, the final result is the AKS cluster having a single, new node pool with the new, desired SKU size and all the applications and pods properly running:
+
+kubectl get nodes
+
+NAME                                 STATUS   ROLES   AGE   VERSION
+aks-mynodepool-20823458-vmss000000   Ready    agent   63m   v1.21.9
+aks-mynodepool-20823458-vmss000001   Ready    agent   63m   v1.21.9
+aks-mynodepool-20823458-vmss000002   Ready    agent   63m   v1.21.9
+kubectl get nodes
+
+NAME                                 STATUS   ROLES   AGE   VERSION
+aks-mynodepool-20823458-vmss000000   Ready    agent   63m   v1.21.9
+aks-mynodepool-20823458-vmss000001   Ready    agent   63m   v1.21.9
+aks-mynodepool-20823458-vmss000002   Ready    agent   63m   v1.21.9
+Next steps
+After resizing a node pool by cordoning and draining, learn more aboutusing multiple node pools.
+Azure Kubernetes Service
+
+Additional resources

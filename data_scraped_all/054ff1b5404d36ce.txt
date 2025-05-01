@@ -1,0 +1,1449 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Implement Oracle Golden Gate on an Azure Linux virtual machine (VM)
+Article
+2024-10-03
+21 contributors
+In this article
+Applies to:âï¸ Linux VMs
+The Azure CLI is used to create and manage Azure resources from the command line or in scripts. This guide details how to use the Azure CLI to deploy an Oracle 19c database from the Azure Marketplace gallery image.
+This document shows you step-by-step how to create, install, and configure Oracle Golden Gate on an Azure VM. In this tutorial, two virtual machines are set up in an availability set in a single region. The same tutorial can be used to set up OracleGolden Gate for VMs in different Availability Zones in a single Azure region or for VMs set up in two different regions.
+Before you start, make sure that the Azure CLI is installed. For more information, seeAzure CLI installation guide.
+Introduction
+GoldenGate is a logical replication software that enables real-time replication, filtering, and transformation of data from a source database to a target database. This feature ensures that changes in the source database are replicated in real-time, making it possible for the target database to be up-to-date with the latest data.
+Use GoldenGate mainly for heterogeneous replication cases, such as replicating data from different source databases to a single database. For example, a data warehouse. You can also use it for cross-platform migrations, such as from SPARC and AIX to Linux x86 environments, and advanced high availability and scalability scenarios.
+Additionally, GoldenGate is also suitable for near-zero downtime migrations since it supports online migrations with minimal disruption to the source systems.
+While GoldenGate facilitates bi-directional replication, the application must be configured accordingly. Additionally, the software permits filtering and transformation of data to meet specific business requirements, enabling users to make use of the replicated data for various purposes.
+Prepare the environment
+To perform the Oracle Golden Gate installation, you need to create two Azure VMs on the same availability set. The Marketplace image you use to create the VMs isOracle:oracle-database-19-3:oracle-database-19-0904:19.3.1.
+You also need to be familiar with Unix editor vi and have a basic understanding of X Server.
+The following table is a summary of the environment configuration:
+Sign in to Azure
+Open your preferred shell on Windows, Linux, orAzure Shell.
+Open your preferred shell on Windows, Linux, orAzure Shell.
+Sign in to your Azure subscription with theaz logincommand. Then follow the on-screen directions.$ az login
+Sign in to your Azure subscription with theaz logincommand. Then follow the on-screen directions.
+$ az login
+$ az login
+Ensure you're connected to the correct subscription by verifying subscription name and/or ID.$ az account show{
+  "environmentName": "XXXXX",
+  "homeTenantId": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+  "id": "<SUBSCRIPTION_ID>",
+  "isDefault": true,
+  "managedByTenants": [],
+  "name": "<SUBSCRIPTION_NAME>",
+  "state": "Enabled",
+  "tenantId": XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+  "user": {
+    "cloudShellID": true,
+    "name": "aaaaa@bbbbb.com",
+    "type": "user"
+  }
+}
+Ensure you're connected to the correct subscription by verifying subscription name and/or ID.
+$ az account show
+$ az account show
+{
+  "environmentName": "XXXXX",
+  "homeTenantId": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+  "id": "<SUBSCRIPTION_ID>",
+  "isDefault": true,
+  "managedByTenants": [],
+  "name": "<SUBSCRIPTION_NAME>",
+  "state": "Enabled",
+  "tenantId": XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+  "user": {
+    "cloudShellID": true,
+    "name": "aaaaa@bbbbb.com",
+    "type": "user"
+  }
+}
+{
+  "environmentName": "XXXXX",
+  "homeTenantId": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+  "id": "<SUBSCRIPTION_ID>",
+  "isDefault": true,
+  "managedByTenants": [],
+  "name": "<SUBSCRIPTION_NAME>",
+  "state": "Enabled",
+  "tenantId": XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+  "user": {
+    "cloudShellID": true,
+    "name": "aaaaa@bbbbb.com",
+    "type": "user"
+  }
+}
+Generate authentication keys
+We use key file based authentication with ssh to connect to the Oracle Database VM. Ensure that you have your private (namedid_rsa) and public (namedid_rsa.pub) key files are created on yourshell.
+id_rsa
+id_rsa.pub
+Location of key files depends on your source system.
+Windows: %USERPROFILE%.ssh
+Linux: ~/.ssh
+If they don't exist, you can create a new keyfile pair.
+ssh-keygen -m PEM -t rsa -b 4096
+The .ssh directory and key files are created. For more information, seeCreate and manage SSH keys for authentication to a Linux VM in Azure
+Create a resource group
+To create a resource group, use theaz group createcommand. An Azure resource group is a logical container in which Azure resources are deployed and managed.
+$ az group create --name GoldenGateOnAzureLab --location westus
+$ az group create --name GoldenGateOnAzureLab --location westus
+Create and configure network
+Use following command to create the virtual network that hosts resources we create in this lab.
+$ az network vnet create \
+  --name ggVnet \
+  --resource-group GoldenGateOnAzureLab \
+  --address-prefixes "10.0.0.0/16" \
+  --subnet-name ggSubnet1 \
+  --subnet-prefixes "10.0.0.0/24"
+$ az network vnet create \
+  --name ggVnet \
+  --resource-group GoldenGateOnAzureLab \
+  --address-prefixes "10.0.0.0/16" \
+  --subnet-name ggSubnet1 \
+  --subnet-prefixes "10.0.0.0/24"
+Create a network security group (NSG) to lock down your virtual network.$ az network nsg create \
+  --resource-group GoldenGateOnAzureLab \
+  --name ggVnetNSG
+Create a network security group (NSG) to lock down your virtual network.
+$ az network nsg create \
+  --resource-group GoldenGateOnAzureLab \
+  --name ggVnetNSG
+$ az network nsg create \
+  --resource-group GoldenGateOnAzureLab \
+  --name ggVnetNSG
+Create NSG rule to allow communication within virtual network.$ az network nsg rule create  --resource-group GoldenGateOnAzureLab --nsg-name ggVnetNSG \
+    --name ggAllowVnet \
+    --protocol '*' --direction inbound --priority 3400 \
+    --source-address-prefix 'VirtualNetwork' --source-port-range '*' \
+    --destination-address-prefix 'VirtualNetwork' --destination-port-range '*' --access allow
+Create NSG rule to allow communication within virtual network.
+$ az network nsg rule create  --resource-group GoldenGateOnAzureLab --nsg-name ggVnetNSG \
+    --name ggAllowVnet \
+    --protocol '*' --direction inbound --priority 3400 \
+    --source-address-prefix 'VirtualNetwork' --source-port-range '*' \
+    --destination-address-prefix 'VirtualNetwork' --destination-port-range '*' --access allow
+$ az network nsg rule create  --resource-group GoldenGateOnAzureLab --nsg-name ggVnetNSG \
+    --name ggAllowVnet \
+    --protocol '*' --direction inbound --priority 3400 \
+    --source-address-prefix 'VirtualNetwork' --source-port-range '*' \
+    --destination-address-prefix 'VirtualNetwork' --destination-port-range '*' --access allow
+Create NSG rule to deny all inbound connections.$ az network nsg rule create \
+  --resource-group GoldenGateOnAzureLab \
+  --nsg-name ggVnetNSG \
+  --name ggDenyAllInBound \
+  --protocol '*' --direction inbound --priority 3500 \
+  --source-address-prefix '*' --source-port-range '*' \
+  --destination-address-prefix '*' --destination-port-range '*' --access deny
+Create NSG rule to deny all inbound connections.
+$ az network nsg rule create \
+  --resource-group GoldenGateOnAzureLab \
+  --nsg-name ggVnetNSG \
+  --name ggDenyAllInBound \
+  --protocol '*' --direction inbound --priority 3500 \
+  --source-address-prefix '*' --source-port-range '*' \
+  --destination-address-prefix '*' --destination-port-range '*' --access deny
+$ az network nsg rule create \
+  --resource-group GoldenGateOnAzureLab \
+  --nsg-name ggVnetNSG \
+  --name ggDenyAllInBound \
+  --protocol '*' --direction inbound --priority 3500 \
+  --source-address-prefix '*' --source-port-range '*' \
+  --destination-address-prefix '*' --destination-port-range '*' --access deny
+Assign NSG to Subnet where we host our servers.$ az network vnet subnet update --resource-group GoldenGateOnAzureLab --vnet-name ggVNet --name ggSubnet1 --network-security-group ggVnetNSG
+Assign NSG to Subnet where we host our servers.
+$ az network vnet subnet update --resource-group GoldenGateOnAzureLab --vnet-name ggVNet --name ggSubnet1 --network-security-group ggVnetNSG
+$ az network vnet subnet update --resource-group GoldenGateOnAzureLab --vnet-name ggVNet --name ggSubnet1 --network-security-group ggVnetNSG
+Create Bastion subnet. Name of the subnet must beAzureBastionSubnet.$ az network vnet subnet create  \
+    --resource-group GoldenGateOnAzureLab \
+    --name AzureBastionSubnet \
+    --vnet-name ggVnet \
+    --address-prefixes 10.0.1.0/24
+Create Bastion subnet. Name of the subnet must beAzureBastionSubnet.
+$ az network vnet subnet create  \
+    --resource-group GoldenGateOnAzureLab \
+    --name AzureBastionSubnet \
+    --vnet-name ggVnet \
+    --address-prefixes 10.0.1.0/24
+$ az network vnet subnet create  \
+    --resource-group GoldenGateOnAzureLab \
+    --name AzureBastionSubnet \
+    --vnet-name ggVnet \
+    --address-prefixes 10.0.1.0/24
+Create public IP for Bastion.$ az network public-ip create \
+    --resource-group GoldenGateOnAzureLab \
+    --name ggBastionIP \
+    --sku Standard
+Create public IP for Bastion.
+$ az network public-ip create \
+    --resource-group GoldenGateOnAzureLab \
+    --name ggBastionIP \
+    --sku Standard
+$ az network public-ip create \
+    --resource-group GoldenGateOnAzureLab \
+    --name ggBastionIP \
+    --sku Standard
+Create Azure Bastion resource. It takes about 10 minutes for the resource to deploy.$ az network bastion create \
+    --resource-group GoldenGateOnAzureLab \
+    --name ggBastion \
+    --public-ip-address ggBastionIP \
+    --vnet-name ggVnet \
+    --sku Standard \
+    --enable-tunneling \
+    --enable-ip-connect true
+Create Azure Bastion resource. It takes about 10 minutes for the resource to deploy.
+$ az network bastion create \
+    --resource-group GoldenGateOnAzureLab \
+    --name ggBastion \
+    --public-ip-address ggBastionIP \
+    --vnet-name ggVnet \
+    --sku Standard \
+    --enable-tunneling \
+    --enable-ip-connect true
+$ az network bastion create \
+    --resource-group GoldenGateOnAzureLab \
+    --name ggBastion \
+    --public-ip-address ggBastionIP \
+    --vnet-name ggVnet \
+    --sku Standard \
+    --enable-tunneling \
+    --enable-ip-connect true
+Create X Server VM  (ggXServer)
+Replace your password and run the following command to create a Windows workstation VM where we deploy X Server.
+$ az vm create \
+     --resource-group GoldenGateOnAzureLab \
+     --name ggXServer \
+     --image MicrosoftWindowsDesktop:Windows-10:win10-22h2-pro-g2:19045.2604.230207 \
+     --size Standard_DS1_v2  \
+     --vnet-name ggVnet \
+     --subnet ggSubnet1 \
+     --public-ip-sku Standard \
+     --nsg "" \
+     --data-disk-delete-option Delete \
+     --os-disk-delete-option Delete \
+     --nic-delete-option Delete \
+     --admin-username azureuser \
+     --admin-password <ENTER_YOUR_PASSWORD_HERE>
+$ az vm create \
+     --resource-group GoldenGateOnAzureLab \
+     --name ggXServer \
+     --image MicrosoftWindowsDesktop:Windows-10:win10-22h2-pro-g2:19045.2604.230207 \
+     --size Standard_DS1_v2  \
+     --vnet-name ggVnet \
+     --subnet ggSubnet1 \
+     --public-ip-sku Standard \
+     --nsg "" \
+     --data-disk-delete-option Delete \
+     --os-disk-delete-option Delete \
+     --nic-delete-option Delete \
+     --admin-username azureuser \
+     --admin-password <ENTER_YOUR_PASSWORD_HERE>
+Connect to ggXServer through Bastion
+Connect toggXServerusing Bastion.
+Navigate toggXServerfrom Azure portal
+LocateOverviewin the left navigation
+SelectConnect>Bastionon the menu at the top
+Select Bastion tab
+ClickUse Bastion
+Prepare ggXServer to run X Server
+X Server is required for later steps of this lab. Perform following steps to install and start X Server.
+Download Xming X Server for WindowstoggXServerand install with all default options.
+Download Xming X Server for WindowstoggXServerand install with all default options.
+Ensure that you didn't selectLaunchat the end of installation
+Ensure that you didn't selectLaunchat the end of installation
+Launch "XLAUNCH" application from start menu.
+Launch "XLAUNCH" application from start menu.
+SelectMultiple Windows
+SelectMultiple Windows
+
+SelectStart no client
+SelectStart no client
+
+SelectNo access control
+SelectNo access control
+
+SelectAllow Accessto allow X Server through Windows Firewall
+SelectAllow Accessto allow X Server through Windows Firewall
+
+If you restart yourggXServerVM, follow steps 2-6 above to restart X Server application.
+Create Oracle database virtual machines
+For this lab, we create virtual machinesggVM1andggVM2from Oracle Database 19c image. If they don't already exist in the default key location, this command also creates SSH keys. To use a specific set of keys, use the--ssh-key-valueoption. If you already created your SSH keys inGenerate authentication keyssection, those keys are used.
+ggVM1
+ggVM2
+--ssh-key-value
+When you create a new virtual machine, thesizeparameter indicates the size and type of virtual machine created. Depending on the Azure region you selected to create virtual machine and your subscription settings, some virtual machine sizes and types may not be available for you to use. The following example uses minimum required size for this labStandard_DS1_v2. If you want to change specs of virtual machine, select one of the available sizes fromAzure VM Sizes. For test purposes, you can choose from General Purpose (D-Series) virtual machine types. For production or pilot deployments, Memory Optimized (E-Series and M-Series) are more suitable.
+size
+Standard_DS1_v2
+$ az vm create \
+     --resource-group GoldenGateOnAzureLab \
+     --name ggVM1 \
+     --image Oracle:oracle-database-19-3:oracle-database-19-0904:19.3.1 \
+     --size Standard_DS1_v2 \
+     --generate-ssh-keys \
+    --admin-username azureuser \
+    --vnet-name ggVnet \
+    --subnet ggSubnet1 \
+    --public-ip-address "" \
+    --nsg "" \
+    --zone 1
+$ az vm create \
+     --resource-group GoldenGateOnAzureLab \
+     --name ggVM1 \
+     --image Oracle:oracle-database-19-3:oracle-database-19-0904:19.3.1 \
+     --size Standard_DS1_v2 \
+     --generate-ssh-keys \
+    --admin-username azureuser \
+    --vnet-name ggVnet \
+    --subnet ggSubnet1 \
+    --public-ip-address "" \
+    --nsg "" \
+    --zone 1
+$ az vm create \
+    --resource-group GoldenGateOnAzureLab \
+    --name ggVM2 \
+    --image Oracle:oracle-database-19-3:oracle-database-19-0904:19.3.1 \
+    --size Standard_DS1_v2  \
+    --generate-ssh-keys \
+    --admin-username azureuser \
+    --vnet-name ggVnet \
+    --subnet ggSubnet1 \
+    --public-ip-address "" \
+    --nsg "" \
+    --zone 2
+$ az vm create \
+    --resource-group GoldenGateOnAzureLab \
+    --name ggVM2 \
+    --image Oracle:oracle-database-19-3:oracle-database-19-0904:19.3.1 \
+    --size Standard_DS1_v2  \
+    --generate-ssh-keys \
+    --admin-username azureuser \
+    --vnet-name ggVnet \
+    --subnet ggSubnet1 \
+    --public-ip-address "" \
+    --nsg "" \
+    --zone 2
+Connect to ggVM1 (primary)
+Connect toggVM1using Bastion.
+Navigate toggVM1from Azure portal.
+Go toOverviewin the left pane.
+SelectConnect>Bastionon the menu at the top
+Select the Bastion tab
+SelectUse Bastion
+Create the database on ggVM1 (primary)
+The Oracle software is already installed on the Marketplace image, so the next step is to create the database.
+Run the software as theoracleuser.
+oracle
+$ sudo su - oracle
+$ sudo su - oracle
+Create the database using following command. This command can take 30-40 minutes to complete.
+$ dbca -silent \
+   -createDatabase \
+   -templateName General_Purpose.dbc \
+   -gdbname cdb1 \
+   -sid cdb1 \
+   -responseFile NO_VALUE \
+   -characterSet AL32UTF8 \
+   -sysPassword OraPasswd1 \
+   -systemPassword OraPasswd1 \
+   -createAsContainerDatabase true \
+   -numberOfPDBs 1 \
+   -pdbName pdb1 \
+   -pdbAdminPassword OraPasswd1 \
+   -databaseType MULTIPURPOSE \
+   -automaticMemoryManagement false \
+   -storageType FS \
+   -datafileDestination "/u01/app/oracle/oradata/" \
+   -ignorePreReqs
+$ dbca -silent \
+   -createDatabase \
+   -templateName General_Purpose.dbc \
+   -gdbname cdb1 \
+   -sid cdb1 \
+   -responseFile NO_VALUE \
+   -characterSet AL32UTF8 \
+   -sysPassword OraPasswd1 \
+   -systemPassword OraPasswd1 \
+   -createAsContainerDatabase true \
+   -numberOfPDBs 1 \
+   -pdbName pdb1 \
+   -pdbAdminPassword OraPasswd1 \
+   -databaseType MULTIPURPOSE \
+   -automaticMemoryManagement false \
+   -storageType FS \
+   -datafileDestination "/u01/app/oracle/oradata/" \
+   -ignorePreReqs
+Output should look similar to the following response.
+Copying database files
+1% complete
+2% complete
+8% complete
+13% complete
+19% complete
+27% complete
+Creating and starting Oracle instance
+29% complete
+32% complete
+33% complete
+34% complete
+38% complete
+42% complete
+43% complete
+45% complete
+Completing Database Creation
+48% complete
+51% complete
+53% complete
+62% complete
+70% complete
+72% complete
+Creating Pluggable Databases
+78% complete
+100% complete
+Look at the log file "/u01/app/oracle/cfgtoollogs/dbca/cdb1/cdb1.log" for more details.
+Copying database files
+1% complete
+2% complete
+8% complete
+13% complete
+19% complete
+27% complete
+Creating and starting Oracle instance
+29% complete
+32% complete
+33% complete
+34% complete
+38% complete
+42% complete
+43% complete
+45% complete
+Completing Database Creation
+48% complete
+51% complete
+53% complete
+62% complete
+70% complete
+72% complete
+Creating Pluggable Databases
+78% complete
+100% complete
+Look at the log file "/u01/app/oracle/cfgtoollogs/dbca/cdb1/cdb1.log" for more details.
+Set the ORACLE_SID and LD_LIBRARY_PATH variables.
+$ export ORACLE_SID=cdb1
+$ export LD_LIBRARY_PATH=$ORACLE_HOME/lib
+$ export ORACLE_SID=cdb1
+$ export LD_LIBRARY_PATH=$ORACLE_HOME/lib
+Run following to add ORACLE_SID and LD_LIBRARY_PATH to the .bashrc file, so that these settings are saved for future sign-ins. ORACLE_HOME variable should already be set in .bashrc file.
+$ sed -i '$ a export ORACLE_SID=cdb1' .bashrc
+$ sed -i '$ a export LD_LIBRARY_PATH=$ORACLE_HOME/lib' .bashrc
+$ sed -i '$ a export ORACLE_SID=cdb1' .bashrc
+$ sed -i '$ a export LD_LIBRARY_PATH=$ORACLE_HOME/lib' .bashrc
+Start Oracle listener
+$ lsnrctl start
+$ lsnrctl start
+Connect to ggVM2 (replicate)
+Connect toggVM2using Bastion.
+Navigate toggVM2from Azure portal.
+Go toOverviewin the left pane.
+SelectConnect>Bastionon the menu at the top
+Select the Bastion tab
+SelectUse Bastion
+Open firewall ports for ggVM1
+Configure firewall to allow connections from ggVM1. Following command is run on ggVM2.
+$ sudo su -
+$ firewall-cmd --permanent --zone=trusted --add-source=10.0.0.5
+$ firewall-cmd --reload
+$ exit
+$ sudo su -
+$ firewall-cmd --permanent --zone=trusted --add-source=10.0.0.5
+$ firewall-cmd --reload
+$ exit
+Create the database on ggVM2 (replicate)
+Switch tooracleuser if necessary
+oracle
+$ sudo su - oracle
+$ sudo su - oracle
+Create the database
+$ dbca -silent \
+   -createDatabase \
+   -templateName General_Purpose.dbc \
+   -gdbname cdb1 \
+   -sid cdb1 \
+   -responseFile NO_VALUE \
+   -characterSet AL32UTF8 \
+   -sysPassword OraPasswd1 \
+   -systemPassword OraPasswd1 \
+   -createAsContainerDatabase true \
+   -numberOfPDBs 1 \
+   -pdbName pdb1 \
+   -pdbAdminPassword OraPasswd1 \
+   -databaseType MULTIPURPOSE \
+   -automaticMemoryManagement false \
+   -storageType FS \
+   -datafileDestination "/u01/app/oracle/oradata/" \
+   -ignorePreReqs
+$ dbca -silent \
+   -createDatabase \
+   -templateName General_Purpose.dbc \
+   -gdbname cdb1 \
+   -sid cdb1 \
+   -responseFile NO_VALUE \
+   -characterSet AL32UTF8 \
+   -sysPassword OraPasswd1 \
+   -systemPassword OraPasswd1 \
+   -createAsContainerDatabase true \
+   -numberOfPDBs 1 \
+   -pdbName pdb1 \
+   -pdbAdminPassword OraPasswd1 \
+   -databaseType MULTIPURPOSE \
+   -automaticMemoryManagement false \
+   -storageType FS \
+   -datafileDestination "/u01/app/oracle/oradata/" \
+   -ignorePreReqs
+Set the ORACLE_SID and ORACLE_HOME variables.
+$ export ORACLE_SID=cdb1
+$ export LD_LIBRARY_PATH=$ORACLE_HOME/lib
+$ export ORACLE_SID=cdb1
+$ export LD_LIBRARY_PATH=$ORACLE_HOME/lib
+Run following to add ORACLE_SID and LD_LIBRARY_PATH to the .bashrc file, so that these settings are saved for future sign-ins. ORACLE_HOME variable should already be set in .bashrc file.
+$ sed -i '$ a export ORACLE_SID=cdb1' .bashrc
+$ sed -i '$ a export LD_LIBRARY_PATH=$ORACLE_HOME/lib' .bashrc
+$ sed -i '$ a export ORACLE_SID=cdb1' .bashrc
+$ sed -i '$ a export LD_LIBRARY_PATH=$ORACLE_HOME/lib' .bashrc
+Start Oracle listener
+$ lsnrctl start
+$ lsnrctl start
+Configure Golden Gate on ggVM1
+Follow the steps in this section to install and configure Golden Gate.
+Enable archive log mode on ggVM1 (primary)
+Connect tosqlplus
+sqlplus
+$ sqlplus / as sysdba
+$ sqlplus / as sysdba
+Enable archive log
+SQL> SELECT log_mode FROM v$database;
+
+LOG_MODE
+------------
+NOARCHIVELOG
+
+SQL> SHUTDOWN IMMEDIATE;
+SQL> STARTUP MOUNT;
+SQL> ALTER DATABASE ARCHIVELOG;
+SQL> ALTER DATABASE OPEN;
+SQL> SELECT log_mode FROM v$database;
+
+LOG_MODE
+------------
+NOARCHIVELOG
+
+SQL> SHUTDOWN IMMEDIATE;
+SQL> STARTUP MOUNT;
+SQL> ALTER DATABASE ARCHIVELOG;
+SQL> ALTER DATABASE OPEN;
+Enable force logging, and make sure at least one log file is present.
+SQL> ALTER DATABASE FORCE LOGGING;
+SQL> ALTER SYSTEM SWITCH LOGFILE;
+SQL> ALTER SYSTEM set enable_goldengate_replication=true;
+SQL> ALTER PLUGGABLE DATABASE PDB1 OPEN;
+SQL> ALTER SESSION SET CONTAINER=CDB$ROOT;
+SQL> ALTER DATABASE ADD SUPPLEMENTAL LOG DATA;
+SQL> ALTER SESSION SET CONTAINER=PDB1;
+SQL> ALTER DATABASE ADD SUPPLEMENTAL LOG DATA;
+SQL> EXIT;
+SQL> ALTER DATABASE FORCE LOGGING;
+SQL> ALTER SYSTEM SWITCH LOGFILE;
+SQL> ALTER SYSTEM set enable_goldengate_replication=true;
+SQL> ALTER PLUGGABLE DATABASE PDB1 OPEN;
+SQL> ALTER SESSION SET CONTAINER=CDB$ROOT;
+SQL> ALTER DATABASE ADD SUPPLEMENTAL LOG DATA;
+SQL> ALTER SESSION SET CONTAINER=PDB1;
+SQL> ALTER DATABASE ADD SUPPLEMENTAL LOG DATA;
+SQL> EXIT;
+Download Golden Gate software
+Download the213000_fbo_ggs_Linux_x64_Oracle_shiphome.zipfile from theOracle Golden Gate download page, under the download titleOracle GoldenGate 21.3.0.0.0 for Oracle on Linux x86-64.
+Download the213000_fbo_ggs_Linux_x64_Oracle_shiphome.zipfile from theOracle Golden Gate download page, under the download titleOracle GoldenGate 21.3.0.0.0 for Oracle on Linux x86-64.
+After you download the .zip file to your client computer, you can use Secure Copy Protocol (SCP) to copy the files to your virtual machines (ggVM1 and ggVM2). Make sure thatscpcommand points to correct path of .zip file.
+After you download the .zip file to your client computer, you can use Secure Copy Protocol (SCP) to copy the files to your virtual machines (ggVM1 and ggVM2). Make sure thatscpcommand points to correct path of .zip file.
+scp
+Copy to ggVM1Sign in and ensure you're using the correct subscription as necessary as described inSign in to AzureOpen the tunnel to your target VM using the following PowerShell command$ggVM1id=$(az vm show --resource-group GoldenGateOnAzureLab --name ggVM1 --query 'id' --output tsv)
+az network bastion tunnel --name ggBastion --resource-group GoldenGateOnAzureLab --target-resource-id $ggVM1id --resource-port 22 --port 57500To connect to your target VM through the tunnel, leave the first command prompt running and open a second command prompt . In this second command prompt window, you can upload files from your local machine to your target VM using the following command. The correctid_rsakeyfile to access virtual machine must reside in.sshdirectory or you can point to a different key file using-iparameter toscpcommand.scp -P 57500 "213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip"  azureuser@127.0.0.1:.
+Copy to ggVM1
+Sign in and ensure you're using the correct subscription as necessary as described inSign in to Azure
+Sign in and ensure you're using the correct subscription as necessary as described inSign in to Azure
+Open the tunnel to your target VM using the following PowerShell command$ggVM1id=$(az vm show --resource-group GoldenGateOnAzureLab --name ggVM1 --query 'id' --output tsv)
+az network bastion tunnel --name ggBastion --resource-group GoldenGateOnAzureLab --target-resource-id $ggVM1id --resource-port 22 --port 57500
+Open the tunnel to your target VM using the following PowerShell command
+$ggVM1id=$(az vm show --resource-group GoldenGateOnAzureLab --name ggVM1 --query 'id' --output tsv)
+az network bastion tunnel --name ggBastion --resource-group GoldenGateOnAzureLab --target-resource-id $ggVM1id --resource-port 22 --port 57500
+$ggVM1id=$(az vm show --resource-group GoldenGateOnAzureLab --name ggVM1 --query 'id' --output tsv)
+az network bastion tunnel --name ggBastion --resource-group GoldenGateOnAzureLab --target-resource-id $ggVM1id --resource-port 22 --port 57500
+To connect to your target VM through the tunnel, leave the first command prompt running and open a second command prompt . In this second command prompt window, you can upload files from your local machine to your target VM using the following command. The correctid_rsakeyfile to access virtual machine must reside in.sshdirectory or you can point to a different key file using-iparameter toscpcommand.scp -P 57500 "213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip"  azureuser@127.0.0.1:.
+To connect to your target VM through the tunnel, leave the first command prompt running and open a second command prompt . In this second command prompt window, you can upload files from your local machine to your target VM using the following command. The correctid_rsakeyfile to access virtual machine must reside in.sshdirectory or you can point to a different key file using-iparameter toscpcommand.
+id_rsa
+.ssh
+-i
+scp
+scp -P 57500 "213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip"  azureuser@127.0.0.1:.
+scp -P 57500 "213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip"  azureuser@127.0.0.1:.
+Copy to ggVM2Open the tunnel to your target VM using the following PowerShell command$ggVM2id=$(az vm show --resource-group GoldenGateOnAzureLab --name ggVM2 --query 'id' --output tsv)
+az network bastion tunnel --name ggBastion --resource-group GoldenGateOnAzureLab --target-resource-id $ggVM2id --resource-port 22 --port 57501Leave the first command prompt running and open a second command prompt to connect to your target VM through the tunnel. In this second command prompt window, you can upload files from your local machine to your target VM using the following command. The correctid_rsakeyfile to access virtual machine must reside in.sshdirectory or you can point to a different key file using-iparameter toscpcommand.scp -P 57501 "213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip"  azureuser@127.0.0.1:.
+Copy to ggVM2
+Open the tunnel to your target VM using the following PowerShell command$ggVM2id=$(az vm show --resource-group GoldenGateOnAzureLab --name ggVM2 --query 'id' --output tsv)
+az network bastion tunnel --name ggBastion --resource-group GoldenGateOnAzureLab --target-resource-id $ggVM2id --resource-port 22 --port 57501
+Open the tunnel to your target VM using the following PowerShell command
+$ggVM2id=$(az vm show --resource-group GoldenGateOnAzureLab --name ggVM2 --query 'id' --output tsv)
+az network bastion tunnel --name ggBastion --resource-group GoldenGateOnAzureLab --target-resource-id $ggVM2id --resource-port 22 --port 57501
+$ggVM2id=$(az vm show --resource-group GoldenGateOnAzureLab --name ggVM2 --query 'id' --output tsv)
+az network bastion tunnel --name ggBastion --resource-group GoldenGateOnAzureLab --target-resource-id $ggVM2id --resource-port 22 --port 57501
+Leave the first command prompt running and open a second command prompt to connect to your target VM through the tunnel. In this second command prompt window, you can upload files from your local machine to your target VM using the following command. The correctid_rsakeyfile to access virtual machine must reside in.sshdirectory or you can point to a different key file using-iparameter toscpcommand.scp -P 57501 "213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip"  azureuser@127.0.0.1:.
+Leave the first command prompt running and open a second command prompt to connect to your target VM through the tunnel. In this second command prompt window, you can upload files from your local machine to your target VM using the following command. The correctid_rsakeyfile to access virtual machine must reside in.sshdirectory or you can point to a different key file using-iparameter toscpcommand.
+id_rsa
+.ssh
+-i
+scp
+scp -P 57501 "213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip"  azureuser@127.0.0.1:.
+scp -P 57501 "213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip"  azureuser@127.0.0.1:.
+Install Golden Gate software
+Connect toggVM1using Bastion.Navigate toggVM1from Azure portal.Go toOverviewin the left panelSelectConnect>Bastionon the menu at the topSelect the Bastion tabSelectUse Bastion
+Connect toggVM1using Bastion.
+Navigate toggVM1from Azure portal.
+Go toOverviewin the left panel
+SelectConnect>Bastionon the menu at the top
+Select the Bastion tab
+SelectUse Bastion
+Move the .zip file to the/optfolder, then change the owner$ sudo su -
+$ mv /home/azureuser/*.zip /opt
+Move the .zip file to the/optfolder, then change the owner
+$ sudo su -
+$ mv /home/azureuser/*.zip /opt
+$ sudo su -
+$ mv /home/azureuser/*.zip /opt
+Unzip the files (install unzip utility if not already installed)$ yum install unzip
+$ cd /opt
+$ unzip 213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip
+Unzip the files (install unzip utility if not already installed)
+$ yum install unzip
+$ cd /opt
+$ unzip 213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip
+$ yum install unzip
+$ cd /opt
+$ unzip 213000_fbo_ggs_Linux_x64_Oracle_shiphome.zip
+Change permission$ chown -R oracle:oinstall /opt/fbo_ggs_Linux_x64_Oracle_shiphome
+$ exit
+Change permission
+$ chown -R oracle:oinstall /opt/fbo_ggs_Linux_x64_Oracle_shiphome
+$ exit
+$ chown -R oracle:oinstall /opt/fbo_ggs_Linux_x64_Oracle_shiphome
+$ exit
+Start Golden Gate installer$ sudo su - oracle
+$ export DISPLAY=10.0.0.4:0.0
+$ cd /opt/fbo_ggs_Linux_x64_Oracle_shiphome/Disk1
+$ ./runInstallerThe installer opens onggXServer.
+Start Golden Gate installer
+$ sudo su - oracle
+$ export DISPLAY=10.0.0.4:0.0
+$ cd /opt/fbo_ggs_Linux_x64_Oracle_shiphome/Disk1
+$ ./runInstaller
+$ sudo su - oracle
+$ export DISPLAY=10.0.0.4:0.0
+$ cd /opt/fbo_ggs_Linux_x64_Oracle_shiphome/Disk1
+$ ./runInstaller
+The installer opens onggXServer.
+Select 'Oracle GoldenGate for Oracle Database 21c'. Then selectNextto continue.
+Select 'Oracle GoldenGate for Oracle Database 21c'. Then selectNextto continue.
+
+Set the software location to/u01/app/oracle/product/19.0.0/oggcore_1, make sureStart Managerbox is selected and selectNextto continue.
+Set the software location to/u01/app/oracle/product/19.0.0/oggcore_1, make sureStart Managerbox is selected and selectNextto continue.
+
+On theSummaryscreen, selectInstallto continue.
+On theSummaryscreen, selectInstallto continue.
+
+Wait for installation to finish.
+Wait for installation to finish.
+
+SelectCloseto continue.
+SelectCloseto continue.
+
+Connect toggVM2using Bastion.Navigate toggVM2from Azure portal.Go toOverviewin the left paneSelectConnect>Bastionon the menu at the topSelect the Bastion tabSelectUse Bastion
+Connect toggVM2using Bastion.
+Navigate toggVM2from Azure portal.
+Go toOverviewin the left pane
+SelectConnect>Bastionon the menu at the top
+Select the Bastion tab
+SelectUse Bastion
+Repeat steps 2-10 above onggVM2
+Repeat steps 2-10 above onggVM2
+Set up service on ggVM1 (primary)
+Create or update the tnsnames.ora file.$ sudo su - oracle
+$ cd $ORACLE_HOME/network/admin
+$ vi tnsnames.oraWhen vi editor opens you have to pressito switch to insert mode, then copy and paste file contents and pressEsckey,:wq!to save file.cdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=cdb1)
+   )
+ )
+
+pdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=pdb1)
+   )
+ )
+Create or update the tnsnames.ora file.
+$ sudo su - oracle
+$ cd $ORACLE_HOME/network/admin
+$ vi tnsnames.ora
+$ sudo su - oracle
+$ cd $ORACLE_HOME/network/admin
+$ vi tnsnames.ora
+When vi editor opens you have to pressito switch to insert mode, then copy and paste file contents and pressEsckey,:wq!to save file.
+i
+Esc
+:wq!
+cdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=cdb1)
+   )
+ )
+
+pdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=pdb1)
+   )
+ )
+cdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=cdb1)
+   )
+ )
+
+pdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=pdb1)
+   )
+ )
+Create the Golden Gate owner and user accounts.NoteThe owner account must have C## prefix.$ sqlplus / as sysdbaSQL> CREATE USER C##GGADMIN identified by ggadmin;
+ SQL> EXEC dbms_goldengate_auth.grant_admin_privilege('C##GGADMIN',container=>'ALL');
+ SQL> GRANT DBA to C##GGADMIN container=all;
+ SQL> connect C##GGADMIN/ggadmin
+ SQL> ALTER SESSION SET CONTAINER=PDB1;
+ SQL> EXIT;
+Create the Golden Gate owner and user accounts.
+Note
+The owner account must have C## prefix.
+$ sqlplus / as sysdba
+$ sqlplus / as sysdba
+SQL> CREATE USER C##GGADMIN identified by ggadmin;
+ SQL> EXEC dbms_goldengate_auth.grant_admin_privilege('C##GGADMIN',container=>'ALL');
+ SQL> GRANT DBA to C##GGADMIN container=all;
+ SQL> connect C##GGADMIN/ggadmin
+ SQL> ALTER SESSION SET CONTAINER=PDB1;
+ SQL> EXIT;
+SQL> CREATE USER C##GGADMIN identified by ggadmin;
+ SQL> EXEC dbms_goldengate_auth.grant_admin_privilege('C##GGADMIN',container=>'ALL');
+ SQL> GRANT DBA to C##GGADMIN container=all;
+ SQL> connect C##GGADMIN/ggadmin
+ SQL> ALTER SESSION SET CONTAINER=PDB1;
+ SQL> EXIT;
+Create the Golden Gate test user account$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ sqlplus system/OraPasswd1@pdb1SQL> CREATE USER test identified by test DEFAULT TABLESPACE USERS TEMPORARY TABLESPACE TEMP;
+SQL> GRANT connect, resource, dba TO test;
+SQL> ALTER USER test QUOTA 100M on USERS;
+SQL> connect test/test@pdb1
+SQL> @demo_ora_create
+SQL> @demo_ora_insert
+SQL> EXIT;
+Create the Golden Gate test user account
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ sqlplus system/OraPasswd1@pdb1
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ sqlplus system/OraPasswd1@pdb1
+SQL> CREATE USER test identified by test DEFAULT TABLESPACE USERS TEMPORARY TABLESPACE TEMP;
+SQL> GRANT connect, resource, dba TO test;
+SQL> ALTER USER test QUOTA 100M on USERS;
+SQL> connect test/test@pdb1
+SQL> @demo_ora_create
+SQL> @demo_ora_insert
+SQL> EXIT;
+SQL> CREATE USER test identified by test DEFAULT TABLESPACE USERS TEMPORARY TABLESPACE TEMP;
+SQL> GRANT connect, resource, dba TO test;
+SQL> ALTER USER test QUOTA 100M on USERS;
+SQL> connect test/test@pdb1
+SQL> @demo_ora_create
+SQL> @demo_ora_insert
+SQL> EXIT;
+Configure the extract parameter file.Start the Golden gate command-line interface (ggsci):$ sudo su - oracle
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsciGGSCI> DBLOGIN USERID test@pdb1, PASSWORD test
+Successfully logged into database  pdb1
+GGSCI>  ADD SCHEMATRANDATA pdb1.test
+2017-05-23 15:44:25  INFO    OGG-01788  SCHEMATRANDATA has been added on schema test.
+2017-05-23 15:44:25  INFO    OGG-01976  SCHEMATRANDATA for scheduling columns has been added on schema test.
+
+GGSCI> EDIT PARAMS EXTORA
+Configure the extract parameter file.
+Start the Golden gate command-line interface (ggsci):
+$ sudo su - oracle
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsci
+$ sudo su - oracle
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsci
+GGSCI> DBLOGIN USERID test@pdb1, PASSWORD test
+Successfully logged into database  pdb1
+GGSCI>  ADD SCHEMATRANDATA pdb1.test
+2017-05-23 15:44:25  INFO    OGG-01788  SCHEMATRANDATA has been added on schema test.
+2017-05-23 15:44:25  INFO    OGG-01976  SCHEMATRANDATA for scheduling columns has been added on schema test.
+
+GGSCI> EDIT PARAMS EXTORA
+GGSCI> DBLOGIN USERID test@pdb1, PASSWORD test
+Successfully logged into database  pdb1
+GGSCI>  ADD SCHEMATRANDATA pdb1.test
+2017-05-23 15:44:25  INFO    OGG-01788  SCHEMATRANDATA has been added on schema test.
+2017-05-23 15:44:25  INFO    OGG-01976  SCHEMATRANDATA for scheduling columns has been added on schema test.
+
+GGSCI> EDIT PARAMS EXTORA
+Pressikey to switch to insert mode and copy and paste (right click on the SSH window) following to the EXTRACT parameter file. Press Esc key,:wq!to save file.EXTRACT EXTORA
+USERID C##GGADMIN@cdb1, PASSWORD ggadmin
+RMTHOST 10.0.0.5, MGRPORT 7809
+RMTTRAIL ./dirdat/rt
+DDL INCLUDE MAPPED
+DDLOPTIONS REPORT
+LOGALLSUPCOLS
+UPDATERECORDFORMAT COMPACT
+TABLE pdb1.test.TCUSTMER;
+TABLE pdb1.test.TCUSTORD;
+Pressikey to switch to insert mode and copy and paste (right click on the SSH window) following to the EXTRACT parameter file. Press Esc key,:wq!to save file.
+i
+:wq!
+EXTRACT EXTORA
+USERID C##GGADMIN@cdb1, PASSWORD ggadmin
+RMTHOST 10.0.0.5, MGRPORT 7809
+RMTTRAIL ./dirdat/rt
+DDL INCLUDE MAPPED
+DDLOPTIONS REPORT
+LOGALLSUPCOLS
+UPDATERECORDFORMAT COMPACT
+TABLE pdb1.test.TCUSTMER;
+TABLE pdb1.test.TCUSTORD;
+EXTRACT EXTORA
+USERID C##GGADMIN@cdb1, PASSWORD ggadmin
+RMTHOST 10.0.0.5, MGRPORT 7809
+RMTTRAIL ./dirdat/rt
+DDL INCLUDE MAPPED
+DDLOPTIONS REPORT
+LOGALLSUPCOLS
+UPDATERECORDFORMAT COMPACT
+TABLE pdb1.test.TCUSTMER;
+TABLE pdb1.test.TCUSTORD;
+Register extract--integrated extract.GGSCI> dblogin userid C##GGADMIN@cdb1, password ggadmin
+Successfully logged into database CDB$ROOT.
+
+GGSCI> REGISTER EXTRACT EXTORA DATABASE CONTAINER(pdb1)
+
+2023-03-03 19:37:01  INFO    OGG-02003  Extract group EXTORA successfully registered with database at SCN 2142014.
+
+GGSCI> exit
+Register extract--integrated extract.
+GGSCI> dblogin userid C##GGADMIN@cdb1, password ggadmin
+Successfully logged into database CDB$ROOT.
+
+GGSCI> REGISTER EXTRACT EXTORA DATABASE CONTAINER(pdb1)
+
+2023-03-03 19:37:01  INFO    OGG-02003  Extract group EXTORA successfully registered with database at SCN 2142014.
+
+GGSCI> exit
+GGSCI> dblogin userid C##GGADMIN@cdb1, password ggadmin
+Successfully logged into database CDB$ROOT.
+
+GGSCI> REGISTER EXTRACT EXTORA DATABASE CONTAINER(pdb1)
+
+2023-03-03 19:37:01  INFO    OGG-02003  Extract group EXTORA successfully registered with database at SCN 2142014.
+
+GGSCI> exit
+Set up extract checkpoints and start real-time extract$ ./ggsciGGSCI>  ADD EXTRACT EXTORA, INTEGRATED TRANLOG, BEGIN NOW
+EXTRACT (Integrated) added.
+
+GGSCI>  ADD RMTTRAIL ./dirdat/rt, EXTRACT EXTORA, MEGABYTES 10
+RMTTRAIL added.
+
+GGSCI>  START EXTRACT EXTORA
+
+Sending START request to MANAGER ...
+EXTRACT EXTORA starting
+
+GGSCI > INFO ALL
+
+Program     Status      Group       Lag at Chkpt  Time Since Chkpt
+
+MANAGER     RUNNING
+EXTRACT     RUNNING     EXTORA      00:00:11      00:00:04
+
+GGSCI > EXITIn this step, you find the starting SCN, which is used later, in a different section.$ sqlplus / as sysdbaSQL> alter session set container = pdb1;
+SQL> SELECT current_scn from v$database;
+CURRENT_SCN
+-----------
+   2172191
+SQL> EXIT;$ ./ggsci
+GGSCI> EDIT PARAMS INITEXTWhen vi editor opens you have to pressito switch to insert mode, then copy and paste file contents and pressEsckey,:wq!to save file.EXTRACT INITEXT
+USERID C##GGADMIN@cdb1, PASSWORD ggadmin
+RMTHOST 10.0.0.6, MGRPORT 7809
+RMTTASK REPLICAT, GROUP INITREP
+TABLE pdb1.test.*, SQLPREDICATE 'AS OF SCN 2172191';GGSCI> ADD EXTRACT INITEXT, SOURCEISTABLE
+Extract added.
+GGSCI> EXIT
+Set up extract checkpoints and start real-time extract
+$ ./ggsci
+$ ./ggsci
+GGSCI>  ADD EXTRACT EXTORA, INTEGRATED TRANLOG, BEGIN NOW
+EXTRACT (Integrated) added.
+
+GGSCI>  ADD RMTTRAIL ./dirdat/rt, EXTRACT EXTORA, MEGABYTES 10
+RMTTRAIL added.
+
+GGSCI>  START EXTRACT EXTORA
+
+Sending START request to MANAGER ...
+EXTRACT EXTORA starting
+
+GGSCI > INFO ALL
+
+Program     Status      Group       Lag at Chkpt  Time Since Chkpt
+
+MANAGER     RUNNING
+EXTRACT     RUNNING     EXTORA      00:00:11      00:00:04
+
+GGSCI > EXIT
+GGSCI>  ADD EXTRACT EXTORA, INTEGRATED TRANLOG, BEGIN NOW
+EXTRACT (Integrated) added.
+
+GGSCI>  ADD RMTTRAIL ./dirdat/rt, EXTRACT EXTORA, MEGABYTES 10
+RMTTRAIL added.
+
+GGSCI>  START EXTRACT EXTORA
+
+Sending START request to MANAGER ...
+EXTRACT EXTORA starting
+
+GGSCI > INFO ALL
+
+Program     Status      Group       Lag at Chkpt  Time Since Chkpt
+
+MANAGER     RUNNING
+EXTRACT     RUNNING     EXTORA      00:00:11      00:00:04
+
+GGSCI > EXIT
+In this step, you find the starting SCN, which is used later, in a different section.
+$ sqlplus / as sysdba
+$ sqlplus / as sysdba
+SQL> alter session set container = pdb1;
+SQL> SELECT current_scn from v$database;
+CURRENT_SCN
+-----------
+   2172191
+SQL> EXIT;
+SQL> alter session set container = pdb1;
+SQL> SELECT current_scn from v$database;
+CURRENT_SCN
+-----------
+   2172191
+SQL> EXIT;
+$ ./ggsci
+GGSCI> EDIT PARAMS INITEXT
+$ ./ggsci
+GGSCI> EDIT PARAMS INITEXT
+When vi editor opens you have to pressito switch to insert mode, then copy and paste file contents and pressEsckey,:wq!to save file.
+i
+Esc
+:wq!
+EXTRACT INITEXT
+USERID C##GGADMIN@cdb1, PASSWORD ggadmin
+RMTHOST 10.0.0.6, MGRPORT 7809
+RMTTASK REPLICAT, GROUP INITREP
+TABLE pdb1.test.*, SQLPREDICATE 'AS OF SCN 2172191';
+EXTRACT INITEXT
+USERID C##GGADMIN@cdb1, PASSWORD ggadmin
+RMTHOST 10.0.0.6, MGRPORT 7809
+RMTTASK REPLICAT, GROUP INITREP
+TABLE pdb1.test.*, SQLPREDICATE 'AS OF SCN 2172191';
+GGSCI> ADD EXTRACT INITEXT, SOURCEISTABLE
+Extract added.
+GGSCI> EXIT
+GGSCI> ADD EXTRACT INITEXT, SOURCEISTABLE
+Extract added.
+GGSCI> EXIT
+Set up service on ggVM2 (replicate)
+Create or update the tnsnames.ora file.$ cd $ORACLE_HOME/network/admin
+$ vi tnsnames.oraWhen vi editor opens you have to pressito switch to insert mode, then copy and paste file contents and pressEsckey,:wq!to save file.cdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=cdb1)
+   )
+ )
+
+pdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=pdb1)
+   )
+ )
+Create or update the tnsnames.ora file.
+$ cd $ORACLE_HOME/network/admin
+$ vi tnsnames.ora
+$ cd $ORACLE_HOME/network/admin
+$ vi tnsnames.ora
+When vi editor opens you have to pressito switch to insert mode, then copy and paste file contents and pressEsckey,:wq!to save file.
+i
+Esc
+:wq!
+cdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=cdb1)
+   )
+ )
+
+pdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=pdb1)
+   )
+ )
+cdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=cdb1)
+   )
+ )
+
+pdb1=
+ (DESCRIPTION=
+   (ADDRESS=
+     (PROTOCOL=TCP)
+     (HOST=localhost)
+     (PORT=1521)
+   )
+   (CONNECT_DATA=
+     (SERVER=dedicated)
+     (SERVICE_NAME=pdb1)
+   )
+ )
+Create a replicate account.$ sqlplus / as sysdbaSQL> ALTER SYSTEM set enable_goldengate_replication=true;
+SQL> ALTER SESSION SET CONTAINER = pdb1;
+SQL> CREATE USER REPUSER IDENTIFIED BY REP_PASS CONTAINER=CURRENT;
+SQL> GRANT DBA TO REPUSER;
+SQL> EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('REPUSER',CONTAINER=>'PDB1');
+SQL> CONNECT REPUSER/REP_PASS@PDB1
+SQL> EXIT;
+Create a replicate account.
+$ sqlplus / as sysdba
+$ sqlplus / as sysdba
+SQL> ALTER SYSTEM set enable_goldengate_replication=true;
+SQL> ALTER SESSION SET CONTAINER = pdb1;
+SQL> CREATE USER REPUSER IDENTIFIED BY REP_PASS CONTAINER=CURRENT;
+SQL> GRANT DBA TO REPUSER;
+SQL> EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('REPUSER',CONTAINER=>'PDB1');
+SQL> CONNECT REPUSER/REP_PASS@PDB1
+SQL> EXIT;
+SQL> ALTER SYSTEM set enable_goldengate_replication=true;
+SQL> ALTER SESSION SET CONTAINER = pdb1;
+SQL> CREATE USER REPUSER IDENTIFIED BY REP_PASS CONTAINER=CURRENT;
+SQL> GRANT DBA TO REPUSER;
+SQL> EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE('REPUSER',CONTAINER=>'PDB1');
+SQL> CONNECT REPUSER/REP_PASS@PDB1
+SQL> EXIT;
+Create a Golden Gate test user account.$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ sqlplus system/OraPasswd1@pdb1SQL> CREATE USER test identified by test DEFAULT TABLESPACE USERS TEMPORARY TABLESPACE TEMP;
+SQL> GRANT connect, resource, dba TO test;
+SQL> ALTER USER test QUOTA 100M on USERS;
+SQL> CONNECT test/test@pdb1
+SQL> @demo_ora_create
+SQL> EXIT;
+Create a Golden Gate test user account.
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ sqlplus system/OraPasswd1@pdb1
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ sqlplus system/OraPasswd1@pdb1
+SQL> CREATE USER test identified by test DEFAULT TABLESPACE USERS TEMPORARY TABLESPACE TEMP;
+SQL> GRANT connect, resource, dba TO test;
+SQL> ALTER USER test QUOTA 100M on USERS;
+SQL> CONNECT test/test@pdb1
+SQL> @demo_ora_create
+SQL> EXIT;
+SQL> CREATE USER test identified by test DEFAULT TABLESPACE USERS TEMPORARY TABLESPACE TEMP;
+SQL> GRANT connect, resource, dba TO test;
+SQL> ALTER USER test QUOTA 100M on USERS;
+SQL> CONNECT test/test@pdb1
+SQL> @demo_ora_create
+SQL> EXIT;
+REPLICAT parameter file to replicate changes.$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsciGGSCI> EDIT PARAMS REPORAWhen vi editor opens you have to pressito switch to insert mode, then copy and paste file contents and pressEsckey,:wq!to save file.REPLICAT REPORA
+ASSUMETARGETDEFS
+DISCARDFILE ./dirrpt/repora.dsc, PURGE, MEGABYTES 100
+DDL INCLUDE MAPPED
+DDLOPTIONS REPORT
+DBOPTIONS INTEGRATEDPARAMS(parallelism 6)
+USERID repuser@pdb1, PASSWORD REP_PASS
+MAP pdb1.test.*, TARGET pdb1.test.*;
+REPLICAT parameter file to replicate changes.
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsci
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsci
+GGSCI> EDIT PARAMS REPORA
+GGSCI> EDIT PARAMS REPORA
+When vi editor opens you have to pressito switch to insert mode, then copy and paste file contents and pressEsckey,:wq!to save file.
+i
+Esc
+:wq!
+REPLICAT REPORA
+ASSUMETARGETDEFS
+DISCARDFILE ./dirrpt/repora.dsc, PURGE, MEGABYTES 100
+DDL INCLUDE MAPPED
+DDLOPTIONS REPORT
+DBOPTIONS INTEGRATEDPARAMS(parallelism 6)
+USERID repuser@pdb1, PASSWORD REP_PASS
+MAP pdb1.test.*, TARGET pdb1.test.*;
+REPLICAT REPORA
+ASSUMETARGETDEFS
+DISCARDFILE ./dirrpt/repora.dsc, PURGE, MEGABYTES 100
+DDL INCLUDE MAPPED
+DDLOPTIONS REPORT
+DBOPTIONS INTEGRATEDPARAMS(parallelism 6)
+USERID repuser@pdb1, PASSWORD REP_PASS
+MAP pdb1.test.*, TARGET pdb1.test.*;
+Set up a replicate checkpoint.GGSCI> ADD REPLICAT REPORA, INTEGRATED, EXTTRAIL ./dirdat/rt
+GGSCI> EDIT PARAMS INITREPWhen vi editor opens you have to pressito switch to insert mode, then copy and paste file contents and pressEsckey,:wq!to save file.REPLICAT INITREP
+ASSUMETARGETDEFS
+DISCARDFILE ./dirrpt/tcustmer.dsc, APPEND
+USERID repuser@pdb1, PASSWORD REP_PASS
+MAP pdb1.test.*, TARGET pdb1.test.*;GGSCI> ADD REPLICAT INITREP, SPECIALRUN
+GGSCI> EXIT
+Set up a replicate checkpoint.
+GGSCI> ADD REPLICAT REPORA, INTEGRATED, EXTTRAIL ./dirdat/rt
+GGSCI> EDIT PARAMS INITREP
+GGSCI> ADD REPLICAT REPORA, INTEGRATED, EXTTRAIL ./dirdat/rt
+GGSCI> EDIT PARAMS INITREP
+When vi editor opens you have to pressito switch to insert mode, then copy and paste file contents and pressEsckey,:wq!to save file.
+i
+Esc
+:wq!
+REPLICAT INITREP
+ASSUMETARGETDEFS
+DISCARDFILE ./dirrpt/tcustmer.dsc, APPEND
+USERID repuser@pdb1, PASSWORD REP_PASS
+MAP pdb1.test.*, TARGET pdb1.test.*;
+REPLICAT INITREP
+ASSUMETARGETDEFS
+DISCARDFILE ./dirrpt/tcustmer.dsc, APPEND
+USERID repuser@pdb1, PASSWORD REP_PASS
+MAP pdb1.test.*, TARGET pdb1.test.*;
+GGSCI> ADD REPLICAT INITREP, SPECIALRUN
+GGSCI> EXIT
+GGSCI> ADD REPLICAT INITREP, SPECIALRUN
+GGSCI> EXIT
+Set up replication (ggVM1 and ggVM2)
+Sign in toggsci.
+ggsci
+$ cd /u01/app/oracle/product/12.1.0/oggcore_1
+$ ./ggsci
+$ cd /u01/app/oracle/product/12.1.0/oggcore_1
+$ ./ggsci
+GGSCI> EDIT PARAMS MGR
+GGSCI> EDIT PARAMS MGR
+Update the file with the following.
+PORT 7809
+ACCESSRULE, PROG *, IPADDR *, ALLOW
+PORT 7809
+ACCESSRULE, PROG *, IPADDR *, ALLOW
+Restart the Manager service.
+GGSCI> STOP MGR
+GGSCI> START MGR
+GGSCI> EXIT
+GGSCI> STOP MGR
+GGSCI> START MGR
+GGSCI> EXIT
+Start the initial load and check for errors.
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsci
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsci
+GGSCI> START EXTRACT INITEXT
+GGSCI> VIEW REPORT INITEXT
+GGSCI> START EXTRACT INITEXT
+GGSCI> VIEW REPORT INITEXT
+Change the SCN number with the number you obtained before.
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsci
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsci
+START REPLICAT REPORA, AFTERCSN 2172191
+START REPLICAT REPORA, AFTERCSN 2172191
+The replication started, you can test it by inserting new records to TEST tables.
+View job status and troubleshooting
+To view reports onggVM1, run the following commands.GGSCI> VIEW REPORT EXTORA
+To view reports onggVM1, run the following commands.
+GGSCI> VIEW REPORT EXTORA
+GGSCI> VIEW REPORT EXTORA
+To view reports onggVM2, run the following commands.GGSCI> VIEW REPORT REPORA
+To view reports onggVM2, run the following commands.
+GGSCI> VIEW REPORT REPORA
+GGSCI> VIEW REPORT REPORA
+To view status and history onggVM1, run the following commands.GGSCI> DBLOGIN USERID C##GGADMIN@CDB1, PASSWORD ggadmin
+GGSCI> INFO EXTRACT EXTORA, DETAIL
+To view status and history onggVM1, run the following commands.
+GGSCI> DBLOGIN USERID C##GGADMIN@CDB1, PASSWORD ggadmin
+GGSCI> INFO EXTRACT EXTORA, DETAIL
+GGSCI> DBLOGIN USERID C##GGADMIN@CDB1, PASSWORD ggadmin
+GGSCI> INFO EXTRACT EXTORA, DETAIL
+To view status and history onggVM2, run the following commands.GGSCI> DBLOGIN USERID REPUSER@PDB1 PASSWORD REP_PASS
+GGSCI> INFO REP REPORA, DETAIL$ sqlplus test/test@pdb1SQL> select * from TCUSTMER;
+SQL> select * from TCUSTORD;
+To view status and history onggVM2, run the following commands.
+GGSCI> DBLOGIN USERID REPUSER@PDB1 PASSWORD REP_PASS
+GGSCI> INFO REP REPORA, DETAIL
+GGSCI> DBLOGIN USERID REPUSER@PDB1 PASSWORD REP_PASS
+GGSCI> INFO REP REPORA, DETAIL
+$ sqlplus test/test@pdb1
+$ sqlplus test/test@pdb1
+SQL> select * from TCUSTMER;
+SQL> select * from TCUSTORD;
+SQL> select * from TCUSTMER;
+SQL> select * from TCUSTORD;
+Connect to primary database onggVM1$ sqlplus test/test@pdb1
+Connect to primary database onggVM1
+$ sqlplus test/test@pdb1
+$ sqlplus test/test@pdb1
+Select existing records from tableSQL> select * from TCUSTORD;
+Select existing records from table
+SQL> select * from TCUSTORD;
+SQL> select * from TCUSTORD;
+Create a test recordSQL> INSERT INTO TCUSTORD VALUES ('OLLJ',TO_DATE('11-APR-99'),'CYCLE',400,16000,1,102);
+SQL> COMMIT;
+SQL> EXIT;
+Create a test record
+SQL> INSERT INTO TCUSTORD VALUES ('OLLJ',TO_DATE('11-APR-99'),'CYCLE',400,16000,1,102);
+SQL> COMMIT;
+SQL> EXIT;
+SQL> INSERT INTO TCUSTORD VALUES ('OLLJ',TO_DATE('11-APR-99'),'CYCLE',400,16000,1,102);
+SQL> COMMIT;
+SQL> EXIT;
+Observe transaction picked up by Golden Gate (NoteTotal insertsvalue)
+Observe transaction picked up by Golden Gate (NoteTotal insertsvalue)
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsci
+$ cd /u01/app/oracle/product/19.0.0/oggcore_1
+$ ./ggsci
+GGSCI> STATS EXTORA
+GGSCI> STATS EXTORA
+Sending STATS request to Extract group EXTORA ...
+
+  Start of statistics at 2023-03-24 19:41:54.
+
+  DDL replication statistics (for all trails):
+
+  *** Total statistics since extract started     ***
+  Operations                           0.00
+  Mapped operations                    0.00
+  Unmapped operations                    0.00
+  Other operations                    0.00
+  Excluded operations                    0.00
+
+  Output to ./dirdat/rt:
+
+  Extracting from PDB1.TEST.TCUSTORD to PDB1.TEST.TCUSTORD:
+
+  *** Total statistics since 2023-03-24 19:41:34 ***
+     Total inserts                              1.00
+     Total updates                              0.00
+     Total deletes                              0.00
+     Total upserts                              0.00
+     Total discards                             0.00
+     Total operations                           1.00
+
+  *** Daily statistics since 2023-03-24 19:41:34 ***
+     Total inserts                              1.00
+     Total updates                              0.00
+     Total deletes                              0.00
+     Total upserts                              0.00
+     Total discards                             0.00
+     Total operations                           1.00
+
+  *** Hourly statistics since 2023-03-24 19:41:34 ***
+     Total inserts                              1.00
+     Total updates                              0.00
+     Total deletes                              0.00
+     Total upserts                              0.00
+     Total discards                             0.00
+     Total operations                           1.00
+
+  *** Latest statistics since 2023-03-24 19:41:34 ***
+     Total inserts                              1.00
+     Total updates                              0.00
+     Total deletes                              0.00
+     Total upserts                              0.00
+     Total discards                             0.00
+     Total operations                           1.00
+
+  End of statistics.
+Sending STATS request to Extract group EXTORA ...
+
+  Start of statistics at 2023-03-24 19:41:54.
+
+  DDL replication statistics (for all trails):
+
+  *** Total statistics since extract started     ***
+  Operations                           0.00
+  Mapped operations                    0.00
+  Unmapped operations                    0.00
+  Other operations                    0.00
+  Excluded operations                    0.00
+
+  Output to ./dirdat/rt:
+
+  Extracting from PDB1.TEST.TCUSTORD to PDB1.TEST.TCUSTORD:
+
+  *** Total statistics since 2023-03-24 19:41:34 ***
+     Total inserts                              1.00
+     Total updates                              0.00
+     Total deletes                              0.00
+     Total upserts                              0.00
+     Total discards                             0.00
+     Total operations                           1.00
+
+  *** Daily statistics since 2023-03-24 19:41:34 ***
+     Total inserts                              1.00
+     Total updates                              0.00
+     Total deletes                              0.00
+     Total upserts                              0.00
+     Total discards                             0.00
+     Total operations                           1.00
+
+  *** Hourly statistics since 2023-03-24 19:41:34 ***
+     Total inserts                              1.00
+     Total updates                              0.00
+     Total deletes                              0.00
+     Total upserts                              0.00
+     Total discards                             0.00
+     Total operations                           1.00
+
+  *** Latest statistics since 2023-03-24 19:41:34 ***
+     Total inserts                              1.00
+     Total updates                              0.00
+     Total deletes                              0.00
+     Total upserts                              0.00
+     Total discards                             0.00
+     Total operations                           1.00
+
+  End of statistics.
+Connect to primary database onggVM2$ sqlplus test/test@pdb1
+Connect to primary database onggVM2
+$ sqlplus test/test@pdb1
+$ sqlplus test/test@pdb1
+Verify new record is replicatedSQL> select * from TCUSTORD;CUST ORDER_DAT PRODUCT_   ORDER_ID PRODUCT_PRICE PRODUCT_AMOUNT TRANSACTION_ID
+ ---- --------- -------- ---------- ------------- -------------- --------------
+ OLLJ 11-APR-99 CYCLE       400   16000      1    102
+ WILL 30-SEP-94 CAR       144   17520      3    100
+ JANE 11-NOV-95 PLANE       256  133300      1    100
+Verify new record is replicated
+SQL> select * from TCUSTORD;
+SQL> select * from TCUSTORD;
+CUST ORDER_DAT PRODUCT_   ORDER_ID PRODUCT_PRICE PRODUCT_AMOUNT TRANSACTION_ID
+ ---- --------- -------- ---------- ------------- -------------- --------------
+ OLLJ 11-APR-99 CYCLE       400   16000      1    102
+ WILL 30-SEP-94 CAR       144   17520      3    100
+ JANE 11-NOV-95 PLANE       256  133300      1    100
+CUST ORDER_DAT PRODUCT_   ORDER_ID PRODUCT_PRICE PRODUCT_AMOUNT TRANSACTION_ID
+ ---- --------- -------- ---------- ------------- -------------- --------------
+ OLLJ 11-APR-99 CYCLE       400   16000      1    102
+ WILL 30-SEP-94 CAR       144   17520      3    100
+ JANE 11-NOV-95 PLANE       256  133300      1    100
+The installation and configuration of Golden Gate on Oracle linux is now complete.
+Delete the ggXServer VM
+ggXServer VM is only used during setup. You can safely delete it after completing this lab document but keep your GoldenGate on Azure lab setup intact.
+$ az vm delete --resource-group GoldenGateOnAzureLab --name ggXServer --force-deletion yes
+
+$ az network public-ip delete --resource-group GoldenGateOnAzureLab --name ggXServerPublicIP
+$ az vm delete --resource-group GoldenGateOnAzureLab --name ggXServer --force-deletion yes
+
+$ az network public-ip delete --resource-group GoldenGateOnAzureLab --name ggXServerPublicIP
+Delete Golden Gate On Azure Lab Setup
+When it's no longer needed, the following command can be used to remove the resource group, VM, and all related resources for this lab.
+$ az group delete --name GoldenGateOnAzureLab
+$ az group delete --name GoldenGateOnAzureLab
+Next steps
+Create highly available virtual machines tutorial
+Explore VM deployment CLI samples
+Feedback
+Was this page helpful?
+Additional resources

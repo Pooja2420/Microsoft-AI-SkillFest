@@ -1,0 +1,110 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Move resources to new region - Azure SQL Database
+Article
+2024-04-30
+15 contributors
+In this article
+Applies to:Azure SQL Database
+Azure SQL Database
+Azure SQL Managed Instance
+SQL Server on Azure VMs
+This article teaches you a generic workflow for how to move your database or elastic pool to a new region.
+Note
+To move databases and elastic pools to a different Azure region, you can also use the recommendedAzure Resource Mover.
+This article applies to migrations within the Azure public cloud or within the same sovereign cloud.
+Overview
+There are various scenarios in which you'd want to move your existing database or pool from one region to another. For example, you're expanding your business to a new region and want to optimize it for the new customer base. Or you need to move the operations to a different region for compliance reasons. Or Azure released a new region that provides a better proximity and improves the customer experience.
+The general workflow to move resources to a different region consists of the following steps:
+Verify the prerequisites for the move.
+Prepare to move the resources in scope.
+Monitor the preparation process.
+Test the move process.
+Initiate the actual move.
+Verify prerequisites to move database
+Create a target server for each source server.
+Configure the firewall with the right exceptions by usingPowerShell.
+Configure both servers with the correct logins. If you're not the subscription administrator or SQL server administrator, work with the administrator to assign the permissions that you need. For more information, seeHow to manage Azure SQL Database security after disaster recovery.
+If your databases are encrypted with transparent data encryption (TDE) and bring your own encryption key (BYOK or Customer-Managed Key) in Azure Key Vault, ensure that the correct encryption material is provisioned in the target regions.The simplest way to do this is to add the encryption key from the existing key vault (that is being used as TDE Protector on source server) to the target server and then set the key as the TDE Protector on the target server since a server in one region can now be connected to a key vault in any other region.As a best practice to ensure the target server has access to older encryption keys (required for restoring database backups), run theGet-AzSqlServerKeyVaultKeycmdlet on the source server to return the list of available keys and add those keys to the target server.For more information and best practices on configuring customer-managed TDE on the target server, seeAzure SQL transparent data encryption with customer-managed keys in Azure Key Vault.To move the key vault to the new region, seeMove an Azure key vault across regions.
+The simplest way to do this is to add the encryption key from the existing key vault (that is being used as TDE Protector on source server) to the target server and then set the key as the TDE Protector on the target server since a server in one region can now be connected to a key vault in any other region.
+As a best practice to ensure the target server has access to older encryption keys (required for restoring database backups), run theGet-AzSqlServerKeyVaultKeycmdlet on the source server to return the list of available keys and add those keys to the target server.
+For more information and best practices on configuring customer-managed TDE on the target server, seeAzure SQL transparent data encryption with customer-managed keys in Azure Key Vault.
+To move the key vault to the new region, seeMove an Azure key vault across regions.
+If database-level audit is enabled, disable it and enable server-level auditing instead. After failover, database-level auditing requires cross-region traffic, which isn't desired or possible after the move.
+For server-level audits, ensure that:The storage container, Log Analytics, or event hub with the existing audit logs is moved to the target region.Auditing is configured on the target server. For more information, seeGet started with SQL Database auditing.
+The storage container, Log Analytics, or event hub with the existing audit logs is moved to the target region.
+Auditing is configured on the target server. For more information, seeGet started with SQL Database auditing.
+If your server has a long-term retention policy (LTR), the existing LTR backups remain associated with the current server. Because the target server is different, you are able to access the older LTR backups in the source region by using the source server, even if the server is deleted.
+Note
+Migrating databases with existing LTR backups between sovereign and public regions is unsupported since this requires moving LTR backups to the target server, which is not currently possible.
+Prepare resources
+Create afailover groupbetween the server of the source and the server of the target.
+Add the databases you want to move to the failover group. Replication of all added databases is initiated automatically. For more information, seeUsing failover groups with SQL Database.
+Monitor the preparation process
+You can periodically callGet-AzSqlDatabaseFailoverGroupto monitor replication of your databases from the source to the target server. The output object ofGet-AzSqlDatabaseFailoverGroupincludes a property for theReplicationState:
+Get-AzSqlDatabaseFailoverGroup
+ReplicationState = 2(CATCH_UP) indicates the database is synchronized and can be safely failed over.
+ReplicationState = 0(SEEDING) indicates that the database isn't yet seeded, and an attempt to fail over will fail.
+Test synchronization
+AfterReplicationStateis2, connect to each database or subset of databases using the secondary endpoint<fog-name>.secondary.database.windows.netand perform any query against the databases to ensure connectivity, proper security configuration, and data replication.
+2
+<fog-name>.secondary.database.windows.net
+Initiate the move
+Connect to the target server using the secondary endpoint<fog-name>.secondary.database.windows.net.
+<fog-name>.secondary.database.windows.net
+UseSwitch-AzSqlDatabaseFailoverGroupto switch the secondary server to be the primary with full synchronization. This operation succeeds or it rolls back.
+Verify that the command has completed successfully by usingnslookup <fog-name>.secondary.database.windows.netto ascertain that the DNS CNAME entry points to the target region IP address. If the switch command fails, the CNAME won't be updated.
+nslookup <fog-name>.secondary.database.windows.net
+Remove the source databases
+Once the move completes, remove the resources in the source region to avoid unnecessary charges.
+Delete the failover group usingRemove-AzSqlDatabaseFailoverGroup.
+Delete each source database usingRemove-AzSqlDatabasefor each of the databases on the source server. This automatically terminates geo-replication links.
+Delete the source server usingRemove-AzSqlServer.
+Remove the key vault, audit storage containers, event hub, Microsoft Entra tenant, and other dependent resources to stop being billed for them.
+Verify prerequisites to move pool
+Create a target server for each source server.
+Configure the firewall with the right exceptions usingPowerShell.
+Configure the servers with the correct logins. If you're not the subscription administrator or server administrator, work with the administrator to assign the permissions that you need. For more information, seeHow to manage Azure SQL Database security after disaster recovery.
+If your databases are encrypted with transparent data encryption and use your own encryption key in Azure Key Vault, ensure that the correct encryption material is provisioned in the target region.
+Create a target elastic pool for each source elastic pool, making sure the pool is created in the same service tier, with the same name and the same size.
+If a database-level audit is enabled, disable it and enable server-level auditing instead. After failover, database-level auditing will require cross-region traffic, which isn't desired, or possible after the move.
+For server-level audits, ensure that:The storage container, Log Analytics, or event hub with the existing audit logs is moved to the target region.Audit configuration is configured at the target server. For more information, seeSQL Database auditing.
+The storage container, Log Analytics, or event hub with the existing audit logs is moved to the target region.
+Audit configuration is configured at the target server. For more information, seeSQL Database auditing.
+If your server has a long-term retention policy (LTR), the existing LTR backups remain associated with the current server. Because the target server is different, you are able to access the older LTR backups in the source region using the source server, even if the server is deleted.
+Note
+Migrating databases with existing LTR backups between sovereign and public regions is unsupported since this requires moving LTR backups to the target server, which is not currently possible.
+Prepare to move
+Create a separatefailover groupbetween each elastic pool on the source server and its counterpart elastic pool on the target server.
+Create a separatefailover groupbetween each elastic pool on the source server and its counterpart elastic pool on the target server.
+Add all the databases in the pool to the failover group. Replication of the added databases is initiated automatically. For more information, seeUsing failover groups with SQL Database.NoteWhile it is possible to create a failover group that includes multiple elastic pools, we strongly recommend that you create a separate failover group for each pool. If you have a large number of databases across multiple elastic pools that you need to move, you can run the preparation steps in parallel and then initiate the move step in parallel. This process scales better and takes less time compared to having multiple elastic pools in the same failover group.
+Add all the databases in the pool to the failover group. Replication of the added databases is initiated automatically. For more information, seeUsing failover groups with SQL Database.
+Note
+While it is possible to create a failover group that includes multiple elastic pools, we strongly recommend that you create a separate failover group for each pool. If you have a large number of databases across multiple elastic pools that you need to move, you can run the preparation steps in parallel and then initiate the move step in parallel. This process scales better and takes less time compared to having multiple elastic pools in the same failover group.
+Monitor the preparation process
+You can periodically callGet-AzSqlDatabaseFailoverGroupto monitor replication of your databases from the source to the target. The output object ofGet-AzSqlDatabaseFailoverGroupincludes a property for theReplicationState:
+Get-AzSqlDatabaseFailoverGroup
+ReplicationState = 2(CATCH_UP) indicates the database is synchronized and can be safely failed over.
+ReplicationState = 0(SEEDING) indicates that the database isn't yet seeded, and an attempt to fail over will fail.
+Test synchronization
+OnceReplicationStateis2, connect to each database or subset of databases using the secondary endpoint<fog-name>.secondary.database.windows.netand perform any query against the databases to ensure connectivity, proper security configuration, and data replication.
+2
+<fog-name>.secondary.database.windows.net
+Initiate the move
+Connect to the target server using the secondary endpoint<fog-name>.secondary.database.windows.net.
+<fog-name>.secondary.database.windows.net
+UseSwitch-AzSqlDatabaseFailoverGroupto switch the secondary server to be the primary with full synchronization. This operation either succeeds, or it rolls back.
+Verify that the command has completed successfully by usingnslookup <fog-name>.secondary.database.windows.netto ascertain that the DNS CNAME entry points to the target region IP address. If the switch command fails, the CNAME isn't updated.
+nslookup <fog-name>.secondary.database.windows.net
+Remove the source elastic pools
+Once the move completes, remove the resources in the source region to avoid unnecessary charges.
+Delete the failover group usingRemove-AzSqlDatabaseFailoverGroup.
+Delete each source elastic pool on the source server usingRemove-AzSqlElasticPool.
+Delete the source server usingRemove-AzSqlServer.
+Remove the key vault, audit storage containers, event hub, Microsoft Entra tenant, and other dependent resources to stop being billed for them.
+Next steps
+Manageyour database after it has been migrated.
+Feedback
+Was this page helpful?
+Additional resources

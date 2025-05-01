@@ -1,0 +1,56 @@
+Integrate Event Hubs with serverless functions on Azure
+Solutions that use Azure Event Hubs together with Azure Functions benefit from aserverlessarchitecture that is scalable, cost-effective, and capable of processing large volumes of data in near real time. As much as these services work seamlessly together, there are many features, settings, and intricacies that add complexity to their relationship. This article provides guidance on how to effectively take advantage of this integration by highlighting key considerations and techniques for performance, resiliency, security, observability, and scale.
+Event Hubs core concepts
+Azure Event Hubsis a highly scalable event processing service that can receive millions of events per second. Before diving into the patterns and best practices for Azure Functions integration, it's best to understand the fundamental components of Event Hubs.
+The following diagram shows the Event Hubs stream processing architecture:
+
+Events
+An event is a notification or state change that is represented as a fact that happened in the past. Events are immutable and persisted in anevent hub, also referred to as atopicinKafka. An event hub is comprised of one or morepartitions.
+Partitions
+When a partition isn't specified by the sender, received events are distributed across partitions in the event hub. Each event is written in exactly one partition and isn't multi-cast across partitions. Each partition works as a log where records are written in an append-only pattern. The analogy of acommit logis frequently used to describe the nature of how events are added to the end of a sequence in a partition.
+
+When more than one partition is used, it allows for parallel logs to be used from within the same event hub. This behavior provides multiple degrees of parallelism and enhances throughput for consumers.
+Consumers and consumer groups
+A partition can be consumed by more than one consumer, each reading from and managing their own offsets.
+
+Event Hubs has the concept ofconsumers groups, which enables multiple consuming applications to each have a separate view of the event stream and read the stream independently at their own pace and with their own offsets.
+To learn more, seeDeep dive on Event Hubs concepts and features.
+Consuming events with Azure Functions
+Azure Functions supportstriggerandoutputbindings for Event Hubs. This section covers how Azure Functions responds to events sent to an event hub event stream using triggers.
+Each instance of an Event Hubs triggered function is backed by a singleEventProcessorHostinstance. The trigger (powered by Event Hubs) ensures that only oneEventProcessorHostinstance can get a lease on a given partition.
+For example, consider an event hub with the following characteristics:
+10 partitions.
+1,000 events distributed across all partitions, with a varying number of messages in each partition.
+When your function is first enabled, there's only one instance of the function. Let's call the first function instanceFunction_1.Function_1has a single instance ofEventProcessorHostthat holds a lease on all 10 partitions. This instance is reading events from partitions 1-10. From this point forward, one of the following happens:
+Function_1
+Function_1
+New function instances are not needed:Function_1can process all 1,000 events before the Functions scaling logic take effect. In this case, all 1,000 messages are processed byFunction_1.
+New function instances are not needed:Function_1can process all 1,000 events before the Functions scaling logic take effect. In this case, all 1,000 messages are processed byFunction_1.
+Function_1
+Function_1
+
+An additional function instance is added: event-based scaling or other automated or manual logic might determine thatFunction_1has more messages than it can process and then creates a new function app instance (Function_2). This new function also has an associated instance ofEventProcessorHost. As the underlying event hub detects that a new host instance is trying to read messages, it load balances the partitions across the host instances. For example, partitions 1-5 may be assigned toFunction_1and partitions 6-10 toFunction_2.
+An additional function instance is added: event-based scaling or other automated or manual logic might determine thatFunction_1has more messages than it can process and then creates a new function app instance (Function_2). This new function also has an associated instance ofEventProcessorHost. As the underlying event hub detects that a new host instance is trying to read messages, it load balances the partitions across the host instances. For example, partitions 1-5 may be assigned toFunction_1and partitions 6-10 toFunction_2.
+Function_1
+Function_2
+Function_1
+Function_2
+
+N more function instances are added: event-based scaling or other automated or manual logic determines that bothFunction_1andFunction_2have more messages than they can process, new Function_N function app instances are created. Instances are created to the point where N is equal to or greater than the number of event hub partitions. In our example, Event Hubs again load balances the partitions, in this case across the instancesFunction_1...Function_10.
+N more function instances are added: event-based scaling or other automated or manual logic determines that bothFunction_1andFunction_2have more messages than they can process, new Function_N function app instances are created. Instances are created to the point where N is equal to or greater than the number of event hub partitions. In our example, Event Hubs again load balances the partitions, in this case across the instancesFunction_1...Function_10.
+Function_1
+Function_2
+Function_1
+Function_10
+
+As scaling occurs, N instances can be a number greater than the number of event hub partitions. This situation might occur while event-driven scaling stabilizes instance counts, or because other automated or manual logic created more instances than partitions. In this case,EventProcessorHostinstances will only obtain locks on partitions as they become available from other instances, as at any given time only one function instance from the same consumer group can access/read from the partitions it has locks on.
+When all function execution completes (with or without errors), checkpoints are committed to the associated storage account. When checkpointing succeeds, the function will be ready to process a new batch of events.
+Dynamic, event-based scaling is possible with Consumption, Flex Consumption, and Premium Azure plans. Kubernetes hosted function apps can also take advantage of theKEDA scaler for Event Hubs. Event-based scaling currently isn't possible when the function app is hosted in a Dedicated (App Service) plan, which requires you to determine the right number of instances based on your workload.
+To learn more, seeAzure Event Hubs bindings for Azure FunctionsandAzure Event Hubs trigger for Azure Functions.
+Contributors
+This article is maintained by Microsoft. It was originally written by the following contributors.
+Principal author:
+David Barkol| Principal Solution Specialist GBB
+To see non-public LinkedIn profiles, sign in to LinkedIn.
+Next steps
+Performance and scale

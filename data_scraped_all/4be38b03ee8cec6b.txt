@@ -1,0 +1,1130 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Explore Azure OpenAI Service embeddings and document search
+Article
+2025-03-26
+12 contributors
+In this article
+This tutorial will walk you through using the Azure OpenAIembeddingsAPI to performdocument searchwhere you'll query a knowledge base to find the most relevant document.
+In this tutorial, you learn how to:
+Install Azure OpenAI.
+Download a sample dataset and prepare it for analysis.
+Create environment variables for your resources endpoint and API key.
+Use one of the following models: text-embedding-ada-002 (Version 2), text-embedding-3-large, text-embedding-3-small  models.
+Usecosine similarityto rank search results.
+Prerequisites
+An Azure subscription -Create one for free
+An Azure OpenAI resource with thetext-embedding-ada-002 (Version 2)model deployed. This model is currently only available incertain regions.  If you don't have a resource the process of creating one is documented in ourresource deployment guide.
+Python 3.8 or later version
+The following Python libraries: openai, num2words, matplotlib, plotly, scipy, scikit-learn, pandas, tiktoken.
+Jupyter Notebooks
+Set up
+Python libraries
+If you haven't already, you need to install the following libraries:
+OpenAI Python 1.x
+OpenAI Python 0.28.1
+pip install openai num2words matplotlib plotly scipy scikit-learn pandas tiktoken
+pip install openai num2words matplotlib plotly scipy scikit-learn pandas tiktoken
+Note
+The OpenAI Python library version0.28.1is deprecated. We recommend using1.x. Consult ourmigration guidefor information on moving from0.28.1to1.x.
+0.28.1
+1.x
+0.28.1
+1.x
+pip install "openai==0.28.1" num2words matplotlib plotly scipy scikit-learn pandas tiktoken
+pip install "openai==0.28.1" num2words matplotlib plotly scipy scikit-learn pandas tiktoken
+Download the BillSum dataset
+BillSum is a dataset of United States Congressional and California state bills. For illustration purposes, we'll look only at the US bills. The corpus consists of bills from the 103rd-115th (1993-2018) sessions of Congress. The data was split into 18,949 train bills and 3,269 test bills. The BillSum corpus focuses on mid-length legislation from 5,000 to 20,000 characters in length. More information on the project and the original academic paper where this dataset is derived from can be found on theBillSum project's GitHub repository
+This tutorial uses thebill_sum_data.csvfile that can be downloaded from ourGitHub sample data.
+bill_sum_data.csv
+You can also download the sample data by running the following command on your local machine:
+curl "https://raw.githubusercontent.com/Azure-Samples/Azure-OpenAI-Docs-Samples/main/Samples/Tutorials/Embeddings/data/bill_sum_data.csv" --output bill_sum_data.csv
+curl "https://raw.githubusercontent.com/Azure-Samples/Azure-OpenAI-Docs-Samples/main/Samples/Tutorials/Embeddings/data/bill_sum_data.csv" --output bill_sum_data.csv
+Retrieve key and endpoint
+To successfully make a call against Azure OpenAI, you need anendpointand akey.
+ENDPOINT
+https://docs-test-001.openai.azure.com/
+API-KEY
+KEY1
+KEY2
+Go to your resource in the Azure portal. TheKeys & Endpointsection can be found in theResource Managementsection. Copy your endpoint and access key as you'll need both for authenticating your API calls. You can use eitherKEY1orKEY2. Always having two keys allows you to securely rotate and regenerate keys without causing a service disruption.
+KEY1
+KEY2
+
+Environment variables
+Create and assign persistent environment variables for your key and endpoint.
+Important
+Use API keys with caution. Don't include the API key directly in your code, and never post it publicly. If you use an API key, store it securely in Azure Key Vault. For more information about using API keys securely in your apps, seeAPI keys with Azure Key Vault.
+For more information about AI services security, seeAuthenticate requests to Azure AI services.
+Command Line
+PowerShell
+Bash
+setx AZURE_OPENAI_API_KEY "REPLACE_WITH_YOUR_KEY_VALUE_HERE"
+setx AZURE_OPENAI_API_KEY "REPLACE_WITH_YOUR_KEY_VALUE_HERE"
+setx AZURE_OPENAI_ENDPOINT "REPLACE_WITH_YOUR_ENDPOINT_HERE"
+setx AZURE_OPENAI_ENDPOINT "REPLACE_WITH_YOUR_ENDPOINT_HERE"
+[System.Environment]::SetEnvironmentVariable('AZURE_OPENAI_API_KEY', 'REPLACE_WITH_YOUR_KEY_VALUE_HERE', 'User')
+[System.Environment]::SetEnvironmentVariable('AZURE_OPENAI_API_KEY', 'REPLACE_WITH_YOUR_KEY_VALUE_HERE', 'User')
+[System.Environment]::SetEnvironmentVariable('AZURE_OPENAI_ENDPOINT', 'REPLACE_WITH_YOUR_ENDPOINT_HERE', 'User')
+[System.Environment]::SetEnvironmentVariable('AZURE_OPENAI_ENDPOINT', 'REPLACE_WITH_YOUR_ENDPOINT_HERE', 'User')
+echo export AZURE_OPENAI_API_KEY="REPLACE_WITH_YOUR_KEY_VALUE_HERE" >> /etc/environment
+echo export AZURE_OPENAI_ENDPOINT="REPLACE_WITH_YOUR_ENDPOINT_HERE" >> /etc/environment
+
+source /etc/environment
+echo export AZURE_OPENAI_API_KEY="REPLACE_WITH_YOUR_KEY_VALUE_HERE" >> /etc/environment
+echo export AZURE_OPENAI_ENDPOINT="REPLACE_WITH_YOUR_ENDPOINT_HERE" >> /etc/environment
+
+source /etc/environment
+After setting the environment variables, you might need to close and reopen Jupyter notebooks or whatever IDE you're using in order for the environment variables to be accessible. While we strongly recommend using Jupyter Notebooks, if for some reason you can't you'll need to modify any code that is returning a pandas dataframe by usingprint(dataframe_name)rather than just calling thedataframe_namedirectly as is often done at the end of a code block.
+print(dataframe_name)
+dataframe_name
+Run the following code in your preferred Python IDE:
+Import libraries
+OpenAI Python 1.x
+OpenAI Python 0.28.1
+import os
+import re
+import requests
+import sys
+from num2words import num2words
+import os
+import pandas as pd
+import numpy as np
+import tiktoken
+from openai import AzureOpenAI
+import os
+import re
+import requests
+import sys
+from num2words import num2words
+import os
+import pandas as pd
+import numpy as np
+import tiktoken
+from openai import AzureOpenAI
+import openai
+import os
+import re
+import requests
+import sys
+from num2words import num2words
+import os
+import pandas as pd
+import numpy as np
+from openai.embeddings_utils import get_embedding, cosine_similarity
+import tiktoken
+
+API_KEY = os.getenv("AZURE_OPENAI_API_KEY") 
+RESOURCE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT") 
+
+openai.api_type = "azure"
+openai.api_key = API_KEY
+openai.api_base = RESOURCE_ENDPOINT
+openai.api_version = "2024-10-21"
+
+url = openai.api_base + "/openai/deployments?api-version=2024-10-21" 
+
+r = requests.get(url, headers={"api-key": API_KEY})
+
+print(r.text)
+import openai
+import os
+import re
+import requests
+import sys
+from num2words import num2words
+import os
+import pandas as pd
+import numpy as np
+from openai.embeddings_utils import get_embedding, cosine_similarity
+import tiktoken
+
+API_KEY = os.getenv("AZURE_OPENAI_API_KEY") 
+RESOURCE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT") 
+
+openai.api_type = "azure"
+openai.api_key = API_KEY
+openai.api_base = RESOURCE_ENDPOINT
+openai.api_version = "2024-10-21"
+
+url = openai.api_base + "/openai/deployments?api-version=2024-10-21" 
+
+r = requests.get(url, headers={"api-key": API_KEY})
+
+print(r.text)
+{
+  "data": [
+    {
+      "scale_settings": {
+        "scale_type": "standard"
+      },
+      "model": "text-embedding-ada-002",
+      "owner": "organization-owner",
+      "id": "text-embedding-ada-002",
+      "status": "succeeded",
+      "created_at": 1657572678,
+      "updated_at": 1657572678,
+      "object": "deployment"
+    },
+    {
+      "scale_settings": {
+        "scale_type": "standard"
+      },
+      "model": "code-cushman-001",
+      "owner": "organization-owner",
+      "id": "code-cushman-001",
+      "status": "succeeded",
+      "created_at": 1657572712,
+      "updated_at": 1657572712,
+      "object": "deployment"
+    },
+    {
+      "scale_settings": {
+        "scale_type": "standard"
+      },
+      "model": "text-search-curie-doc-001",
+      "owner": "organization-owner",
+      "id": "text-search-curie-doc-001",
+      "status": "succeeded",
+      "created_at": 1668620345,
+      "updated_at": 1668620345,
+      "object": "deployment"
+    },
+    {
+      "scale_settings": {
+        "scale_type": "standard"
+      },
+      "model": "text-search-curie-query-001",
+      "owner": "organization-owner",
+      "id": "text-search-curie-query-001",
+      "status": "succeeded",
+      "created_at": 1669048765,
+      "updated_at": 1669048765,
+      "object": "deployment"
+    }
+  ],
+  "object": "list"
+}
+{
+  "data": [
+    {
+      "scale_settings": {
+        "scale_type": "standard"
+      },
+      "model": "text-embedding-ada-002",
+      "owner": "organization-owner",
+      "id": "text-embedding-ada-002",
+      "status": "succeeded",
+      "created_at": 1657572678,
+      "updated_at": 1657572678,
+      "object": "deployment"
+    },
+    {
+      "scale_settings": {
+        "scale_type": "standard"
+      },
+      "model": "code-cushman-001",
+      "owner": "organization-owner",
+      "id": "code-cushman-001",
+      "status": "succeeded",
+      "created_at": 1657572712,
+      "updated_at": 1657572712,
+      "object": "deployment"
+    },
+    {
+      "scale_settings": {
+        "scale_type": "standard"
+      },
+      "model": "text-search-curie-doc-001",
+      "owner": "organization-owner",
+      "id": "text-search-curie-doc-001",
+      "status": "succeeded",
+      "created_at": 1668620345,
+      "updated_at": 1668620345,
+      "object": "deployment"
+    },
+    {
+      "scale_settings": {
+        "scale_type": "standard"
+      },
+      "model": "text-search-curie-query-001",
+      "owner": "organization-owner",
+      "id": "text-search-curie-query-001",
+      "status": "succeeded",
+      "created_at": 1669048765,
+      "updated_at": 1669048765,
+      "object": "deployment"
+    }
+  ],
+  "object": "list"
+}
+The output of this command will vary based on the number and type of models you've deployed. In this case, we need to confirm that we have an entry fortext-embedding-ada-002. If you find that you're missing this model, you'll need todeploy the modelto your resource before proceeding.
+Now we need to read our csv file and create a pandas DataFrame. After the initial DataFrame is created, we can view the contents of the table by runningdf.
+df
+df=pd.read_csv(os.path.join(os.getcwd(),'bill_sum_data.csv')) # This assumes that you have placed the bill_sum_data.csv in the same directory you are running Jupyter Notebooks
+df
+df=pd.read_csv(os.path.join(os.getcwd(),'bill_sum_data.csv')) # This assumes that you have placed the bill_sum_data.csv in the same directory you are running Jupyter Notebooks
+df
+Output:
+
+The initial table has more columns than we need we'll create a new smaller DataFrame calleddf_billswhich will contain only the columns fortext,summary, andtitle.
+df_bills
+text
+summary
+title
+df_bills = df[['text', 'summary', 'title']]
+df_bills
+df_bills = df[['text', 'summary', 'title']]
+df_bills
+Output:
+
+Next we'll perform some light data cleaning by removing redundant whitespace and cleaning up the punctuation to prepare the data for tokenization.
+pd.options.mode.chained_assignment = None #https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#evaluation-order-matters
+
+# s is input text
+def normalize_text(s, sep_token = " \n "):
+    s = re.sub(r'\s+',  ' ', s).strip()
+    s = re.sub(r". ,","",s)
+    # remove all instances of multiple spaces
+    s = s.replace("..",".")
+    s = s.replace(". .",".")
+    s = s.replace("\n", "")
+    s = s.strip()
+    
+    return s
+
+df_bills['text']= df_bills["text"].apply(lambda x : normalize_text(x))
+pd.options.mode.chained_assignment = None #https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#evaluation-order-matters
+
+# s is input text
+def normalize_text(s, sep_token = " \n "):
+    s = re.sub(r'\s+',  ' ', s).strip()
+    s = re.sub(r". ,","",s)
+    # remove all instances of multiple spaces
+    s = s.replace("..",".")
+    s = s.replace(". .",".")
+    s = s.replace("\n", "")
+    s = s.strip()
+    
+    return s
+
+df_bills['text']= df_bills["text"].apply(lambda x : normalize_text(x))
+Now we need to remove any bills that are too long for the token limit (8192 tokens).
+tokenizer = tiktoken.get_encoding("cl100k_base")
+df_bills['n_tokens'] = df_bills["text"].apply(lambda x: len(tokenizer.encode(x)))
+df_bills = df_bills[df_bills.n_tokens<8192]
+len(df_bills)
+tokenizer = tiktoken.get_encoding("cl100k_base")
+df_bills['n_tokens'] = df_bills["text"].apply(lambda x: len(tokenizer.encode(x)))
+df_bills = df_bills[df_bills.n_tokens<8192]
+len(df_bills)
+20
+20
+Note
+In this case all bills are under the embedding model input token limit, but you can use the technique above to remove entries that would otherwise cause embedding to fail. When faced with content that exceeds the embedding limit, you can also chunk the content into smaller pieces and then embed those one at a time.
+We'll once again examinedf_bills.
+df_bills
+df_bills
+Output:
+
+To understand the n_tokens column a little more as well how text ultimately is tokenized, it can be helpful to run the following code:
+sample_encode = tokenizer.encode(df_bills.text[0]) 
+decode = tokenizer.decode_tokens_bytes(sample_encode)
+decode
+sample_encode = tokenizer.encode(df_bills.text[0]) 
+decode = tokenizer.decode_tokens_bytes(sample_encode)
+decode
+For our docs we're intentionally truncating the output, but running this command in your environment will return the full text from index zero tokenized into chunks. You can see that in some cases an entire word is represented with a single token whereas in others parts of words are split across multiple tokens.
+[b'SECTION',
+ b' ',
+ b'1',
+ b'.',
+ b' SHORT',
+ b' TITLE',
+ b'.',
+ b' This',
+ b' Act',
+ b' may',
+ b' be',
+ b' cited',
+ b' as',
+ b' the',
+ b' ``',
+ b'National',
+ b' Science',
+ b' Education',
+ b' Tax',
+ b' In',
+ b'cent',
+ b'ive',
+ b' for',
+ b' Businesses',
+ b' Act',
+ b' of',
+ b' ',
+ b'200',
+ b'7',
+ b"''.",
+ b' SEC',
+ b'.',
+ b' ',
+ b'2',
+ b'.',
+ b' C',
+ b'RED',
+ b'ITS',
+ b' FOR',
+ b' CERT',
+ b'AIN',
+ b' CONTRIBUT',
+ b'IONS',
+ b' BEN',
+ b'EF',
+ b'IT',
+ b'ING',
+ b' SC',
+[b'SECTION',
+ b' ',
+ b'1',
+ b'.',
+ b' SHORT',
+ b' TITLE',
+ b'.',
+ b' This',
+ b' Act',
+ b' may',
+ b' be',
+ b' cited',
+ b' as',
+ b' the',
+ b' ``',
+ b'National',
+ b' Science',
+ b' Education',
+ b' Tax',
+ b' In',
+ b'cent',
+ b'ive',
+ b' for',
+ b' Businesses',
+ b' Act',
+ b' of',
+ b' ',
+ b'200',
+ b'7',
+ b"''.",
+ b' SEC',
+ b'.',
+ b' ',
+ b'2',
+ b'.',
+ b' C',
+ b'RED',
+ b'ITS',
+ b' FOR',
+ b' CERT',
+ b'AIN',
+ b' CONTRIBUT',
+ b'IONS',
+ b' BEN',
+ b'EF',
+ b'IT',
+ b'ING',
+ b' SC',
+If you then check the length of thedecodevariable, you'll find it matches the first number in the n_tokens column.
+decode
+len(decode)
+len(decode)
+1466
+1466
+Now that we understand more about how tokenization works we can move on to embedding. It's important to note, that we haven't actually tokenized the documents yet. Then_tokenscolumn is simply a way of making sure none of the data we pass to the model for tokenization and embedding exceeds the input token limit of 8,192. When we pass the documents to the embeddings model, it will break the documents into tokens similar (though not necessarily identical) to the examples above and then convert the tokens to a series of floating point numbers that will be accessible via vector search. These embeddings can be stored locally or in anAzure Database to support Vector Search. As a result, each bill will have its own corresponding embedding vector in the newada_v2column on the right side of the DataFrame.
+n_tokens
+ada_v2
+In the example below we're calling the embedding model once per every item that we want to embed. When working with large embedding projects you can alternatively pass the model an array of inputs to embed rather than one input at a time. When you pass the model an array of inputs the max number of input items per call to the embedding endpoint is 2048.
+OpenAI Python 1.x
+OpenAI Python 0.28.1
+client = AzureOpenAI(
+  api_key = os.getenv("AZURE_OPENAI_API_KEY"),  
+  api_version = "2024-02-01",
+  azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+)
+
+def generate_embeddings(text, model="text-embedding-ada-002"): # model = "deployment_name"
+    return client.embeddings.create(input = [text], model=model).data[0].embedding
+
+df_bills['ada_v2'] = df_bills["text"].apply(lambda x : generate_embeddings (x, model = 'text-embedding-ada-002')) # model should be set to the deployment name you chose when you deployed the text-embedding-ada-002 (Version 2) model
+client = AzureOpenAI(
+  api_key = os.getenv("AZURE_OPENAI_API_KEY"),  
+  api_version = "2024-02-01",
+  azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+)
+
+def generate_embeddings(text, model="text-embedding-ada-002"): # model = "deployment_name"
+    return client.embeddings.create(input = [text], model=model).data[0].embedding
+
+df_bills['ada_v2'] = df_bills["text"].apply(lambda x : generate_embeddings (x, model = 'text-embedding-ada-002')) # model should be set to the deployment name you chose when you deployed the text-embedding-ada-002 (Version 2) model
+df_bills['ada_v2'] = df_bills["text"].apply(lambda x : get_embedding(x, engine = 'text-embedding-ada-002')) # engine should be set to the deployment name you chose when you deployed the text-embedding-ada-002 (Version 2) model
+df_bills['ada_v2'] = df_bills["text"].apply(lambda x : get_embedding(x, engine = 'text-embedding-ada-002')) # engine should be set to the deployment name you chose when you deployed the text-embedding-ada-002 (Version 2) model
+df_bills
+df_bills
+Output:
+
+As we run the search code block below, we'll embed the search query"Can I get information on cable company tax revenue?"with the sametext-embedding-ada-002 (Version 2)model. Next we'll find the closest bill embedding to the newly embedded text from our query ranked bycosine similarity.
+OpenAI Python 1.x
+OpenAI Python 0.28.1
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def get_embedding(text, model="text-embedding-ada-002"): # model = "deployment_name"
+    return client.embeddings.create(input = [text], model=model).data[0].embedding
+
+def search_docs(df, user_query, top_n=4, to_print=True):
+    embedding = get_embedding(
+        user_query,
+        model="text-embedding-ada-002" # model should be set to the deployment name you chose when you deployed the text-embedding-ada-002 (Version 2) model
+    )
+    df["similarities"] = df.ada_v2.apply(lambda x: cosine_similarity(x, embedding))
+
+    res = (
+        df.sort_values("similarities", ascending=False)
+        .head(top_n)
+    )
+    if to_print:
+        display(res)
+    return res
+
+
+res = search_docs(df_bills, "Can I get information on cable company tax revenue?", top_n=4)
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def get_embedding(text, model="text-embedding-ada-002"): # model = "deployment_name"
+    return client.embeddings.create(input = [text], model=model).data[0].embedding
+
+def search_docs(df, user_query, top_n=4, to_print=True):
+    embedding = get_embedding(
+        user_query,
+        model="text-embedding-ada-002" # model should be set to the deployment name you chose when you deployed the text-embedding-ada-002 (Version 2) model
+    )
+    df["similarities"] = df.ada_v2.apply(lambda x: cosine_similarity(x, embedding))
+
+    res = (
+        df.sort_values("similarities", ascending=False)
+        .head(top_n)
+    )
+    if to_print:
+        display(res)
+    return res
+
+
+res = search_docs(df_bills, "Can I get information on cable company tax revenue?", top_n=4)
+# search through the reviews for a specific product
+def search_docs(df, user_query, top_n=3, to_print=True):
+    embedding = get_embedding(
+        user_query,
+        engine="text-embedding-ada-002" # engine should be set to the deployment name you chose when you deployed the text-embedding-ada-002 (Version 2) model
+    )
+    df["similarities"] = df.ada_v2.apply(lambda x: cosine_similarity(x, embedding))
+
+    res = (
+        df.sort_values("similarities", ascending=False)
+        .head(top_n)
+    )
+    if to_print:
+        display(res)
+    return res
+
+
+res = search_docs(df_bills, "Can I get information on cable company tax revenue?", top_n=4)
+# search through the reviews for a specific product
+def search_docs(df, user_query, top_n=3, to_print=True):
+    embedding = get_embedding(
+        user_query,
+        engine="text-embedding-ada-002" # engine should be set to the deployment name you chose when you deployed the text-embedding-ada-002 (Version 2) model
+    )
+    df["similarities"] = df.ada_v2.apply(lambda x: cosine_similarity(x, embedding))
+
+    res = (
+        df.sort_values("similarities", ascending=False)
+        .head(top_n)
+    )
+    if to_print:
+        display(res)
+    return res
+
+
+res = search_docs(df_bills, "Can I get information on cable company tax revenue?", top_n=4)
+Output:
+
+Finally, we'll show the top result from document search based on user query against the entire knowledge base. This returns the top result of the "Taxpayer's Right to View Act of 1993". This document has a cosine similarity score of 0.76 between the query and the document:
+res["summary"][9]
+res["summary"][9]
+"Taxpayer's Right to View Act of 1993 - Amends the Communications Act of 1934 to prohibit a cable operator from assessing separate charges for any video programming of a sporting, theatrical, or other entertainment event if that event is performed at a facility constructed, renovated, or maintained with tax revenues or by an organization that receives public financial support. Authorizes the Federal Communications Commission and local franchising authorities to make determinations concerning the applicability of such prohibition. Sets forth conditions under which a facility is considered to have been constructed, maintained, or renovated with tax revenues. Considers events performed by nonprofit or public organizations that receive tax subsidies to be subject to this Act if the event is sponsored by, or includes the participation of a team that is part of, a tax exempt organization."
+"Taxpayer's Right to View Act of 1993 - Amends the Communications Act of 1934 to prohibit a cable operator from assessing separate charges for any video programming of a sporting, theatrical, or other entertainment event if that event is performed at a facility constructed, renovated, or maintained with tax revenues or by an organization that receives public financial support. Authorizes the Federal Communications Commission and local franchising authorities to make determinations concerning the applicability of such prohibition. Sets forth conditions under which a facility is considered to have been constructed, maintained, or renovated with tax revenues. Considers events performed by nonprofit or public organizations that receive tax subsidies to be subject to this Act if the event is sponsored by, or includes the participation of a team that is part of, a tax exempt organization."
+Prerequisites
+An Azure subscription -Create one for free
+An Azure subscription -Create one for free
+An Azure OpenAI resource with thetext-embedding-ada-002 (Version 2)model deployed.This model is currently only available incertain regions.  If you don't have a resource
+the process of creating one is documented in ourresource deployment guide.
+An Azure OpenAI resource with thetext-embedding-ada-002 (Version 2)model deployed.
+This model is currently only available incertain regions.  If you don't have a resource
+the process of creating one is documented in ourresource deployment guide.
+PowerShell 7.4
+PowerShell 7.4
+Note
+Many examples in this tutorial re-use variables from step-to-step. Keep the same terminal session
+open throughout. If variables you set in a previous step are lost due to closing the terminal,
+you must begin again from the start.
+Retrieve key and endpoint
+To successfully make a call against Azure OpenAI, you need anendpointand akey.
+ENDPOINT
+https://docs-test-001.openai.azure.com/
+API-KEY
+KEY1
+KEY2
+Go to your resource in the Azure portal. TheKeys & Endpointsection can be found in theResource Managementsection. Copy your endpoint and access key as you'll need both for authenticating your API calls. You can use eitherKEY1orKEY2. Always having two keys allows you to securely rotate and regenerate keys without causing a service disruption.
+KEY1
+KEY2
+
+Environment variables
+Create and assign persistent environment variables for your key and endpoint.
+Important
+Use API keys with caution. Don't include the API key directly in your code, and never post it publicly. If you use an API key, store it securely in Azure Key Vault. For more information about using API keys securely in your apps, seeAPI keys with Azure Key Vault.
+For more information about AI services security, seeAuthenticate requests to Azure AI services.
+Command Line
+PowerShell
+Bash
+setx AZURE_OPENAI_API_KEY "REPLACE_WITH_YOUR_KEY_VALUE_HERE"
+setx AZURE_OPENAI_API_KEY "REPLACE_WITH_YOUR_KEY_VALUE_HERE"
+setx AZURE_OPENAI_ENDPOINT "REPLACE_WITH_YOUR_ENDPOINT_HERE"
+setx AZURE_OPENAI_ENDPOINT "REPLACE_WITH_YOUR_ENDPOINT_HERE"
+$Env:AZURE_OPENAI_API_KEY = '<YOUR_KEY_VALUE>'
+$Env:AZURE_OPENAI_ENDPOINT = '<YOUR_ENDPOINT>'
+$Env:AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT = '<YOUR_DEPLOYMENT_NAME>'
+$Env:AZURE_OPENAI_API_KEY = '<YOUR_KEY_VALUE>'
+$Env:AZURE_OPENAI_ENDPOINT = '<YOUR_ENDPOINT>'
+$Env:AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT = '<YOUR_DEPLOYMENT_NAME>'
+echo export AZURE_OPENAI_API_KEY="<YOUR_KEY_VALUE>" >> /etc/environment
+echo export AZURE_OPENAI_ENDPOINT="<YOUR_ENDPOINT>" >> /etc/environment
+echo export AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT="<YOUR_DEPLOYMENT_NAME>" >> /etc/environment
+source /etc/environment
+echo export AZURE_OPENAI_API_KEY="<YOUR_KEY_VALUE>" >> /etc/environment
+echo export AZURE_OPENAI_ENDPOINT="<YOUR_ENDPOINT>" >> /etc/environment
+echo export AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT="<YOUR_DEPLOYMENT_NAME>" >> /etc/environment
+source /etc/environment
+For this tutorial, we use thePowerShell 7.4 reference documentationas a well-known and safe
+sample dataset. As an alternative, you might choose to explore theMicrosoft Research toolssample datasets.
+Create a folder where you would like to store your project. Set your location to the project
+folder. Download the dataset to your local machine using theInvoke-WebRequestcommand and then
+expand the archive. Last, set your location to the subfolder containing reference information for
+PowerShell version 7.4.
+Invoke-WebRequest
+New-Item '<FILE-PATH-TO-YOUR-PROJECT>' -Type Directory
+Set-Location '<FILE-PATH-TO-YOUR-PROJECT>'
+
+$DocsUri = 'https://github.com/MicrosoftDocs/PowerShell-Docs/archive/refs/heads/main.zip'
+Invoke-WebRequest $DocsUri -OutFile './PSDocs.zip'
+
+Expand-Archive './PSDocs.zip'
+Set-Location './PSDocs/PowerShell-Docs-main/reference/7.4/'
+New-Item '<FILE-PATH-TO-YOUR-PROJECT>' -Type Directory
+Set-Location '<FILE-PATH-TO-YOUR-PROJECT>'
+
+$DocsUri = 'https://github.com/MicrosoftDocs/PowerShell-Docs/archive/refs/heads/main.zip'
+Invoke-WebRequest $DocsUri -OutFile './PSDocs.zip'
+
+Expand-Archive './PSDocs.zip'
+Set-Location './PSDocs/PowerShell-Docs-main/reference/7.4/'
+We're working with a large amount of data in this tutorial, so we use a .NET data table object for
+efficient performance. The datatable has columnstitle,content,prep,uri,file, andvectors. Thetitlecolumn is theprimary key.
+In the next step, we load the content of each markdown file into the data table. We also use
+PowerShell-matchoperator to capture known lines of texttitle:andonline version:, and
+store them in distinct columns. Some of the files don't contain the metadata lines of text, but
+since they're overview pages and not detailed reference docs, we exclude them from the datatable.
+-match
+title:
+online version:
+# make sure your location is the project subfolder
+
+$DataTable = New-Object System.Data.DataTable
+
+'title', 'content', 'prep', 'uri', 'file', 'vectors' | ForEach-Object {
+    $DataTable.Columns.Add($_)
+} | Out-Null
+$DataTable.PrimaryKey = $DataTable.Columns['title']
+
+$md = Get-ChildItem -Path . -Include *.md -Recurse
+
+$md | ForEach-Object {
+    $file       = $_.FullName
+    $content    = Get-Content $file
+    $title      = $content | Where-Object { $_ -match 'title: ' }
+    $uri        = $content | Where-Object { $_ -match 'online version: ' }
+    if ($title -and $uri) {
+        $row                = $DataTable.NewRow()
+        $row.title          = $title.ToString().Replace('title: ', '')
+        $row.content        = $content | Out-String
+        $row.prep           = '' # use later in the tutorial
+        $row.uri            = $uri.ToString().Replace('online version: ', '')
+        $row.file           = $file
+        $row.vectors        = '' # use later in the tutorial
+        $Datatable.rows.add($row)
+    }
+}
+# make sure your location is the project subfolder
+
+$DataTable = New-Object System.Data.DataTable
+
+'title', 'content', 'prep', 'uri', 'file', 'vectors' | ForEach-Object {
+    $DataTable.Columns.Add($_)
+} | Out-Null
+$DataTable.PrimaryKey = $DataTable.Columns['title']
+
+$md = Get-ChildItem -Path . -Include *.md -Recurse
+
+$md | ForEach-Object {
+    $file       = $_.FullName
+    $content    = Get-Content $file
+    $title      = $content | Where-Object { $_ -match 'title: ' }
+    $uri        = $content | Where-Object { $_ -match 'online version: ' }
+    if ($title -and $uri) {
+        $row                = $DataTable.NewRow()
+        $row.title          = $title.ToString().Replace('title: ', '')
+        $row.content        = $content | Out-String
+        $row.prep           = '' # use later in the tutorial
+        $row.uri            = $uri.ToString().Replace('online version: ', '')
+        $row.file           = $file
+        $row.vectors        = '' # use later in the tutorial
+        $Datatable.rows.add($row)
+    }
+}
+View the data using theout-gridviewcommand (not available in Cloud Shell).
+out-gridview
+$Datatable | out-gridview
+$Datatable | out-gridview
+Output:
+
+Next perform some light data cleaning by removing extra characters, empty space, and other document
+notations, to prepare the data for tokenization. The sample functionInvoke-DocPrepdemonstrates
+how to use the PowerShell-replaceoperator to iterate through a list of characters you would like
+to remove from the content.
+Invoke-DocPrep
+-replace
+# sample demonstrates how to use `-replace` to remove characters from text content
+function Invoke-DocPrep {
+param(
+    [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+    [string]$content
+)
+    # tab, line breaks, empty space
+    $replace = @('\t','\r\n','\n','\r')
+    # non-UTF8 characters
+    $replace += @('[^\x00-\x7F]')
+    # html
+    $replace += @('<table>','</table>','<tr>','</tr>','<td>','</td>')
+    $replace += @('<ul>','</ul>','<li>','</li>')
+    $replace += @('<p>','</p>','<br>')
+    # docs
+    $replace += @('\*\*IMPORTANT:\*\*','\*\*NOTE:\*\*')
+    $replace += @('<!','no-loc ','text=')
+    $replace += @('<--','-->','---','--',':::')
+    # markdown
+    $replace += @('###','##','#','```')
+    $replace | ForEach-Object {
+        $content = $content -replace $_, ' ' -replace '  ',' '
+    }
+    return $content
+}
+# sample demonstrates how to use `-replace` to remove characters from text content
+function Invoke-DocPrep {
+param(
+    [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+    [string]$content
+)
+    # tab, line breaks, empty space
+    $replace = @('\t','\r\n','\n','\r')
+    # non-UTF8 characters
+    $replace += @('[^\x00-\x7F]')
+    # html
+    $replace += @('<table>','</table>','<tr>','</tr>','<td>','</td>')
+    $replace += @('<ul>','</ul>','<li>','</li>')
+    $replace += @('<p>','</p>','<br>')
+    # docs
+    $replace += @('\*\*IMPORTANT:\*\*','\*\*NOTE:\*\*')
+    $replace += @('<!','no-loc ','text=')
+    $replace += @('<--','-->','---','--',':::')
+    # markdown
+    $replace += @('###','##','#','```')
+    $replace | ForEach-Object {
+        $content = $content -replace $_, ' ' -replace '  ',' '
+    }
+    return $content
+}
+After you create theInvoke-DocPrepfunction, use theForEach-Objectcommand to store prepared
+content in theprepcolumn, for all rows in the datatable. We're using a new column so the
+original formatting is available if we would like to retrieve it later.
+Invoke-DocPrep
+ForEach-Object
+$Datatable.rows | ForEach-Object { $_.prep = Invoke-DocPrep $_.content }
+$Datatable.rows | ForEach-Object { $_.prep = Invoke-DocPrep $_.content }
+View the datatable again to see the change.
+$Datatable | out-gridview
+$Datatable | out-gridview
+When we pass the documents to the embeddings model, it encodes the documents into tokens and then
+returns a series of floating point numbers to use in acosine similaritysearch. These
+embeddings can be stored locally or in a service such asVector Search in Azure AI Search.
+Each document has its own corresponding embedding vector in the newvectorscolumn.
+The next example loops through each row in the datatable, retrieves the vectors for the
+preprocessed content, and stores them to thevectorscolumn. The OpenAI service throttles
+frequent requests, so the example includes anexponential back-offas suggested by thedocumentation.
+After the script completes, each row should have a comma-delimited list of 1536 vectors for each
+document. If an error occurs and the status code is400, the file path, title, and error code
+are added to a variable named$errorDocsfor troubleshooting. The most common error occurs when
+the token count is more than the prompt limit for the model.
+400
+$errorDocs
+# Azure OpenAI metadata variables
+$openai = @{
+    api_key     = $Env:AZURE_OPENAI_API_KEY 
+    api_base    = $Env:AZURE_OPENAI_ENDPOINT # should look like 'https://<YOUR_RESOURCE_NAME>.openai.azure.com/'
+    api_version = '2024-02-01' # may change in the future
+    name        = $Env:AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT # custom name you chose for your deployment
+}
+
+$headers = [ordered]@{
+    'api-key' = $openai.api_key
+}
+
+$url = "$($openai.api_base)/openai/deployments/$($openai.name)/embeddings?api-version=$($openai.api_version)"
+
+$Datatable | ForEach-Object {
+    $doc = $_
+
+    $body = [ordered]@{
+        input = $doc.prep
+    } | ConvertTo-Json
+
+    $retryCount = 0
+    $maxRetries = 10
+    $delay      = 1
+    $docErrors = @()
+
+    do {
+        try {
+            $params = @{
+                Uri         = $url
+                Headers     = $headers
+                Body        = $body
+                Method      = 'Post'
+                ContentType = 'application/json'
+            }
+            $response = Invoke-RestMethod @params
+            $Datatable.rows.find($doc.title).vectors = $response.data.embedding -join ','
+            break
+        } catch {
+            if ($_.Exception.Response.StatusCode -eq 429) {
+                $retryCount++
+                [int]$retryAfter = $_.Exception.Response.Headers |
+                    Where-Object key -eq 'Retry-After' |
+                    Select-Object -ExpandProperty Value
+
+                # Use delay from error header
+                if ($delay -lt $retryAfter) { $delay = $retryAfter++ }
+                Start-Sleep -Seconds $delay
+                # Exponential back-off
+                $delay = [math]::min($delay * 1.5, 300)
+            } elseif ($_.Exception.Response.StatusCode -eq 400) {
+                if ($docErrors.file -notcontains $doc.file) {
+                    $docErrors += [ordered]@{
+                        error   = $_.exception.ErrorDetails.Message | ForEach-Object error | ForEach-Object message
+                        file    = $doc.file
+                        title   = $doc.title
+                    }
+                }
+            } else {
+                throw
+            }
+        }
+    } while ($retryCount -lt $maxRetries)
+}
+if (0 -lt $docErrors.count) {
+    Write-Host "$($docErrors.count) documents encountered known errors such as too many tokens.`nReview the `$docErrors variable for details."
+}
+# Azure OpenAI metadata variables
+$openai = @{
+    api_key     = $Env:AZURE_OPENAI_API_KEY 
+    api_base    = $Env:AZURE_OPENAI_ENDPOINT # should look like 'https://<YOUR_RESOURCE_NAME>.openai.azure.com/'
+    api_version = '2024-02-01' # may change in the future
+    name        = $Env:AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT # custom name you chose for your deployment
+}
+
+$headers = [ordered]@{
+    'api-key' = $openai.api_key
+}
+
+$url = "$($openai.api_base)/openai/deployments/$($openai.name)/embeddings?api-version=$($openai.api_version)"
+
+$Datatable | ForEach-Object {
+    $doc = $_
+
+    $body = [ordered]@{
+        input = $doc.prep
+    } | ConvertTo-Json
+
+    $retryCount = 0
+    $maxRetries = 10
+    $delay      = 1
+    $docErrors = @()
+
+    do {
+        try {
+            $params = @{
+                Uri         = $url
+                Headers     = $headers
+                Body        = $body
+                Method      = 'Post'
+                ContentType = 'application/json'
+            }
+            $response = Invoke-RestMethod @params
+            $Datatable.rows.find($doc.title).vectors = $response.data.embedding -join ','
+            break
+        } catch {
+            if ($_.Exception.Response.StatusCode -eq 429) {
+                $retryCount++
+                [int]$retryAfter = $_.Exception.Response.Headers |
+                    Where-Object key -eq 'Retry-After' |
+                    Select-Object -ExpandProperty Value
+
+                # Use delay from error header
+                if ($delay -lt $retryAfter) { $delay = $retryAfter++ }
+                Start-Sleep -Seconds $delay
+                # Exponential back-off
+                $delay = [math]::min($delay * 1.5, 300)
+            } elseif ($_.Exception.Response.StatusCode -eq 400) {
+                if ($docErrors.file -notcontains $doc.file) {
+                    $docErrors += [ordered]@{
+                        error   = $_.exception.ErrorDetails.Message | ForEach-Object error | ForEach-Object message
+                        file    = $doc.file
+                        title   = $doc.title
+                    }
+                }
+            } else {
+                throw
+            }
+        }
+    } while ($retryCount -lt $maxRetries)
+}
+if (0 -lt $docErrors.count) {
+    Write-Host "$($docErrors.count) documents encountered known errors such as too many tokens.`nReview the `$docErrors variable for details."
+}
+You now have a local in-memory database table of PowerShell 7.4 reference docs.
+Based on a search string, we need to calculate another set of vectors so PowerShell can rank each
+document by similarity.
+In the next example, vectors are retrieved for the search stringget a list of running processes.
+get a list of running processes
+$searchText = "get a list of running processes"
+
+$body = [ordered]@{
+    input = $searchText
+} | ConvertTo-Json
+
+$url = "$($openai.api_base)/openai/deployments/$($openai.name)/embeddings?api-version=$($openai.api_version)"
+
+$params = @{
+    Uri         = $url
+    Headers     = $headers
+    Body        = $body
+    Method      = 'Post'
+    ContentType = 'application/json'
+}
+$response = Invoke-RestMethod @params
+$searchVectors = $response.data.embedding -join ','
+$searchText = "get a list of running processes"
+
+$body = [ordered]@{
+    input = $searchText
+} | ConvertTo-Json
+
+$url = "$($openai.api_base)/openai/deployments/$($openai.name)/embeddings?api-version=$($openai.api_version)"
+
+$params = @{
+    Uri         = $url
+    Headers     = $headers
+    Body        = $body
+    Method      = 'Post'
+    ContentType = 'application/json'
+}
+$response = Invoke-RestMethod @params
+$searchVectors = $response.data.embedding -join ','
+Finally, the next sample function, which borrows an example from the example scriptMeasure-VectorSimilaritywritten by Lee Holmes, performs acosine similaritycalculation
+and then ranks each row in the datatable.
+# Sample function to calculate cosine similarity
+function Get-CosineSimilarity ([float[]]$vector1, [float[]]$vector2) {
+    $dot = 0
+    $mag1 = 0
+    $mag2 = 0
+
+    $allkeys = 0..($vector1.Length-1)
+
+    foreach ($key in $allkeys) {
+        $dot  += $vector1[$key]  * $vector2[$key]
+        $mag1 += ($vector1[$key] * $vector1[$key])
+        $mag2 += ($vector2[$key] * $vector2[$key])
+    }
+
+    $mag1 = [Math]::Sqrt($mag1)
+    $mag2 = [Math]::Sqrt($mag2)
+
+    return [Math]::Round($dot / ($mag1 * $mag2), 3)
+}
+# Sample function to calculate cosine similarity
+function Get-CosineSimilarity ([float[]]$vector1, [float[]]$vector2) {
+    $dot = 0
+    $mag1 = 0
+    $mag2 = 0
+
+    $allkeys = 0..($vector1.Length-1)
+
+    foreach ($key in $allkeys) {
+        $dot  += $vector1[$key]  * $vector2[$key]
+        $mag1 += ($vector1[$key] * $vector1[$key])
+        $mag2 += ($vector2[$key] * $vector2[$key])
+    }
+
+    $mag1 = [Math]::Sqrt($mag1)
+    $mag2 = [Math]::Sqrt($mag2)
+
+    return [Math]::Round($dot / ($mag1 * $mag2), 3)
+}
+The commands in the next example loop through all rows in$Datatableand calculate the cosine
+similarity to the search string. The results are sorted and the top three results are stored in a
+variable named$topThree. The example does not return output.
+$Datatable
+$topThree
+# Calculate cosine similarity for each row and select the top 3
+$topThree = $Datatable | ForEach-Object {
+    [PSCustomObject]@{
+        title = $_.title
+        similarity = Get-CosineSimilarity $_.vectors.split(',') $searchVectors.split(',')
+    }
+} | Sort-Object -property similarity -descending | Select-Object -First 3 | ForEach-Object {
+    $title = $_.title
+    $Datatable | Where-Object { $_.title -eq $title }
+}
+# Calculate cosine similarity for each row and select the top 3
+$topThree = $Datatable | ForEach-Object {
+    [PSCustomObject]@{
+        title = $_.title
+        similarity = Get-CosineSimilarity $_.vectors.split(',') $searchVectors.split(',')
+    }
+} | Sort-Object -property similarity -descending | Select-Object -First 3 | ForEach-Object {
+    $title = $_.title
+    $Datatable | Where-Object { $_.title -eq $title }
+}
+Review the output of the$topThreevariable, with onlytitleandurlproperties, in
+gridview.
+$topThree
+$topThree | Select "title", "uri" | Out-GridView
+$topThree | Select "title", "uri" | Out-GridView
+Output:
+
+The$topThreevariable contains all the information from the rows in the datatable. For example,
+thecontentproperty contains the original document format. Use[0]to index into the first item
+in the array.
+$topThree
+[0]
+$topThree[0].content
+$topThree[0].content
+View the full document (truncated in the output snippet for this page).
+---
+external help file: Microsoft.PowerShell.Commands.Management.dll-Help.xml
+Locale: en-US
+Module Name: Microsoft.PowerShell.Management
+ms.date: 07/03/2023
+online version: https://learn.microsoft.com/powershell/module/microsoft.powershell.management/get-process?view=powershell-7.4&WT.mc_id=ps-gethelp
+schema: 2.0.0
+title: Get-Process
+---
+
+# Get-Process
+
+## SYNOPSIS
+Gets the processes that are running on the local computer.
+
+## SYNTAX
+
+### Name (Default)
+
+Get-Process [[-Name] <String[]>] [-Module] [-FileVersionInfo] [<CommonParameters>]
+# truncated example
+---
+external help file: Microsoft.PowerShell.Commands.Management.dll-Help.xml
+Locale: en-US
+Module Name: Microsoft.PowerShell.Management
+ms.date: 07/03/2023
+online version: https://learn.microsoft.com/powershell/module/microsoft.powershell.management/get-process?view=powershell-7.4&WT.mc_id=ps-gethelp
+schema: 2.0.0
+title: Get-Process
+---
+
+# Get-Process
+
+## SYNOPSIS
+Gets the processes that are running on the local computer.
+
+## SYNTAX
+
+### Name (Default)
+
+Get-Process [[-Name] <String[]>] [-Module] [-FileVersionInfo] [<CommonParameters>]
+# truncated example
+Finally, rather than regenerate the embeddings every time you need to query the dataset, you can
+store the data to disk and recall it in the future. TheWriteXML()andReadXML()methods ofDataTableobject types in the next example simplify the process. The schema of the XML file
+requires the datatable to have aTableName.
+WriteXML()
+ReadXML()
+Replace<YOUR-FULL-FILE-PATH>with the full path where you would like to write and read the XML
+file. The path should end with.xml.
+<YOUR-FULL-FILE-PATH>
+.xml
+# Set DataTable name
+$Datatable.TableName = "MyDataTable"
+
+# Writing DataTable to XML
+$Datatable.WriteXml("<YOUR-FULL-FILE-PATH>", [System.Data.XmlWriteMode]::WriteSchema)
+
+# Reading XML back to DataTable
+$newDatatable = New-Object System.Data.DataTable
+$newDatatable.ReadXml("<YOUR-FULL-FILE-PATH>")
+# Set DataTable name
+$Datatable.TableName = "MyDataTable"
+
+# Writing DataTable to XML
+$Datatable.WriteXml("<YOUR-FULL-FILE-PATH>", [System.Data.XmlWriteMode]::WriteSchema)
+
+# Reading XML back to DataTable
+$newDatatable = New-Object System.Data.DataTable
+$newDatatable.ReadXml("<YOUR-FULL-FILE-PATH>")
+As you reuse the data, you need to get the vectors of each new search string (but not
+the entire datatable). As a learning exercise, try creating a PowerShell script to automate theInvoke-RestMethodcommand with the search string as a parameter.
+Invoke-RestMethod
+Using this approach, you can use embeddings as a search mechanism across documents in a knowledge base. The user can then take the top search result and use it for their downstream task, which prompted their initial query.
+Clean up resources
+If you created an Azure OpenAI resource solely for completing this tutorial and want to clean up and remove an Azure OpenAI resource, you'll need to delete your deployed models, and then delete the resource or associated resource group if it's dedicated to your test resource. Deleting the resource group also deletes any other resources associated with it.
+Azure portal
+Azure CLI
+Next steps
+Learn more about Azure OpenAI's models:
+Azure OpenAI Service models
+Store your embeddings and perform vector (similarity) search using your choice of Azure service:Azure AI SearchAzure SQL DatabaseAzure Cosmos DB for MongoDB vCoreAzure SQL DatabaseAzure Cosmos DB for NoSQLAzure Cosmos DB for PostgreSQLAzure Cache for Redis
+Azure AI Search
+Azure SQL Database
+Azure Cosmos DB for MongoDB vCore
+Azure SQL Database
+Azure Cosmos DB for NoSQL
+Azure Cosmos DB for PostgreSQL
+Azure Cache for Redis
+Feedback
+Was this page helpful?
+Additional resources

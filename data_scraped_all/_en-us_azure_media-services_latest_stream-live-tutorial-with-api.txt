@@ -1,0 +1,593 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Stream live with Media Services by using .NET 7.0
+Article
+2023-07-17
+1 contributor
+In this article
+
+
+Warning
+Azure Media Services will be retired June 30th, 2024. For more information, see theAMS Retirement Guide.
+In Azure Media Services,live eventsare responsible for processing live streaming content. A live event provides an
+input endpoint (ingest URL) that you then provide to a live encoder. The live event receives input streams from the live encoder using the RTMP/S or Smooth
+Streaming protocols and makes them available for streaming through one or morestreaming endpoints. Live events also provide a preview endpoint (preview URL) that you use to preview and validate your stream before further processing and delivery.
+This tutorial shows how to use .NET 7.0 to create apass-throughlive event. Pass-through live events are useful when you have an encoder that is capable of multi-bitrate, GOP aligned encoding on premises. It can a way to reduce cloud costs. If you wish to reduce bandwidth and send a single bitrate stream to the cloud for multi-bitrate encoding, you can use a transcoding live event with the 720P or 1080P encoding presets.
+In this tutorial, you will:
+Download a sample project.
+Examine the code that performs live streaming.
+Watch the event with Azure Media Player on theMedia Player demo site.
+Set up Event Grid to monitor the live event.
+Clean up resources.
+Prerequisites
+You need the following items to complete the tutorial:
+InstallVisual Studio Code for Windows/macOS/LinuxorVisual Studio 2022 for Windows or Mac.
+Install.NET 7.0 SDK
+Create a Media Services account. Be sure to copy theAPI Accessdetails for the account name, subscription ID, and resource group name in JSON format or store the values needed to connect to the Media Services account in the JSON file format used in thisappsettings.jsonfile.
+appsettings.json
+Follow the steps inAccess the Azure Media Services API with the Azure CLIand save the details. You'll need to use the account name, subscription Id, and resource group name in this sample, and enter them into theappsettings.jsonfile.
+appsettings.json
+You also need these items for live-streaming software:
+A camera or a device (like a laptop) that's used to broadcast an event.
+An on-premises software encoder that encodes your camera stream and sends it to the Media Services live-streaming service through the Real-Time Messaging Protocol (RTMP/S). For more information, seeRecommended on-premises live encoders. The stream has to be in RTMP/S or Smooth Streaming format. This sample assumes that you'll use Open Broadcaster Software (OBS) Studio to broadcast RTMP/S to the ingest endpoint.Install OBS Studio.
+Alternatively, you can try theOBS Quickstartto test the entire process with the Azure portal first.
+For monitoring the live event using Event Grid and Event Hubs, you can:
+1. Follow the steps inCreate and monitor Media Services events with Event Grid using the Azure portalor,
+1. Follow the steps near the end of this tutorial in theMonitoring Live Events using Event Grid and Event Hubssection of this article.
+Tip
+ReviewLive streaming with Media Services v3before proceeding.
+Download and configure the sample
+Clone the GitHub repository that contains the live-streaming .NET sample to your machine by using the following command:
+git clone https://github.com/Azure-Samples/media-services-v3-dotnet.git
+git clone https://github.com/Azure-Samples/media-services-v3-dotnet.git
+The live-streaming sample is in theLive/LiveEventWithDVRfolder.
+Openappsettings.jsonin your downloaded project. Replace the values with account name, subscription Id and the resource group name.
+appsettings.json
+Important
+This sample uses a unique suffix for each resource. If you cancel the debugging or terminate the app without running it through, you'll end up with multiple live events in your account. Be sure to stop the running live events. Otherwise,you'll be billed!
+Start using Media Services APIs with the .NET SDK
+Program.cs creates a reference to the Media Services account resource, using the options fromappsettings.json:
+appsettings.json
+var mediaServicesResourceId = MediaServicesAccountResource.CreateResourceIdentifier(
+    subscriptionId: options.AZURE_SUBSCRIPTION_ID.ToString(),
+    resourceGroupName: options.AZURE_RESOURCE_GROUP,
+    accountName: options.AZURE_MEDIA_SERVICES_ACCOUNT_NAME);
+var credential = new DefaultAzureCredential(includeInteractiveCredentials: true);
+var armClient = new ArmClient(credential);
+var mediaServicesAccount = armClient.GetMediaServicesAccountResource(mediaServicesResourceId);
+var mediaServicesResourceId = MediaServicesAccountResource.CreateResourceIdentifier(
+    subscriptionId: options.AZURE_SUBSCRIPTION_ID.ToString(),
+    resourceGroupName: options.AZURE_RESOURCE_GROUP,
+    accountName: options.AZURE_MEDIA_SERVICES_ACCOUNT_NAME);
+var credential = new DefaultAzureCredential(includeInteractiveCredentials: true);
+var armClient = new ArmClient(credential);
+var mediaServicesAccount = armClient.GetMediaServicesAccountResource(mediaServicesResourceId);
+Create a live event
+This section shows how to create apass-throughtype of live event (LiveEventEncodingType set to None). For information about the available types, seeLive event types. If you want to reduce your overall ingest bandwidth, or you don't have an on-premises multi-bitrate transcoder, you can use a live transcoding event for 720p or 1080p adaptive bitrate cloud encoding.
+You might want to specify the following things when you're creating the live event:
+The ingest protocol for the live event. Currently, the RTMPS, and Smooth Streaming protocols are supported. You can't change the protocol option while the live event is running. If you need different protocols, create a separate live event for each streaming protocol.
+The ingest protocol for the live event. Currently, the RTMPS, and Smooth Streaming protocols are supported. You can't change the protocol option while the live event is running. If you need different protocols, create a separate live event for each streaming protocol.
+IP restrictions on the ingest and preview. You can define the IP addresses that are allowed to ingest a video to this live event. Allowed IP addresses can be specified as one of these choices:A single IP address (for example, 10.0.0.1 or 2001:db8::1)An IP range that uses an IP address and a Classless Inter-Domain Routing (CIDR) subnet mask (for example, 10.0.0.1/22 or 2001:db8::/48)An IP range that uses an IP address and a dotted decimal subnet mask (for example, 10.0.0.1 255.255.252.0)If no IP addresses are specified and there's no rule definition, then no IP address will be allowed. To allow any IP address, create a rule and set 0.0.0.0/0 and ::/0. The IP addresses have to be in one of the following formats: IPv4 or IPv6 addresses with four numbers or a CIDR address range. For more information, seeRestrict access to DRM license and AES key delivery using IP allowlists.
+IP restrictions on the ingest and preview. You can define the IP addresses that are allowed to ingest a video to this live event. Allowed IP addresses can be specified as one of these choices:
+A single IP address (for example, 10.0.0.1 or 2001:db8::1)
+A single IP address (for example, 10.0.0.1 or 2001:db8::1)
+An IP range that uses an IP address and a Classless Inter-Domain Routing (CIDR) subnet mask (for example, 10.0.0.1/22 or 2001:db8::/48)
+An IP range that uses an IP address and a Classless Inter-Domain Routing (CIDR) subnet mask (for example, 10.0.0.1/22 or 2001:db8::/48)
+An IP range that uses an IP address and a dotted decimal subnet mask (for example, 10.0.0.1 255.255.252.0)If no IP addresses are specified and there's no rule definition, then no IP address will be allowed. To allow any IP address, create a rule and set 0.0.0.0/0 and ::/0. The IP addresses have to be in one of the following formats: IPv4 or IPv6 addresses with four numbers or a CIDR address range. For more information, seeRestrict access to DRM license and AES key delivery using IP allowlists.
+An IP range that uses an IP address and a dotted decimal subnet mask (for example, 10.0.0.1 255.255.252.0)
+If no IP addresses are specified and there's no rule definition, then no IP address will be allowed. To allow any IP address, create a rule and set 0.0.0.0/0 and ::/0. The IP addresses have to be in one of the following formats: IPv4 or IPv6 addresses with four numbers or a CIDR address range. For more information, seeRestrict access to DRM license and AES key delivery using IP allowlists.
+Autostart on an event as you create it. When autostart is set to true, the live event will start after creation. That means the billing starts as soon as the live event starts running. You must explicitly callStopon the live event resource to halt further billing. For more information, seeLive event states and billing.Standby modes are available to start the live event in a lower-cost "allocated" state that makes it faster to move to a running state. It's useful for situations like hot pools that need to hand out channels quickly to streamers.
+Autostart on an event as you create it. When autostart is set to true, the live event will start after creation. That means the billing starts as soon as the live event starts running. You must explicitly callStopon the live event resource to halt further billing. For more information, seeLive event states and billing.
+Stop
+Standby modes are available to start the live event in a lower-cost "allocated" state that makes it faster to move to a running state. It's useful for situations like hot pools that need to hand out channels quickly to streamers.
+A static host name and a unique GUID. For an ingest URL to be predictive and easier to maintain in a hardware-based live encoder, set theuseStaticHostnameproperty to true. For detailed information, seeLive event ingest URLs.var liveEvent = await mediaServicesAccount.GetMediaLiveEvents().CreateOrUpdateAsync(
+    WaitUntil.Completed,
+    liveEventName,
+    new MediaLiveEventData(mediaServicesAccount.Get().Value.Data.Location)
+    {
+        Description = "Sample Live Event from the .NET SDK sample",
+        UseStaticHostname = true,
+        // 1) Set up the input settings for the Live event...
+        Input = new LiveEventInput(streamingProtocol: LiveEventInputProtocol.Rtmp)
+        {
+            StreamingProtocol = LiveEventInputProtocol.Rtmp,
+            AccessToken = "acf7b6ef-8a37-425f-b8fc-51c2d6a5a86a", // used to make the ingest URL unique
+            KeyFrameIntervalDuration = TimeSpan.FromSeconds(2),
+            IPAllowedIPs =
+            {
+                new IPRange
+                {
+                    Name = "AllowAllIpV4Addresses",
+                    Address = IPAddress.Parse("0.0.0.0"),
+                    SubnetPrefixLength = 0
+                },
+                new IPRange
+                {
+                    Name = "AllowAllIpV6Addresses",
+                    Address = IPAddress.Parse("0::"),
+                    SubnetPrefixLength = 0
+                }
+            }
+        },
+        // 2) Set the live event to use pass-through or cloud encoding modes...
+        Encoding = new LiveEventEncoding()
+        {
+            EncodingType = LiveEventEncodingType.PassthroughBasic
+        },
+        // 3) Set up the Preview endpoint for monitoring
+        Preview = new LiveEventPreview
+        {
+            IPAllowedIPs =
+            {
+                new IPRange()
+                {
+                    Name = "AllowAllIpV4Addresses",
+                    Address = IPAddress.Parse("0.0.0.0"),
+                    SubnetPrefixLength = 0
+                },
+                new IPRange()
+                {
+                    Name = "AllowAllIpV6Addresses",
+                    Address = IPAddress.Parse("0::"),
+                    SubnetPrefixLength = 0
+                }
+            }
+        },
+        // 4) Set up more advanced options on the live event. Low Latency is the most common one. Set
+        //    this to Default or Low Latency. When using Low Latency mode, you must configure the Azure
+        //    Media Player to use the quick start heuristic profile or you won't notice the change. In
+        //    the AMP player client side JS options, set -  heuristicProfile: "Low Latency Heuristic
+        //    Profile". To use low latency optimally, you should tune your encoder settings down to 1
+        //    second GOP size instead of 2 seconds.
+        StreamOptions =
+        {
+            StreamOptionsFlag.LowLatency
+        },
+        // 5) Optionally enable live transcriptions if desired. This is only supported on
+        //    PassthroughStandard, and the transcoding live event types. It is not supported on Basic
+        //    pass-through type.
+        // WARNING: This is extra cost, so please check pricing before enabling.
+        //Transcriptions =
+        //{
+        //    new LiveEventTranscription
+        //    {
+        //        // The value should be in BCP-47 format (e.g: 'en-US'). See https://go.microsoft.com/fwlink/?linkid=2133742
+        //        Language = "en-us",
+        //        TrackName = "English" // set the name you want to appear in the output manifest
+        //    }
+        //}
+    },
+    autoStart: false);
+A static host name and a unique GUID. For an ingest URL to be predictive and easier to maintain in a hardware-based live encoder, set theuseStaticHostnameproperty to true. For detailed information, seeLive event ingest URLs.
+useStaticHostname
+var liveEvent = await mediaServicesAccount.GetMediaLiveEvents().CreateOrUpdateAsync(
+    WaitUntil.Completed,
+    liveEventName,
+    new MediaLiveEventData(mediaServicesAccount.Get().Value.Data.Location)
+    {
+        Description = "Sample Live Event from the .NET SDK sample",
+        UseStaticHostname = true,
+        // 1) Set up the input settings for the Live event...
+        Input = new LiveEventInput(streamingProtocol: LiveEventInputProtocol.Rtmp)
+        {
+            StreamingProtocol = LiveEventInputProtocol.Rtmp,
+            AccessToken = "acf7b6ef-8a37-425f-b8fc-51c2d6a5a86a", // used to make the ingest URL unique
+            KeyFrameIntervalDuration = TimeSpan.FromSeconds(2),
+            IPAllowedIPs =
+            {
+                new IPRange
+                {
+                    Name = "AllowAllIpV4Addresses",
+                    Address = IPAddress.Parse("0.0.0.0"),
+                    SubnetPrefixLength = 0
+                },
+                new IPRange
+                {
+                    Name = "AllowAllIpV6Addresses",
+                    Address = IPAddress.Parse("0::"),
+                    SubnetPrefixLength = 0
+                }
+            }
+        },
+        // 2) Set the live event to use pass-through or cloud encoding modes...
+        Encoding = new LiveEventEncoding()
+        {
+            EncodingType = LiveEventEncodingType.PassthroughBasic
+        },
+        // 3) Set up the Preview endpoint for monitoring
+        Preview = new LiveEventPreview
+        {
+            IPAllowedIPs =
+            {
+                new IPRange()
+                {
+                    Name = "AllowAllIpV4Addresses",
+                    Address = IPAddress.Parse("0.0.0.0"),
+                    SubnetPrefixLength = 0
+                },
+                new IPRange()
+                {
+                    Name = "AllowAllIpV6Addresses",
+                    Address = IPAddress.Parse("0::"),
+                    SubnetPrefixLength = 0
+                }
+            }
+        },
+        // 4) Set up more advanced options on the live event. Low Latency is the most common one. Set
+        //    this to Default or Low Latency. When using Low Latency mode, you must configure the Azure
+        //    Media Player to use the quick start heuristic profile or you won't notice the change. In
+        //    the AMP player client side JS options, set -  heuristicProfile: "Low Latency Heuristic
+        //    Profile". To use low latency optimally, you should tune your encoder settings down to 1
+        //    second GOP size instead of 2 seconds.
+        StreamOptions =
+        {
+            StreamOptionsFlag.LowLatency
+        },
+        // 5) Optionally enable live transcriptions if desired. This is only supported on
+        //    PassthroughStandard, and the transcoding live event types. It is not supported on Basic
+        //    pass-through type.
+        // WARNING: This is extra cost, so please check pricing before enabling.
+        //Transcriptions =
+        //{
+        //    new LiveEventTranscription
+        //    {
+        //        // The value should be in BCP-47 format (e.g: 'en-US'). See https://go.microsoft.com/fwlink/?linkid=2133742
+        //        Language = "en-us",
+        //        TrackName = "English" // set the name you want to appear in the output manifest
+        //    }
+        //}
+    },
+    autoStart: false);
+var liveEvent = await mediaServicesAccount.GetMediaLiveEvents().CreateOrUpdateAsync(
+    WaitUntil.Completed,
+    liveEventName,
+    new MediaLiveEventData(mediaServicesAccount.Get().Value.Data.Location)
+    {
+        Description = "Sample Live Event from the .NET SDK sample",
+        UseStaticHostname = true,
+        // 1) Set up the input settings for the Live event...
+        Input = new LiveEventInput(streamingProtocol: LiveEventInputProtocol.Rtmp)
+        {
+            StreamingProtocol = LiveEventInputProtocol.Rtmp,
+            AccessToken = "acf7b6ef-8a37-425f-b8fc-51c2d6a5a86a", // used to make the ingest URL unique
+            KeyFrameIntervalDuration = TimeSpan.FromSeconds(2),
+            IPAllowedIPs =
+            {
+                new IPRange
+                {
+                    Name = "AllowAllIpV4Addresses",
+                    Address = IPAddress.Parse("0.0.0.0"),
+                    SubnetPrefixLength = 0
+                },
+                new IPRange
+                {
+                    Name = "AllowAllIpV6Addresses",
+                    Address = IPAddress.Parse("0::"),
+                    SubnetPrefixLength = 0
+                }
+            }
+        },
+        // 2) Set the live event to use pass-through or cloud encoding modes...
+        Encoding = new LiveEventEncoding()
+        {
+            EncodingType = LiveEventEncodingType.PassthroughBasic
+        },
+        // 3) Set up the Preview endpoint for monitoring
+        Preview = new LiveEventPreview
+        {
+            IPAllowedIPs =
+            {
+                new IPRange()
+                {
+                    Name = "AllowAllIpV4Addresses",
+                    Address = IPAddress.Parse("0.0.0.0"),
+                    SubnetPrefixLength = 0
+                },
+                new IPRange()
+                {
+                    Name = "AllowAllIpV6Addresses",
+                    Address = IPAddress.Parse("0::"),
+                    SubnetPrefixLength = 0
+                }
+            }
+        },
+        // 4) Set up more advanced options on the live event. Low Latency is the most common one. Set
+        //    this to Default or Low Latency. When using Low Latency mode, you must configure the Azure
+        //    Media Player to use the quick start heuristic profile or you won't notice the change. In
+        //    the AMP player client side JS options, set -  heuristicProfile: "Low Latency Heuristic
+        //    Profile". To use low latency optimally, you should tune your encoder settings down to 1
+        //    second GOP size instead of 2 seconds.
+        StreamOptions =
+        {
+            StreamOptionsFlag.LowLatency
+        },
+        // 5) Optionally enable live transcriptions if desired. This is only supported on
+        //    PassthroughStandard, and the transcoding live event types. It is not supported on Basic
+        //    pass-through type.
+        // WARNING: This is extra cost, so please check pricing before enabling.
+        //Transcriptions =
+        //{
+        //    new LiveEventTranscription
+        //    {
+        //        // The value should be in BCP-47 format (e.g: 'en-US'). See https://go.microsoft.com/fwlink/?linkid=2133742
+        //        Language = "en-us",
+        //        TrackName = "English" // set the name you want to appear in the output manifest
+        //    }
+        //}
+    },
+    autoStart: false);
+Get ingest URLs
+After the Live Event is created, you can get ingest URLs that you'll provide to the live encoder. The encoder uses these URLs to input a live stream.
+// Get the RTMP ingest URL. The endpoints is a collection of RTMP primary and secondary,
+// and RTMPS primary and secondary URLs.
+Console.WriteLine($"The RTMP ingest URL to enter into OBS Studio is:");
+Console.WriteLine(liveEvent.Data.Input.Endpoints.First(x => x.Uri.Scheme == "rtmps").Uri);
+Console.WriteLine("Make sure to enter a Stream Key into the OBS Studio settings. It can be");
+Console.WriteLine("any value or you can repeat the accessToken used in the ingest URL path.");
+Console.WriteLine();
+// Get the RTMP ingest URL. The endpoints is a collection of RTMP primary and secondary,
+// and RTMPS primary and secondary URLs.
+Console.WriteLine($"The RTMP ingest URL to enter into OBS Studio is:");
+Console.WriteLine(liveEvent.Data.Input.Endpoints.First(x => x.Uri.Scheme == "rtmps").Uri);
+Console.WriteLine("Make sure to enter a Stream Key into the OBS Studio settings. It can be");
+Console.WriteLine("any value or you can repeat the accessToken used in the ingest URL path.");
+Console.WriteLine();
+Get the preview URL
+UsepreviewEndpointto preview and verify that the input from the encoder is being received.
+previewEndpoint
+Important
+Make sure that the video is flowing to the preview URL before you continue.
+// Use the previewEndpoint to preview and verify that the input from the encoder is actually
+// being received The preview endpoint URL also support the addition of various format strings
+// for HLS (format=m3u8-cmaf) and DASH (format=mpd-time-cmaf) for example. The default manifest
+// is Smooth.
+string previewEndpoint = liveEvent.Data.Preview.Endpoints.First().Uri.ToString();
+Console.WriteLine($"The preview URL is:");
+Console.WriteLine(previewEndpoint);
+Console.WriteLine();
+Console.WriteLine($"Open the live preview in your browser and use the Azure Media Player to monitor the preview playback:");
+Console.WriteLine($"https://ampdemo.azureedge.net/?url={HttpUtility.UrlEncode(previewEndpoint)}&heuristicprofile=lowlatency");
+Console.WriteLine();
+Console.WriteLine("Start the live stream now, sending the input to the ingest URL and verify");
+Console.WriteLine("that it is arriving with the preview URL.");
+Console.WriteLine("IMPORTANT: Make sure that the video is flowing to the Preview URL before continuing!");
+Console.WriteLine("Press enter to continue...");
+Console.ReadLine();
+// Use the previewEndpoint to preview and verify that the input from the encoder is actually
+// being received The preview endpoint URL also support the addition of various format strings
+// for HLS (format=m3u8-cmaf) and DASH (format=mpd-time-cmaf) for example. The default manifest
+// is Smooth.
+string previewEndpoint = liveEvent.Data.Preview.Endpoints.First().Uri.ToString();
+Console.WriteLine($"The preview URL is:");
+Console.WriteLine(previewEndpoint);
+Console.WriteLine();
+Console.WriteLine($"Open the live preview in your browser and use the Azure Media Player to monitor the preview playback:");
+Console.WriteLine($"https://ampdemo.azureedge.net/?url={HttpUtility.UrlEncode(previewEndpoint)}&heuristicprofile=lowlatency");
+Console.WriteLine();
+Console.WriteLine("Start the live stream now, sending the input to the ingest URL and verify");
+Console.WriteLine("that it is arriving with the preview URL.");
+Console.WriteLine("IMPORTANT: Make sure that the video is flowing to the Preview URL before continuing!");
+Console.WriteLine("Press enter to continue...");
+Console.ReadLine();
+Create and manage live events and live outputs
+After the live stream from the on-premises encoder is streaming to the live event, you can begin the live event by creating an asset, live output, and streaming locator. The stream is archived and is available to viewers through the streaming endpoint.
+The next section will walk through the creation of the asset and the live output.
+Create an asset
+Create an asset for the live output to use.
+// Create an Asset for the Live Output to use. Think of this as the "tape" that will be recorded
+// to. The asset entity points to a folder/container in your Azure Storage account
+Console.Write($"Creating the output Asset '{assetName}'...".PadRight(60));
+var asset = (await mediaServicesAccount.GetMediaAssets().CreateOrUpdateAsync(
+    WaitUntil.Completed,
+    assetName,
+    new MediaAssetData
+    {
+        Description = "My video description"
+    })).Value;
+Console.WriteLine("Done");
+// Create an Asset for the Live Output to use. Think of this as the "tape" that will be recorded
+// to. The asset entity points to a folder/container in your Azure Storage account
+Console.Write($"Creating the output Asset '{assetName}'...".PadRight(60));
+var asset = (await mediaServicesAccount.GetMediaAssets().CreateOrUpdateAsync(
+    WaitUntil.Completed,
+    assetName,
+    new MediaAssetData
+    {
+        Description = "My video description"
+    })).Value;
+Console.WriteLine("Done");
+Create a live output
+Live outputs start when they're created and stop when they're deleted. When you delete the live output, you're not deleting the output asset or content in the asset. The asset with the recording is available for on-demand streaming as long as it exists and there's a streaming locator associated with it.
+// Create the Live Output - think of this as the "tape recorder for the live event". Live
+// outputs are optional, but are required if you want to archive the event to storage, use the
+// asset for on-demand playback later, or if you want to enable cloud DVR time-shifting. We will
+// use the asset created above for the "tape" to record to.
+Console.Write($"Creating Live Output...".PadRight(60));
+var liveOutput = (await liveEvent.GetMediaLiveOutputs().CreateOrUpdateAsync(
+    WaitUntil.Completed,
+    liveOutputName,
+    new MediaLiveOutputData
+    {
+        AssetName = asset.Data.Name,
+        // The HLS and DASH manifest file name. This is recommended to
+        // set if you want a deterministic manifest path up front.
+        // archive window can be set from 3 minutes to 25 hours.
+        // Content that falls outside of ArchiveWindowLength is
+        // continuously discarded from storage and is non-recoverable.
+        // For a full event archive, set to the maximum, 25 hours.
+        ManifestName = manifestName,
+        ArchiveWindowLength = TimeSpan.FromHours(1)
+    })).Value;
+Console.WriteLine("Done");
+// Create the Live Output - think of this as the "tape recorder for the live event". Live
+// outputs are optional, but are required if you want to archive the event to storage, use the
+// asset for on-demand playback later, or if you want to enable cloud DVR time-shifting. We will
+// use the asset created above for the "tape" to record to.
+Console.Write($"Creating Live Output...".PadRight(60));
+var liveOutput = (await liveEvent.GetMediaLiveOutputs().CreateOrUpdateAsync(
+    WaitUntil.Completed,
+    liveOutputName,
+    new MediaLiveOutputData
+    {
+        AssetName = asset.Data.Name,
+        // The HLS and DASH manifest file name. This is recommended to
+        // set if you want a deterministic manifest path up front.
+        // archive window can be set from 3 minutes to 25 hours.
+        // Content that falls outside of ArchiveWindowLength is
+        // continuously discarded from storage and is non-recoverable.
+        // For a full event archive, set to the maximum, 25 hours.
+        ManifestName = manifestName,
+        ArchiveWindowLength = TimeSpan.FromHours(1)
+    })).Value;
+Console.WriteLine("Done");
+Create a streaming locator
+Note
+When your Media Services account is created, a default streaming endpoint is added to your account in the stopped state. To start streaming your content and take advantage ofdynamic packagingand dynamic encryption, the streaming endpoint from which you want to stream content has to be in the running state.
+You publish an asset by creating a streaming locator. The live event (up to the DVR window length) is viewable until the streaming locator's expiration or deletion, whichever comes first. It's how you make the video available for your viewing audience to see live and on demand. The same URL can be used to watch the live event, the DVR window, or the on-demand asset when the live event is finished and the live output is deleted.
+var streamingLocator = (await mediaServicesAccount.GetStreamingLocators().CreateOrUpdateAsync(
+    WaitUntil.Completed,
+    streamingLocatorName,
+    new StreamingLocatorData
+    {
+        AssetName = asset.Data.Name,
+        StreamingPolicyName = "Predefined_ClearStreamingOnly",
+        Filters =
+        {
+            filter.Data.Name
+        }
+    })).Value;
+var streamingLocator = (await mediaServicesAccount.GetStreamingLocators().CreateOrUpdateAsync(
+    WaitUntil.Completed,
+    streamingLocatorName,
+    new StreamingLocatorData
+    {
+        AssetName = asset.Data.Name,
+        StreamingPolicyName = "Predefined_ClearStreamingOnly",
+        Filters =
+        {
+            filter.Data.Name
+        }
+    })).Value;
+Watch the event
+Run the code. Use the output streaming URLs to watch your live event. Copy the streaming locator URL. You can use a media player of your choice. You can use theMedia Player demo siteto test your stream.  Enter the URL into the URL field and selectUpdate player.
+Monitoring Live Events using Event Grid and Event Hubs
+The sample project can use Event Grid and Event Hubs to monitor the Live Event. You can set up and use Event Grid using the following
+To enable monitoring:
+Use the Azure portal to create Event Hubs Namespace and an Event HubsSearch for âEvent Hubsâ using the text box at the top of the Azure portal.SelectEvent Hubfrom the list, then follow the instructions to create an Event Hubs Namespace.Navigate to the Event Hubs Namespace resource.SelectEvent Hubsfrom theEntitiessection of the portal menu.Create an Event Hubs in the Event Hubs namespace.Navigate to the Event Hubs resource.SelectAccess controlthenAdd, thenAdd role assignment.Select theAzure Event Hubs Data Receiverthen grant the access to yourself.SelectAccess controlthenAdd, thenAdd role assignment.Select theAzure Event Hubs Data Senderthen grant it to the Managed Identity created for the Media Services account.
+Search for âEvent Hubsâ using the text box at the top of the Azure portal.
+SelectEvent Hubfrom the list, then follow the instructions to create an Event Hubs Namespace.
+Navigate to the Event Hubs Namespace resource.
+SelectEvent Hubsfrom theEntitiessection of the portal menu.
+Create an Event Hubs in the Event Hubs namespace.
+Navigate to the Event Hubs resource.
+SelectAccess controlthenAdd, thenAdd role assignment.
+Select theAzure Event Hubs Data Receiverthen grant the access to yourself.
+SelectAccess controlthenAdd, thenAdd role assignment.
+Select theAzure Event Hubs Data Senderthen grant it to the Managed Identity created for the Media Services account.
+Use the Azure portal to create an Azure Storage account.After creating the storage account, navigate to the Storage Account resource.SelectAccess controlthenAdd, thenAdd role assignment.Select theStorage Blob Data Contributorthen grant this access to yourself.
+After creating the storage account, navigate to the Storage Account resource.
+SelectAccess controlthenAdd, thenAdd role assignment.
+Select theStorage Blob Data Contributorthen grant this access to yourself.
+Create an Event SubscriptionNavigate to the Media Services account.SelectEventsfrom the portal menu.Select+ Event Subscription.Enter a subscription name and a system article name.Set theEndpoint TypetoEvent Hub.Set the Event Hubs to the previously created Event Hubs and set the Managed Identity to the identity that was previously granted Sender access to the Event Hubs
+Navigate to the Media Services account.
+SelectEventsfrom the portal menu.
+Select+ Event Subscription.
+Enter a subscription name and a system article name.
+Set theEndpoint TypetoEvent Hub.
+Event Hub
+Set the Event Hubs to the previously created Event Hubs and set the Managed Identity to the identity that was previously granted Sender access to the Event Hubs
+Update theappsetttings.jsonfile.Set EVENT_HUB_NAMESPACE to the full name of the namespace. It should be similar tomyeventhub.servicebus.windows.net.Set EVENT_HUB_NAME.Set AZURE_STORAGE_ACCOUNT_NAME.
+appsetttings.json
+Set EVENT_HUB_NAMESPACE to the full name of the namespace. It should be similar tomyeventhub.servicebus.windows.net.
+myeventhub.servicebus.windows.net
+Set EVENT_HUB_NAME.
+Set AZURE_STORAGE_ACCOUNT_NAME.
+Run the sample again. With Event Hubs integration enabled, the sample logs events when the encoder connects and disconnects from the Live Event. Various other events are also logged.
+After running the sample, delete the Event Hubs and storage account if they're no longer needed.
+Clean up resources in your Media Services account
+If you're done streaming events and want to clean up the resources provisioned earlier, use the following procedure:
+Stop streaming from the encoder.
+Stop the live event. After the live event is stopped, it won't incur any charges. When you need to start it again, the same ingest URL can be used so you won't need to reconfigure your encoder.
+Stop the streaming endpoint, unless you want to continue to provide the archive of your live event as an on-demand stream. If the live event is in a stopped state, it won't incur any charges.
+if (liveOutput != null)
+{
+    Console.Write("Deleting the Live Output...".PadRight(60));
+    await liveOutput.DeleteAsync(WaitUntil.Completed);
+    Console.WriteLine("Done");
+}
+
+if (liveEvent?.Data.ResourceState == LiveEventResourceState.Running)
+{
+    Console.Write("Stopping the Live Event...".PadRight(60));
+    await liveEvent.StopAsync(WaitUntil.Completed, new LiveEventActionContent() { RemoveOutputsOnStop = true });
+    Console.WriteLine("Done");
+}
+
+if (liveEvent != null)
+{
+    Console.Write("Deleting the Live Event...".PadRight(60));
+    await liveEvent.DeleteAsync(WaitUntil.Completed);
+    Console.WriteLine("Done");
+}
+
+if (streamingLocator != null)
+{
+    Console.Write("Deleting the Streaming Locator...".PadRight(60));
+    await streamingLocator.DeleteAsync(WaitUntil.Completed);
+    Console.WriteLine("Done");
+}
+
+if (asset != null)
+{
+    Console.Write("Deleting the Asset...".PadRight(60));
+    await asset.DeleteAsync(WaitUntil.Completed);
+    Console.WriteLine("Done");
+}
+if (liveOutput != null)
+{
+    Console.Write("Deleting the Live Output...".PadRight(60));
+    await liveOutput.DeleteAsync(WaitUntil.Completed);
+    Console.WriteLine("Done");
+}
+
+if (liveEvent?.Data.ResourceState == LiveEventResourceState.Running)
+{
+    Console.Write("Stopping the Live Event...".PadRight(60));
+    await liveEvent.StopAsync(WaitUntil.Completed, new LiveEventActionContent() { RemoveOutputsOnStop = true });
+    Console.WriteLine("Done");
+}
+
+if (liveEvent != null)
+{
+    Console.Write("Deleting the Live Event...".PadRight(60));
+    await liveEvent.DeleteAsync(WaitUntil.Completed);
+    Console.WriteLine("Done");
+}
+
+if (streamingLocator != null)
+{
+    Console.Write("Deleting the Streaming Locator...".PadRight(60));
+    await streamingLocator.DeleteAsync(WaitUntil.Completed);
+    Console.WriteLine("Done");
+}
+
+if (asset != null)
+{
+    Console.Write("Deleting the Asset...".PadRight(60));
+    await asset.DeleteAsync(WaitUntil.Completed);
+    Console.WriteLine("Done");
+}
+Clean up remaining resources
+If you no longer need the Media Services and storage accounts that you created for this tutorial, delete the resource group that you created earlier.
+Run the following CLI command:
+az group delete --name amsResourceGroup
+az group delete --name amsResourceGroup
+Get help and support
+You can contact Media Services with questions or follow our updates by one of the following methods:
+Q & A
+Stack Overflow. Tag questions withazure-media-services.
+azure-media-services
+@MSFTAzureMediaor use@AzureSupportto request support.
+Open a support ticket through the Azure portal.
+Additional resources

@@ -1,0 +1,319 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Prepare a deployment for a confidential container on Azure Container Instances
+Article
+2024-08-29
+10 contributors
+In this article
+In Azure Container Instances, you can use confidential containers on the serverless platform to run container applications in a hardware-based and attested trusted execution environment (TEE). This capability can help protect data in use and provides in-memory encryption via Secure Nested Paging.
+In this tutorial, you learn how to:
+Create an Azure Resource Manager template (ARM template) for a confidential container group.
+Generate a confidential computing enforcement (CCE) policy.
+Deploy the confidential container group to Azure.
+Prerequisites
+To complete this tutorial, you must satisfy the following requirements:
+Azure CLI: You must have Azure CLI version 2.44.1 or later installed on your local computer. To find your version, runaz --version. If you need to install or upgrade, seeInstall the Azure CLI.
+Azure CLI: You must have Azure CLI version 2.44.1 or later installed on your local computer. To find your version, runaz --version. If you need to install or upgrade, seeInstall the Azure CLI.
+az --version
+Azure CLI confcom extension: You must have Azure CLI confcom extension version 0.30+ installed to generate confidential computing enforcement policies.az extension add -n confcom
+Azure CLI confcom extension: You must have Azure CLI confcom extension version 0.30+ installed to generate confidential computing enforcement policies.
+az extension add -n confcom
+az extension add -n confcom
+Docker: You need Docker installed locally. Docker provides packages that configure the Docker environment onmacOS,Windows, andLinux.This tutorial assumes a basic understanding of core Docker concepts like containers, container images, and basicdockercommands. For a primer on Docker and container basics, see theDocker overview.
+Docker: You need Docker installed locally. Docker provides packages that configure the Docker environment onmacOS,Windows, andLinux.
+This tutorial assumes a basic understanding of core Docker concepts like containers, container images, and basicdockercommands. For a primer on Docker and container basics, see theDocker overview.
+docker
+Important
+Because Azure Cloud Shell doesn't include the Docker daemon, you must install both the Azure CLI and Docker Engine on yourlocal computerto complete this tutorial. You can't use Azure Cloud Shell for this tutorial.
+Create an ARM template for a Container Instances container group
+In this tutorial, you deploy a Hello World application that generates a hardware attestation report. You start by creating an ARM template with a container group resource to define the properties of this application. You then use this ARM template with the Azure CLI confcom tooling to generate a CCE policy for attestation.
+This tutorial usesthis ARM templateas an example. To view the source code for this application, seeAzure Confidential Container Instances Hello World.
+The example template adds two properties to the Container Instances resource definition to make the container group confidential:
+sku: Enables you to select between confidential and standard container group deployments. If you don't add this property to the resource, the container group is a standard deployment.
+sku
+confidentialComputeProperties: Enables you to pass in a custom CCE policy for attestation of your container group. If you don't add this object to the resource, the software components that run within the container group won't validate.
+confidentialComputeProperties
+Note
+TheccePolicyparameter underconfidentialComputePropertiesis blank. You'll fill it in when you generate the policy later in the tutorial.
+ccePolicy
+confidentialComputeProperties
+Use your preferred text editor to save this ARM template on your local machine astemplate.json.
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "name": {
+        "type": "string",
+        "defaultValue": "helloworld",
+        "metadata": {
+          "description": "Name for the container group"
+        }
+      },
+      "location": {
+        "type": "string",
+        "defaultValue": "North Europe",
+        "metadata": {
+          "description": "Location for all resources."
+        }
+      },
+      "image": {
+        "type": "string",
+        "defaultValue": "mcr.microsoft.com/acc/samples/aci/helloworld:2.8",
+        "metadata": {
+          "description": "Container image to deploy. Should be of the form repoName/imagename:tag for images stored in public Docker Hub, or a fully qualified URI for other registries. Images from private registries require additional registry credentials."
+        }
+      },
+      "port": {
+        "type": "int",
+        "defaultValue": 80,
+        "metadata": {
+          "description": "Port to open on the container and the public IP address."
+        }
+      },
+      "cpuCores": {
+        "type": "int",
+        "defaultValue": 1,
+        "metadata": {
+          "description": "The number of CPU cores to allocate to the container."
+        }
+      },
+      "memoryInGb": {
+        "type": "int",
+        "defaultValue": 1,
+        "metadata": {
+          "description": "The amount of memory to allocate to the container in gigabytes."
+        }
+      },
+      "restartPolicy": {
+        "type": "string",
+        "defaultValue": "Never",
+        "allowedValues": [
+          "Always",
+          "Never",
+          "OnFailure"
+        ],
+        "metadata": {
+          "description": "The behavior of Azure runtime if container has stopped."
+        }
+      }
+    },
+    "resources": [
+      {
+        "type": "Microsoft.ContainerInstance/containerGroups",
+        "apiVersion": "2023-05-01",
+        "name": "[parameters('name')]",
+        "location": "[parameters('location')]",
+        "properties": {
+          "confidentialComputeProperties": {
+            "ccePolicy": ""
+          },
+          "containers": [
+            {
+              "name": "[parameters('name')]",
+              "properties": {
+                "image": "[parameters('image')]",
+                "ports": [
+                  {
+                    "port": "[parameters('port')]",
+                    "protocol": "TCP"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "[parameters('cpuCores')]",
+                    "memoryInGB": "[parameters('memoryInGb')]"
+                  }
+                }
+              }
+            }
+          ],
+          "sku": "Confidential",
+          "osType": "Linux",
+          "restartPolicy": "[parameters('restartPolicy')]",
+          "ipAddress": {
+            "type": "Public",
+            "ports": [
+              {
+                "port": "[parameters('port')]",
+                "protocol": "TCP"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "outputs": {
+      "containerIPv4Address": {
+        "type": "string",
+        "value": "[reference(resourceId('Microsoft.ContainerInstance/containerGroups', parameters('name'))).ipAddress.ip]"
+      }
+    }
+  }
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "name": {
+        "type": "string",
+        "defaultValue": "helloworld",
+        "metadata": {
+          "description": "Name for the container group"
+        }
+      },
+      "location": {
+        "type": "string",
+        "defaultValue": "North Europe",
+        "metadata": {
+          "description": "Location for all resources."
+        }
+      },
+      "image": {
+        "type": "string",
+        "defaultValue": "mcr.microsoft.com/acc/samples/aci/helloworld:2.8",
+        "metadata": {
+          "description": "Container image to deploy. Should be of the form repoName/imagename:tag for images stored in public Docker Hub, or a fully qualified URI for other registries. Images from private registries require additional registry credentials."
+        }
+      },
+      "port": {
+        "type": "int",
+        "defaultValue": 80,
+        "metadata": {
+          "description": "Port to open on the container and the public IP address."
+        }
+      },
+      "cpuCores": {
+        "type": "int",
+        "defaultValue": 1,
+        "metadata": {
+          "description": "The number of CPU cores to allocate to the container."
+        }
+      },
+      "memoryInGb": {
+        "type": "int",
+        "defaultValue": 1,
+        "metadata": {
+          "description": "The amount of memory to allocate to the container in gigabytes."
+        }
+      },
+      "restartPolicy": {
+        "type": "string",
+        "defaultValue": "Never",
+        "allowedValues": [
+          "Always",
+          "Never",
+          "OnFailure"
+        ],
+        "metadata": {
+          "description": "The behavior of Azure runtime if container has stopped."
+        }
+      }
+    },
+    "resources": [
+      {
+        "type": "Microsoft.ContainerInstance/containerGroups",
+        "apiVersion": "2023-05-01",
+        "name": "[parameters('name')]",
+        "location": "[parameters('location')]",
+        "properties": {
+          "confidentialComputeProperties": {
+            "ccePolicy": ""
+          },
+          "containers": [
+            {
+              "name": "[parameters('name')]",
+              "properties": {
+                "image": "[parameters('image')]",
+                "ports": [
+                  {
+                    "port": "[parameters('port')]",
+                    "protocol": "TCP"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "[parameters('cpuCores')]",
+                    "memoryInGB": "[parameters('memoryInGb')]"
+                  }
+                }
+              }
+            }
+          ],
+          "sku": "Confidential",
+          "osType": "Linux",
+          "restartPolicy": "[parameters('restartPolicy')]",
+          "ipAddress": {
+            "type": "Public",
+            "ports": [
+              {
+                "port": "[parameters('port')]",
+                "protocol": "TCP"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "outputs": {
+      "containerIPv4Address": {
+        "type": "string",
+        "value": "[reference(resourceId('Microsoft.ContainerInstance/containerGroups', parameters('name'))).ipAddress.ip]"
+      }
+    }
+  }
+Create a custom CCE policy
+With the ARM template that you crafted and the Azure CLI confcom extension, you can generate a custom CCE policy. The CCE policy is used for attestation. The tool takes the ARM template as an input to generate the policy. The policy enforces the specific container images, environment variables, mounts, and commands, which can then be validated when the container group starts up. For more information on the Azure CLI confcom extension, see thedocumentation on GitHub.
+To generate the CCE policy, run the following command by using the ARM template as input:az confcom acipolicygen -a .\template.jsonWhen this command finishes, a Base64 string generated as output will automatically appear in theccePolicyproperty of the ARM template.
+To generate the CCE policy, run the following command by using the ARM template as input:
+az confcom acipolicygen -a .\template.json
+az confcom acipolicygen -a .\template.json
+When this command finishes, a Base64 string generated as output will automatically appear in theccePolicyproperty of the ARM template.
+ccePolicy
+Deploy the template
+In the following steps, you use the Azure portal to deploy the template. You can also use Azure PowerShell, the Azure CLI, or the REST API. To learn about other deployment methods, seeDeploy templates.
+Select theDeploy to Azurebutton to sign in to Azure and begin a Container Instances deployment.
+Select theDeploy to Azurebutton to sign in to Azure and begin a Container Instances deployment.
+
+SelectBuild your own template in the editor.The template JSON that appears is mostly blank.
+SelectBuild your own template in the editor.
+
+The template JSON that appears is mostly blank.
+SelectLoad fileand uploadtemplate.json, which you modified by adding the CCE policy in the previous steps.
+SelectLoad fileand uploadtemplate.json, which you modified by adding the CCE policy in the previous steps.
+
+SelectSave.
+SelectSave.
+Select or enter the following values:Subscription: Select an Azure subscription.Resource group: SelectCreate new, enter a unique name for the resource group, and then selectOK.Name: Accept the generated name for the instance, or enter a name.Location: Select a location for the resource group. Choose a region whereconfidential containers are supported. Example:North Europe.Image: Accept the default image name. This sample Linux image displays a hardware attestation.Accept default values for the remaining properties, and then selectReview + create.
+Select or enter the following values:
+Subscription: Select an Azure subscription.
+Resource group: SelectCreate new, enter a unique name for the resource group, and then selectOK.
+Name: Accept the generated name for the instance, or enter a name.
+Location: Select a location for the resource group. Choose a region whereconfidential containers are supported. Example:North Europe.
+Image: Accept the default image name. This sample Linux image displays a hardware attestation.
+Accept default values for the remaining properties, and then selectReview + create.
+
+Review the terms and conditions. If you agree, selectI agree to the terms and conditions stated above.
+Review the terms and conditions. If you agree, selectI agree to the terms and conditions stated above.
+Wait until theDeployment succeedednotification appears. It confirms that you successfully created the instance.
+Wait until theDeployment succeedednotification appears. It confirms that you successfully created the instance.
+
+Review deployed resources
+In the following steps, you use the Azure portal to review the properties of the container instance. You can also use a tool such as theAzure CLI.
+In the portal, search forContainer Instances, and then select the container instance that you created.
+In the portal, search forContainer Instances, and then select the container instance that you created.
+On theOverviewpage, note the status of the instance and its IP address.
+On theOverviewpage, note the status of the instance and its IP address.
+
+When the status of the instance isRunning, go to the IP address in your browser.The presence of the attestation report below the Azure Container Instances logo confirms that the container is running on hardware that supports a TEE.If you deploy to hardware that doesn't support a TEE (for example, by choosing a region where Confidential Container Instances isn't available), no attestation report appears.
+When the status of the instance isRunning, go to the IP address in your browser.
+
+The presence of the attestation report below the Azure Container Instances logo confirms that the container is running on hardware that supports a TEE.
+If you deploy to hardware that doesn't support a TEE (for example, by choosing a region where Confidential Container Instances isn't available), no attestation report appears.
+Related content
+Now that you deployed a confidential container group on Container Instances, you can learn more about how policies are enforced:
+Confidential containers on Azure Container Instances
+Azure CLI confcom extension examples
+Confidential Hello World application
+Feedback
+Was this page helpful?
+Additional resources

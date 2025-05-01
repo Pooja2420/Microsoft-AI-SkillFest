@@ -1,0 +1,233 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Create a Jenkins pipeline using GitHub and Docker
+Article
+2021-01-22
+5 contributors
+In this article
+Important
+Many Azure services have Jenkins plug-ins. Some of these plug-ins will be out of support as of February 29, 2024. Azure CLI is the currently recommended way to integrate Jenkins with Azure services. For more information, refer to the articleJenkins plug-ins for Azure.
+To automate the build and test phase of application development, you can use a continuous integration and deployment (CI/CD) pipeline. In this tutorial, you create a CI/CD pipeline on an Azure VM including how to:
+Create a Jenkins VM
+Install and configure Jenkins
+Create webhook integration between GitHub and Jenkins
+Create and trigger Jenkins build jobs from GitHub commits
+Create a Docker image for your app
+Verify GitHub commits build new Docker image and updates running app
+This tutorial uses the CLI within theAzure Cloud Shell, which is constantly updated to the latest version. To open the Cloud Shell, selectTry itfrom the top of any code block.
+If you choose to install and use the CLI locally, this tutorial requires that you are running the Azure CLI version 2.0.30 or later. Runaz --versionto find the version. If you need to install or upgrade, seeInstall Azure CLI.
+az --version
+Create Jenkins instance
+In a previous tutorial onHow to customize a Linux virtual machine on first boot, you learned how to automate VM customization with cloud-init. This tutorial uses a cloud-init file to install Jenkins and Docker on a VM. Jenkins is a popular open-source automation server that integrates seamlessly with Azure to enable continuous integration (CI) and continuous delivery (CD). For more tutorials on how to use Jenkins, see theJenkins in Azure hub.
+In your current shell, create a file namedcloud-init-jenkins.txtand paste the following configuration. For example, create the file in the Cloud Shell not on your local machine. Entersensible-editor cloud-init-jenkins.txtto create the file and see a list of available editors. Make sure that the whole cloud-init file is copied correctly, especially the first line:
+sensible-editor cloud-init-jenkins.txt
+#cloud-config
+package_upgrade: true
+write_files:
+  - path: /etc/systemd/system/docker.service.d/docker.conf
+    content: |
+      [Service]
+        ExecStart=
+        ExecStart=/usr/bin/dockerd
+  - path: /etc/docker/daemon.json
+    content: |
+      {
+        "hosts": ["fd://","tcp://127.0.0.1:2375"]
+      }
+runcmd:
+  - apt install openjdk-8-jre-headless -y
+  - wget -q -O - https://pkg.jenkins.io/debian/jenkins-ci.org.key | sudo apt-key add -
+  - sh -c 'echo deb https://pkg.jenkins.io/debian-stable binary/ > /etc/apt/sources.list.d/jenkins.list'
+  - apt-get update && apt-get install jenkins -y
+  - curl -sSL https://get.docker.com/ | sh
+  - usermod -aG docker azureuser
+  - usermod -aG docker jenkins
+  - service jenkins restart
+#cloud-config
+package_upgrade: true
+write_files:
+  - path: /etc/systemd/system/docker.service.d/docker.conf
+    content: |
+      [Service]
+        ExecStart=
+        ExecStart=/usr/bin/dockerd
+  - path: /etc/docker/daemon.json
+    content: |
+      {
+        "hosts": ["fd://","tcp://127.0.0.1:2375"]
+      }
+runcmd:
+  - apt install openjdk-8-jre-headless -y
+  - wget -q -O - https://pkg.jenkins.io/debian/jenkins-ci.org.key | sudo apt-key add -
+  - sh -c 'echo deb https://pkg.jenkins.io/debian-stable binary/ > /etc/apt/sources.list.d/jenkins.list'
+  - apt-get update && apt-get install jenkins -y
+  - curl -sSL https://get.docker.com/ | sh
+  - usermod -aG docker azureuser
+  - usermod -aG docker jenkins
+  - service jenkins restart
+Before you can create a VM, create a resource group withaz group create. The following example creates a resource group namedmyResourceGroupJenkinsin theeastuslocation:
+az group create --name myResourceGroupJenkins --location eastus
+az group create --name myResourceGroupJenkins --location eastus
+Now create a VM withaz vm create. Use the--custom-dataparameter to pass in your cloud-init config file. Provide the full path tocloud-init-jenkins.txtif you saved the file outside of your present working directory.
+--custom-data
+az vm create --resource-group myResourceGroupJenkins \
+    --name myVM \
+    --image UbuntuLTS \
+    --admin-username azureuser \
+    --generate-ssh-keys \
+    --custom-data cloud-init-jenkins.txt
+az vm create --resource-group myResourceGroupJenkins \
+    --name myVM \
+    --image UbuntuLTS \
+    --admin-username azureuser \
+    --generate-ssh-keys \
+    --custom-data cloud-init-jenkins.txt
+It takes a few minutes for the VM to be created and configured.
+To allow web traffic to reach your VM, useaz vm open-portto open port8080for Jenkins traffic and port1337for the Node.js app that is used to run a sample app:
+az vm open-port --resource-group myResourceGroupJenkins --name myVM --port 8080 --priority 1001
+az vm open-port --resource-group myResourceGroupJenkins --name myVM --port 1337 --priority 1002
+az vm open-port --resource-group myResourceGroupJenkins --name myVM --port 8080 --priority 1001
+az vm open-port --resource-group myResourceGroupJenkins --name myVM --port 1337 --priority 1002
+Configure Jenkins
+To access your Jenkins instance, obtain the public IP address of your VM:
+az vm show --resource-group myResourceGroupJenkins --name myVM -d --query [publicIps] --o tsv
+az vm show --resource-group myResourceGroupJenkins --name myVM -d --query [publicIps] --o tsv
+For security purposes, you need to enter the initial admin password that is stored in a text file on your VM to start the Jenkins install. Use the public IP address obtained in the previous step to SSH to your VM:
+ssh azureuser@<publicIps>
+ssh azureuser@<publicIps>
+Verify Jenkins is running using theservicecommand:
+service
+$ service jenkins status
+â jenkins.service - LSB: Start Jenkins at boot time
+   Loaded: loaded (/etc/init.d/jenkins; generated)
+   Active: active (exited) since Tue 2019-02-12 16:16:11 UTC; 55s ago
+     Docs: man:systemd-sysv-generator(8)
+    Tasks: 0 (limit: 4103)
+   CGroup: /system.slice/jenkins.service
+
+Feb 12 16:16:10 myVM systemd[1]: Starting LSB: Start Jenkins at boot time...
+...
+$ service jenkins status
+â jenkins.service - LSB: Start Jenkins at boot time
+   Loaded: loaded (/etc/init.d/jenkins; generated)
+   Active: active (exited) since Tue 2019-02-12 16:16:11 UTC; 55s ago
+     Docs: man:systemd-sysv-generator(8)
+    Tasks: 0 (limit: 4103)
+   CGroup: /system.slice/jenkins.service
+
+Feb 12 16:16:10 myVM systemd[1]: Starting LSB: Start Jenkins at boot time...
+...
+View theinitialAdminPasswordfor your Jenkins install and copy it:
+initialAdminPassword
+sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+If the file isn't available yet, wait a couple more minutes for cloud-init to complete the Jenkins and Docker install.
+Now open a web browser and go tohttp://<publicIps>:8080. Complete the initial Jenkins setup as follows:
+http://<publicIps>:8080
+ChooseSelect plug-ins to install
+Search forGitHubin the text box across the top. Check the box forGitHub, then selectInstall
+Create the first admin user. Enter a username, such asadmin, then provide your own secure password. Finally, type a full name and e-mail address.
+SelectSave and Finish
+Once Jenkins is ready, selectStart using JenkinsIf your web browser displays a blank page when you start using Jenkins, restart the Jenkins service. From your SSH session, typesudo service jenkins restart, then refresh you web browser.
+If your web browser displays a blank page when you start using Jenkins, restart the Jenkins service. From your SSH session, typesudo service jenkins restart, then refresh you web browser.
+sudo service jenkins restart
+If needed, log in to Jenkins with the username and password you created.
+Create GitHub webhook
+To configure the integration with GitHub, open theNode.js Hello World sample appfrom the Azure samples repo. To fork the repo to your own GitHub account, select theForkbutton in the top right-hand corner.
+Create a webhook inside the fork you created:
+SelectSettings, then selectWebhookson the left-hand side.
+ChooseAdd webhook, then enterJenkinsin filter box.
+For thePayload URL, enterhttp://<publicIps>:8080/github-webhook/. Make sure you include the trailing /
+http://<publicIps>:8080/github-webhook/
+ForContent type, selectapplication/x-www-form-urlencoded.
+ForWhich events would you like to trigger this webhook?, selectJust the push event.
+SetActiveto checked.
+ClickAdd webhook.
+
+Create Jenkins job
+To have Jenkins respond to an event in GitHub such as committing code, create a Jenkins job. Use the URLs for your own GitHub fork.
+In your Jenkins website, selectCreate new jobsfrom the home page:
+EnterHelloWorldas job name. ChooseFreestyle project, then selectOK.
+Under theGeneralsection, selectGitHub projectand enter your forked repo URL, such ashttps://github.com/cynthn/nodejs-docs-hello-world
+https://github.com/cynthn/nodejs-docs-hello-world
+Under theSource code managementsection, selectGit, enter your forked repo.gitURL, such ashttps://github.com/cynthn/nodejs-docs-hello-world.git
+https://github.com/cynthn/nodejs-docs-hello-world.git
+Under theBuild Triggerssection, selectGitHub hook trigger for GITscm polling.
+Under theBuildsection, chooseAdd build step. SelectExecute shell, then enterecho "Test"in the command window.
+echo "Test"
+SelectSaveat the bottom of the jobs window.
+Test GitHub integration
+To test the GitHub integration with Jenkins, commit a change in your fork.
+Back in GitHub web UI, select your forked repo, and then select theindex.jsfile. Select the pencil icon to edit this file so line 6 reads:
+response.end("Hello World!");
+response.end("Hello World!");
+To commit your changes, select theCommit changesbutton at the bottom.
+In Jenkins, a new build starts under theBuild historysection of the bottom left-hand corner of your job page. Choose the build number link and selectConsole outputon the left-hand side. You can view the steps Jenkins takes as your code is pulled from GitHub and the build action outputs the messageTestto the console. Each time a commit is made in GitHub, the webhook reaches out to Jenkins and triggers a new build in this way.
+Test
+Define Docker build image
+To see the Node.js app running based on your GitHub commits, lets build a Docker image to run the app. The image is built from a Dockerfile that defines how to configure the container that runs the app.
+From the SSH connection to your VM, change to the Jenkins workspace directory named after the job you created in a previous step. In this example, that was namedHelloWorld.
+cd /var/lib/jenkins/workspace/HelloWorld
+cd /var/lib/jenkins/workspace/HelloWorld
+Create a file in this workspace directory withsudo sensible-editor Dockerfileand paste the following contents. Make sure that the whole Dockerfile is copied correctly, especially the first line:
+sudo sensible-editor Dockerfile
+FROM node:alpine
+
+EXPOSE 1337
+
+WORKDIR /var/www
+COPY package.json /var/www/
+RUN npm install
+COPY index.js /var/www/
+FROM node:alpine
+
+EXPOSE 1337
+
+WORKDIR /var/www
+COPY package.json /var/www/
+RUN npm install
+COPY index.js /var/www/
+This Dockerfile uses the base Node.js image using Alpine Linux, exposes port 1337 that the Hello World app runs on, then copies the app files and initializes it.
+Create Jenkins build rules
+In a previous step, you created a basic Jenkins build rule that output a message to the console. Lets create the build step to use our Dockerfile and run the app.
+Back in your Jenkins instance, select the job you created in a previous step. SelectConfigureon the left-hand side and scroll down to theBuildsection:
+Remove your existingecho "Test"build step. Select the red cross on the top right-hand corner of the existing build step box.
+Remove your existingecho "Test"build step. Select the red cross on the top right-hand corner of the existing build step box.
+echo "Test"
+ChooseAdd build step, then selectExecute shell
+ChooseAdd build step, then selectExecute shell
+In theCommandbox, enter the following Docker commands, then selectSave:docker build --tag helloworld:$BUILD_NUMBER .
+docker stop helloworld && docker rm helloworld
+docker run --name helloworld -p 1337:1337 helloworld:$BUILD_NUMBER node /var/www/index.js &
+In theCommandbox, enter the following Docker commands, then selectSave:
+docker build --tag helloworld:$BUILD_NUMBER .
+docker stop helloworld && docker rm helloworld
+docker run --name helloworld -p 1337:1337 helloworld:$BUILD_NUMBER node /var/www/index.js &
+docker build --tag helloworld:$BUILD_NUMBER .
+docker stop helloworld && docker rm helloworld
+docker run --name helloworld -p 1337:1337 helloworld:$BUILD_NUMBER node /var/www/index.js &
+The Docker build steps create an image and tag it with the Jenkins build number so you can maintain a history of images. Any existing containers running the app are stopped and then removed. A new container is then started using the image and runs your Node.js app based on the latest commits in GitHub.
+Test your pipeline
+To see the whole pipeline in action, edit theindex.jsfile in your forked GitHub repo again and selectCommit change. A new job starts in Jenkins based on the webhook for GitHub. It takes a few seconds to create the Docker image and start your app in a new container.
+If needed, obtain the public IP address of your VM again:
+az vm show --resource-group myResourceGroupJenkins --name myVM -d --query [publicIps] --o tsv
+az vm show --resource-group myResourceGroupJenkins --name myVM -d --query [publicIps] --o tsv
+Open a web browser and enterhttp://<publicIps>:1337. Your Node.js app is displayed and reflects the latest commits in your GitHub fork as follows:
+http://<publicIps>:1337
+
+Now make another edit to theindex.jsfile in GitHub and commit the change. Wait a few seconds for the job to complete in Jenkins, then refresh your web browser to see the updated version of your app running in a new container as follows:
+
+Next steps
+In this tutorial, you configured GitHub to run a Jenkins build job on each code commit and then deploy a Docker container to test your app. You learned how to:
+Create a Jenkins VM
+Install and configure Jenkins
+Create webhook integration between GitHub and Jenkins
+Create and trigger Jenkins build jobs from GitHub commits
+Create a Docker image for your app
+Verify GitHub commits build new Docker image and updates running app
+Advance to the next tutorial to learn more about how to integrate Jenkins with Azure DevOps Services.
+Deploy apps with Jenkins and Azure DevOps Services
+Feedback
+Was this page helpful?
+Additional resources

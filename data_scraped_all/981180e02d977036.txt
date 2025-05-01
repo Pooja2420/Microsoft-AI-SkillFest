@@ -1,0 +1,312 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Migrate Tomcat applications to containers on Azure Kubernetes Service (AKS)
+Article
+2024-11-25
+6 contributors
+In this article
+This guide describes what you should be aware of when you want to migrate an existing Tomcat application to run on Azure Kubernetes Service (AKS).
+Pre-migration
+To ensure a successful migration, before you start, complete the assessment and inventory steps described in the following sections.
+Inventory external resources
+External resources, such as data sources, JMS message brokers, and others are injected via Java Naming and Directory Interface (JNDI). Some such resources may require migration or reconfiguration.
+Inspect theMETA-INF/context.xmlfile. Look for<Resource>elements inside the<Context>element.
+<Resource>
+<Context>
+Inspect the$CATALINA_BASE/conf/context.xmland$CATALINA_BASE/conf/server.xmlfiles as well as the.xmlfiles found in$CATALINA_BASE/conf/<engine-name>/<host-name>directories.
+Incontext.xmlfiles, JNDI resources will be described by the<Resource>elements inside the top-level<Context>element.
+<Resource>
+<Context>
+Inserver.xmlfiles, JNDI resources will be described by the<Resource>elements inside the<GlobalNamingResources>element.
+<Resource>
+<GlobalNamingResources>
+Datasources are JNDI resources with thetypeattribute set tojavax.sql.DataSource. For each datasource, document the following information:
+type
+javax.sql.DataSource
+What is the datasource name?
+What is the connection pool configuration?
+Where can I find the JDBC driver JAR file?
+For more information, seeJNDI Datasource HOW-TOin the Tomcat documentation.
+It isn't feasible to document every possible external dependency in this guide. It's your team's responsibility to verify that you can satisfy every external dependency of your application after the migration.
+Inventory secrets
+Check all properties and configuration files on the production server(s) for any secret strings and passwords. Be sure to checkserver.xmlandcontext.xmlin$CATALINA_BASE/conf. You may also find configuration files containing passwords or credentials inside your application. These may includeMETA-INF/context.xml, and, for Spring Boot applications,application.propertiesorapplication.ymlfiles.
+Determine whether and how the file system is used
+Any usage of the file system on the application server will require reconfiguration or, in rare cases, architectural changes. You may identify some or all of the following scenarios.
+If your application currently serves static content, you need an alternate location for it. You should consider moving static content to Azure Blob Storage and adding Azure Front Door for fast downloads globally. For more information, seeStatic website hosting in Azure StorageandIntegrate an Azure Storage account with Azure Front Door.
+For files that are frequently written and read by your application (such as temporary data files), or static files that are visible only to your application, you can mount Azure Storage shares as persistent volumes. For more information, seeCreate and use a volume with Azure Files in Azure Kubernetes Service (AKS).
+Identify session persistence mechanism
+To identify the session persistence manager in use, inspect thecontext.xmlfiles in your application and Tomcat configuration. Look for the<Manager>element, and then note the value of theclassNameattribute.
+<Manager>
+className
+Tomcat's built-inPersistentManagerimplementations, such asStandardManagerorFileStorearen't designed for use with a distributed, scaled platform such as Kubernetes. AKS may load balance among several pods and transparently restart any pod at any time, persisting mutable state to a file system isn't recommended.
+If session persistence is required, you'll need to use an alternatePersistentManagerimplementation that will write to an external data store, such as VMware Tanzu Session Manager with Redis Cache. For more information, seeUse Redis as a session cache with Tomcat.
+PersistentManager
+Special cases
+Certain production scenarios may require additional changes or impose additional limitations. While such scenarios can be infrequent, it is important to ensure that they are either inapplicable to your application or correctly resolved.
+Scheduled jobs, such as Quartz Scheduler tasks or cron jobs, can't be used with containerized Tomcat deployments. If your application is scaled out, one scheduled job may run more than once per scheduled period. This situation can lead to unintended consequences.
+Inventory any scheduled jobs, inside or outside the application server.
+If your application contains any code that is accommodating the OS your application is running on, then your application needs to be refactored to NOT rely on the underlying OS. For instance, any uses of/or\in file system paths may need to be replaced withFile.SeparatororPath.get.
+/
+\
+File.Separator
+Path.get
+MemoryRealmrequires a persisted XML file. On Kubernetes, this file will need to be added to the container image or uploaded toshared storage that is made available to containers. ThepathNameparameter will have to be modified accordingly.
+pathName
+To determine whetherMemoryRealmis currently used, inspect yourserver.xmlandcontext.xmlfiles and search for<Realm>elements where theclassNameattribute is set toorg.apache.catalina.realm.MemoryRealm.
+MemoryRealm
+<Realm>
+className
+org.apache.catalina.realm.MemoryRealm
+In containerized deployments, SSL sessions are typically offloaded outside the application container, usually by the ingress controller. If your application requiresSSL session tracking, ensure the SSL traffic gets passed through to the application container directly.
+IfAccessLogValveis used, thedirectoryparameter should be set to amounted Azure Files shareor one of its subdirectories.
+directory
+In-place testing
+Before you create container images, migrate your application to the JDK and Tomcat that you intend to use on AKS. Test your application thoroughly to ensure compatibility and performance.
+Parameterize the configuration
+In the pre-migration, you'll likely have identified secrets and external dependencies, such as datasources, inserver.xmlandcontext.xmlfiles. For each item thus identified, replace any username, password, connection string, or URL with an environment variable.
+Note
+Microsoft recommends using the most secure authentication flow available. The authentication flow described in this procedure, such as for databases, caches, messaging, or AI services, requires a very high degree of trust in the application and carries risks not present in other flows. Use this flow only when more secure options, like managed identities for passwordless or keyless connections, are not viable. For local machine operations, prefer user identities for passwordless or keyless connections.
+For example, suppose thecontext.xmlfile contains the following element:
+<Resource
+    name="jdbc/dbconnection"
+    type="javax.sql.DataSource"
+    url="jdbc:postgresql://postgresdb.contoso.com/wickedsecret?ssl=true"
+    driverClassName="org.postgresql.Driver"
+    username="postgres"
+    password="{password}"
+/>
+<Resource
+    name="jdbc/dbconnection"
+    type="javax.sql.DataSource"
+    url="jdbc:postgresql://postgresdb.contoso.com/wickedsecret?ssl=true"
+    driverClassName="org.postgresql.Driver"
+    username="postgres"
+    password="{password}"
+/>
+In this case, you could change it as shown in the following example:
+<Resource
+    name="jdbc/dbconnection"
+    type="javax.sql.DataSource"
+    url="${postgresdb.connectionString}"
+    driverClassName="org.postgresql.Driver"
+    username="${postgresdb.username}"
+    password="${postgresdb.password}"
+/>
+<Resource
+    name="jdbc/dbconnection"
+    type="javax.sql.DataSource"
+    url="${postgresdb.connectionString}"
+    driverClassName="org.postgresql.Driver"
+    username="${postgresdb.username}"
+    password="${postgresdb.password}"
+/>
+Migration
+With the exception of the first step ("Provision container registry and AKS"), we recommend that you follow the steps below individually for each application (WAR file) you wish to migrate.
+Note
+Some Tomcat deployments may have multiple applications running on a single Tomcat server. If this is the case in your deployment, we strongly recommend running each application in a separate pod. This enables you to optimize resource utilization for each application while minimizing complexity and coupling.
+Provision container registry and AKS
+Create a container registry and an Azure Kubernetes cluster whose Service Principal has the Reader role on the registry. Be sure tochoose the appropriate network modelfor your cluster's networking requirements.
+az group create \
+    --resource-group $resourceGroup \
+    --location eastus
+az acr create \
+    --resource-group $resourceGroup \
+    --name $acrName \
+    --sku Standard
+az aks create \
+    --resource-group $resourceGroup \
+    --name $aksName \
+    --attach-acr $acrName \
+    --network-plugin azure
+az group create \
+    --resource-group $resourceGroup \
+    --location eastus
+az acr create \
+    --resource-group $resourceGroup \
+    --name $acrName \
+    --sku Standard
+az aks create \
+    --resource-group $resourceGroup \
+    --name $aksName \
+    --attach-acr $acrName \
+    --network-plugin azure
+Prepare the deployment artifacts
+Clone theTomcat On Containers Quickstart GitHub repository. It contains a Dockerfile and Tomcat configuration files with a number of recommended optimizations. In the steps below, we outline modifications you'll likely need to make to these files before building the container image and deploying to AKS.
+If you intend to useTomcat Clusteringon AKS, ensure that the necessary port ranges are exposed in the Dockerfile. In order to specify the server IP address inserver.xml, be sure to use a value from a variable that is initialized at container startup to the pod's IP address.
+Alternatively, session state can bepersisted to an alternate locationto be available across replicas.
+To determine whether your application uses clustering, look for the<Cluster>element inside the<Host>or<Engine>elements in theserver.xmlfile.
+<Cluster>
+<Host>
+<Engine>
+Editserver.xmlto add the resources you prepared in the pre-migration steps, such as Data Sources, as shown in the following example:
+Note
+Microsoft recommends using the most secure authentication flow available. The authentication flow described in this procedure, such as for databases, caches, messaging, or AI services, requires a very high degree of trust in the application and carries risks not present in other flows. Use this flow only when more secure options, like managed identities for passwordless or keyless connections, are not viable. For local machine operations, prefer user identities for passwordless or keyless connections.
+<!-- Global JNDI resources
+      Documentation at /docs/jndi-resources-howto.html
+-->
+<GlobalNamingResources>
+    <!-- Editable user database that can also be used by
+         UserDatabaseRealm to authenticate users
+    -->
+    <Resource name="UserDatabase" auth="Container"
+              type="org.apache.catalina.UserDatabase"
+              description="User database that can be updated and saved"
+              factory="org.apache.catalina.users.MemoryUserDatabaseFactory"
+              pathname="conf/tomcat-users.xml"
+               />
+
+    <!-- Migrated datasources here: -->
+    <Resource
+        name="jdbc/dbconnection"
+        type="javax.sql.DataSource"
+        url="${postgresdb.connectionString}"
+        driverClassName="org.postgresql.Driver"
+        username="${postgresdb.username}"
+        password="${postgresdb.password}"
+    />
+    <!-- End of migrated datasources -->
+</GlobalNamingResources>
+<!-- Global JNDI resources
+      Documentation at /docs/jndi-resources-howto.html
+-->
+<GlobalNamingResources>
+    <!-- Editable user database that can also be used by
+         UserDatabaseRealm to authenticate users
+    -->
+    <Resource name="UserDatabase" auth="Container"
+              type="org.apache.catalina.UserDatabase"
+              description="User database that can be updated and saved"
+              factory="org.apache.catalina.users.MemoryUserDatabaseFactory"
+              pathname="conf/tomcat-users.xml"
+               />
+
+    <!-- Migrated datasources here: -->
+    <Resource
+        name="jdbc/dbconnection"
+        type="javax.sql.DataSource"
+        url="${postgresdb.connectionString}"
+        driverClassName="org.postgresql.Driver"
+        username="${postgresdb.username}"
+        password="${postgresdb.password}"
+    />
+    <!-- End of migrated datasources -->
+</GlobalNamingResources>
+For additional data source instructions, see the following sections of theJNDI Datasource How-Toin the Tomcat documentation:
+MySQL
+PostgreSQL
+SQL Server
+Build and push the image
+The simplest way to build and upload the image to Azure Container Registry (ACR) for use by AKS is to use theaz acr buildcommand. This command doesn't require Docker to be installed on your computer. For example, if you have the Dockerfile above and the application packagepetclinic.warin the current directory, you can build the container image in ACR with one step:
+az acr build
+az acr build \
+    --image "${acrName}.azurecr.io/petclinic:{{.Run.ID}}" \
+    --registry $acrName \
+    --build-arg APP_FILE=petclinic.war \
+    --build-arg=prod.server.xml .
+az acr build \
+    --image "${acrName}.azurecr.io/petclinic:{{.Run.ID}}" \
+    --registry $acrName \
+    --build-arg APP_FILE=petclinic.war \
+    --build-arg=prod.server.xml .
+You can omit the--build-arg APP_FILE...parameter if your WAR file is namedROOT.war. You can omit the--build-arg SERVER_XML...parameter if your server XML file is namedserver.xml. Both files must be in the same directory asDockerfile.
+--build-arg APP_FILE...
+--build-arg SERVER_XML...
+Alternatively, you can use Docker CLI to build the image locally. This approach can simplify testing and refining the image before initial deployment to ACR. However, it requires Docker CLI to be installed and Docker daemon to be running.
+# Build the image locally
+sudo docker build . --build-arg APP_FILE=petclinic.war -t "${acrName}.azurecr.io/petclinic:1"
+
+# Run the image locally
+sudo docker run -d -p 8080:8080 "${acrName}.azurecr.io/petclinic:1"
+
+# Your application can now be accessed with a browser at http://localhost:8080.
+
+# Log into ACR
+sudo az acr login --name $acrName
+
+# Push the image to ACR
+sudo docker push "${acrName}.azurecr.io/petclinic:1"
+# Build the image locally
+sudo docker build . --build-arg APP_FILE=petclinic.war -t "${acrName}.azurecr.io/petclinic:1"
+
+# Run the image locally
+sudo docker run -d -p 8080:8080 "${acrName}.azurecr.io/petclinic:1"
+
+# Your application can now be accessed with a browser at http://localhost:8080.
+
+# Log into ACR
+sudo az acr login --name $acrName
+
+# Push the image to ACR
+sudo docker push "${acrName}.azurecr.io/petclinic:1"
+For more information, see the Learn module forBuilding and storing container images in Azure.
+Provision a public IP address
+If your application is to be accessible from outside your internal or virtual network(s), a public static IP address will be required. This IP address should be provisioned inside cluster's node resource group.
+export nodeResourceGroup=$(az aks show \
+    --resource-group $resourceGroup \
+    --name $aksName \
+    --query 'nodeResourceGroup' \
+    --output tsv)
+export publicIp=$(az network public-ip create \
+    --resource-group $nodeResourceGroup \
+    --name applicationIp \
+    --sku Standard \
+    --allocation-method Static \
+    --query 'publicIp.ipAddress' \
+    --output tsv)
+echo "Your public IP address is ${publicIp}."
+export nodeResourceGroup=$(az aks show \
+    --resource-group $resourceGroup \
+    --name $aksName \
+    --query 'nodeResourceGroup' \
+    --output tsv)
+export publicIp=$(az network public-ip create \
+    --resource-group $nodeResourceGroup \
+    --name applicationIp \
+    --sku Standard \
+    --allocation-method Static \
+    --query 'publicIp.ipAddress' \
+    --output tsv)
+echo "Your public IP address is ${publicIp}."
+Deploy to AKS
+Create and apply your Kubernetes YAML file(s). If you're creating an external load balancer (whether to your application or to an ingress controller), be sure to provide the IP address provisioned in the previous section as theLoadBalancerIP.
+LoadBalancerIP
+Includeexternalized parameters as environment variables. Don't include secrets (such as passwords, API keys, and JDBC connection strings). Secrets are covered in theConfigure KeyVault FlexVolumesection.
+Configure persistent storage
+If your application requires non-volatile storage, configure one or morePersistent Volumes.
+You might want to create a Persistent Volume using Azure Files mounted to the Tomcat logs directory/tomcat_logsto retain logs centrally. For more information, seeDynamically create and use a persistent volume with Azure Files in Azure Kubernetes Service (AKS).
+Configure KeyVault FlexVolume
+Create an Azure KeyVaultand populate all the necessary secrets. Then, configure aKeyVault FlexVolumeto make those secrets accessible to pods.
+You'll need to modify the startup script (startup.shin theTomcat on ContainersGitHub repository) to import the certificates into the local keystore on the container.
+Note
+Microsoft recommends using the most secure authentication flow available. The authentication flow described in this procedure, such as for databases, caches, messaging, or AI services, requires a very high degree of trust in the application and carries risks not present in other flows. Use this flow only when more secure options, like managed identities for passwordless or keyless connections, are not viable. For local machine operations, prefer user identities for passwordless or keyless connections.
+Migrate scheduled jobs
+To execute scheduled jobs on your AKS cluster, defineCron Jobsas needed.
+Post-migration
+Now that you've migrated your application to AKS, you should verify that it works as you expect. Once you've done that, we have some recommendations for you that can make your application more Cloud native.
+Consider adding a DNS name to the IP address allocated to your ingress controller or application load balancer. For more information, seeUse TLS with an ingress controller on Azure Kubernetes Service (AKS).
+Consider adding a DNS name to the IP address allocated to your ingress controller or application load balancer. For more information, seeUse TLS with an ingress controller on Azure Kubernetes Service (AKS).
+Consideradding HELM charts for your application. A helm chart allows you to parameterize your application deployment for use and customization by a more diverse set of customers.
+Consideradding HELM charts for your application. A helm chart allows you to parameterize your application deployment for use and customization by a more diverse set of customers.
+Design and implement a DevOps strategy. To maintain reliability while increasing your development velocity, considerautomating deployments and testing with Azure Pipelines.
+Design and implement a DevOps strategy. To maintain reliability while increasing your development velocity, considerautomating deployments and testing with Azure Pipelines.
+EnableAzure Monitoring for the clusterto allow the collection of container logs, track utilization, and so on.
+EnableAzure Monitoring for the clusterto allow the collection of container logs, track utilization, and so on.
+Consider exposing application-specific metrics via Prometheus. Prometheus is an open-source metrics framework broadly adopted in the Kubernetes community. You can configurePrometheus Metrics scraping in Azure Monitorinstead of hosting your own Prometheus server to enable metrics aggregation from your applications and automated response to or escalation of aberrant conditions.
+Consider exposing application-specific metrics via Prometheus. Prometheus is an open-source metrics framework broadly adopted in the Kubernetes community. You can configurePrometheus Metrics scraping in Azure Monitorinstead of hosting your own Prometheus server to enable metrics aggregation from your applications and automated response to or escalation of aberrant conditions.
+Design and implement a business continuity and disaster recovery strategy. For mission-critical applications, consider amulti-region deployment architecture.
+Design and implement a business continuity and disaster recovery strategy. For mission-critical applications, consider amulti-region deployment architecture.
+Review theKubernetes Version Support policy. It's your responsibility to keepupdating your AKS clusterto ensure it's always running a supported version.
+Review theKubernetes Version Support policy. It's your responsibility to keepupdating your AKS clusterto ensure it's always running a supported version.
+Have all team members responsible for cluster administration and application development review the pertinentAKS best practices.
+Have all team members responsible for cluster administration and application development review the pertinentAKS best practices.
+Evaluate the items in thelogging.propertiesfile. Consider eliminating or reducing some of the logging output to improve performance.
+Evaluate the items in thelogging.propertiesfile. Consider eliminating or reducing some of the logging output to improve performance.
+Considermonitoring the code cache sizeand adding the parameters-XX:InitialCodeCacheSizeand-XX:ReservedCodeCacheSizeto theJAVA_OPTSvariable in the Dockerfile to further optimize performance.
+Considermonitoring the code cache sizeand adding the parameters-XX:InitialCodeCacheSizeand-XX:ReservedCodeCacheSizeto theJAVA_OPTSvariable in the Dockerfile to further optimize performance.
+-XX:InitialCodeCacheSize
+-XX:ReservedCodeCacheSize
+JAVA_OPTS
+Feedback
+Was this page helpful?
+Additional resources

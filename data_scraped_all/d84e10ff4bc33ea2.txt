@@ -1,0 +1,162 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Establish Azure Functions private site access
+Article
+2022-06-28
+9 contributors
+In this article
+This tutorial shows you how to enableprivate site accesswith Azure Functions. By using private site access, you can require that your function code is only triggered from a specific virtual network.
+Private site access is useful in scenarios when access to the function app needs to be limited to a specific virtual network. For example, the function app may be applicable to only employees of a specific organization, or services which are within the specified virtual network (such as another Azure Function, Azure Virtual Machine, or an AKS cluster).
+If a Functions app needs to access Azure resources within the virtual network, or connected viaservice endpoints, thenvirtual network integrationis needed.
+In this tutorial, you learn how to configure private site access for your function app:
+Create a virtual machine
+Create an Azure Bastion service
+Create an Azure Functions app
+Configure a virtual network service endpoint
+Create and deploy an Azure Function
+Invoke the function from outside and within the virtual network
+If you donât have an Azure subscription, create afree accountbefore you begin.
+Topology
+The following diagram shows the architecture of the solution to be created:
+
+Prerequisites
+For this tutorial, it's important that you understand IP addressing and subnetting. You can start withthis article that covers the basics of addressing and subnetting. Many more articles and videos are available online.
+Sign in to Azure portal
+Sign in to theAzure portal.
+Create a virtual machine
+The first step in this tutorial is to create a new virtual machine inside a virtual network.  The virtual machine will be used to access your function once you've restricted its access to only be available from within the virtual network.
+Select theCreate a resourcebutton.
+Select theCreate a resourcebutton.
+In the search field, typeWindows Server, and selectWindows Serverin the search results.
+In the search field, typeWindows Server, and selectWindows Serverin the search results.
+SelectWindows Server 2019 Datacenterfrom the list of Windows Server options, and press theCreatebutton.
+SelectWindows Server 2019 Datacenterfrom the list of Windows Server options, and press theCreatebutton.
+In theBasicstab, use the VM settings as specified in the table below the image:SettingSuggested valueDescriptionSubscriptionYour subscriptionThe subscription under which your resources are created.Resource groupmyResourceGroupChoose the resource group to contain all the resources for this tutorial.  Using the same resource group makes it easier to clean up resources when you're done with this tutorial.Virtual machine namemyVMThe VM name needs to be unique in the resource groupRegion(US) North Central USChoose a region near you or near the functions to be accessed.Public inbound portsNoneSelectNoneto ensure there is no inbound connectivity to the VM from the internet. Remote access to the VM will be configured via the Azure Bastion service.
+In theBasicstab, use the VM settings as specified in the table below the image:
+
+Choose theNetworkingtab and selectCreate newto configure a new virtual network.
+Choose theNetworkingtab and selectCreate newto configure a new virtual network.
+
+InCreate virtual network, use the settings in the table below the image:SettingSuggested valueDescriptionNamemyResourceGroup-vnetYou can use the default name generated for your virtual network.Address range10.10.0.0/16Use a single address range for the virtual network.Subnet nameTutorialName of the subnet.Address range(subnet)10.10.1.0/24The subnet size defines how many interfaces can be added to the subnet. This subnet is used by the VM. A /24 subnet provides 254 host addresses.
+InCreate virtual network, use the settings in the table below the image:
+
+SelectOKto create the virtual network.
+SelectOKto create the virtual network.
+Back in theNetworkingtab, ensureNoneis selected forPublic IP.
+Back in theNetworkingtab, ensureNoneis selected forPublic IP.
+Choose theManagementtab, then inDiagnostic storage account, chooseCreate newto create a new Storage account.
+Choose theManagementtab, then inDiagnostic storage account, chooseCreate newto create a new Storage account.
+Leave the default values for theIdentity,Auto-shutdown, andBackupsections.
+Leave the default values for theIdentity,Auto-shutdown, andBackupsections.
+SelectReview + create. After validation completes, selectCreate. The VM create process takes a few minutes.
+SelectReview + create. After validation completes, selectCreate. The VM create process takes a few minutes.
+Configure Azure Bastion
+Azure Bastionis a fully managed Azure service which provides secure RDP and SSH access to virtual machines directly from the Azure portal. Using the Azure Bastion service removes the need to configure network settings related to RDP access.
+In the portal, chooseAddat the top of the resource group view.
+In the portal, chooseAddat the top of the resource group view.
+In the search field, typeBastion.
+In the search field, typeBastion.
+SelectBastionin the search results.
+SelectBastionin the search results.
+SelectCreateto begin the process of creating a new Azure Bastion resource. You will notice an error message in theVirtual networksection as there is not yet an AzureBastionSubnet subnet. The subnet is created in the following steps. Use the settings in the table below the image:SettingSuggested valueDescriptionNamemyBastionThe name of the new Bastion resourceRegionNorth Central USChoose aregionnear you or near other services your functions access.Virtual networkmyResourceGroup-vnetThe virtual network in which the Bastion resource will be created inSubnetAzureBastionSubnetThe subnet in your virtual network to which the new Bastion host resource will be deployed. You must create a subnet using the name valueAzureBastionSubnet. This value lets Azure know which subnet to deploy the Bastion resources to. You must use a subnet of at least/27or larger (/27, /26, and so on).NoteFor a detailed, step-by-step guide to creating an Azure Bastion resource, refer to theCreate an Azure Bastion hosttutorial.
+SelectCreateto begin the process of creating a new Azure Bastion resource. You will notice an error message in theVirtual networksection as there is not yet an AzureBastionSubnet subnet. The subnet is created in the following steps. Use the settings in the table below the image:
+
+Note
+For a detailed, step-by-step guide to creating an Azure Bastion resource, refer to theCreate an Azure Bastion hosttutorial.
+Create a subnet in which Azure can provision the Azure Bastion host. ChoosingManage subnet configurationopens a new pane where you can define a new subnet.  Choose+ Subnetto create a new subnet.
+Create a subnet in which Azure can provision the Azure Bastion host. ChoosingManage subnet configurationopens a new pane where you can define a new subnet.  Choose+ Subnetto create a new subnet.
+The subnet must be of the nameAzureBastionSubnetand the subnet prefix must be at least/27.  SelectOKto create the subnet.
+The subnet must be of the nameAzureBastionSubnetand the subnet prefix must be at least/27.  SelectOKto create the subnet.
+
+On theCreate a Bastionpage, select the newly createdAzureBastionSubnetfrom the list of available subnets.
+On theCreate a Bastionpage, select the newly createdAzureBastionSubnetfrom the list of available subnets.
+
+SelectReview & Create. Once validation completes, selectCreate. It will take a few minutes for the Azure Bastion resource to be created.
+SelectReview & Create. Once validation completes, selectCreate. It will take a few minutes for the Azure Bastion resource to be created.
+Create an Azure Functions app
+The next step is to create a function app in Azure using theConsumption plan. You deploy your function code to this resource later in the tutorial.
+In the portal, chooseAddat the top of the resource group view.
+In the portal, chooseAddat the top of the resource group view.
+SelectCompute > Function App
+SelectCompute > Function App
+On theBasicssection, use the function app settings as specified in the table below.SettingSuggested valueDescriptionResource GroupmyResourceGroupChoose the resource group to contain all the resources for this tutorial.  Using the same resource group for the function app and VM makes it easier to clean up resources when you're done with this tutorial.Function App nameGlobally unique nameName that identifies your new function app. Valid characters are a-z (case insensitive), 0-9, and -.PublishCodeOption to publish code files or a Docker container.Runtime stackPreferred languageChoose a runtime that supports your favorite function programming language.RegionNorth Central USChoose aregionnear you or near other services your functions access.Select theNext: Hosting >button.
+On theBasicssection, use the function app settings as specified in the table below.
+Select theNext: Hosting >button.
+For theHostingsection, select the properStorage account,Operating system, andPlanas described in the following table.SettingSuggested valueDescriptionStorage accountGlobally unique nameCreate a storage account used by your function app. Storage account names must be between 3 and 24 characters in length and may contain numbers and lowercase letters only. You can also use an existing account, which must meet thestorage account requirements.Operating systemPreferred operating systemAn operating system is pre-selected for you based on your runtime stack selection, but you can change the setting if necessary.PlanConsumptionThehosting plandictates how the function app is scaled and resources available to each instance.
+For theHostingsection, select the properStorage account,Operating system, andPlanas described in the following table.
+SelectReview + Createto review the app configuration selections.
+SelectReview + Createto review the app configuration selections.
+SelectCreateto provision and deploy the function app.
+SelectCreateto provision and deploy the function app.
+Configure access restrictions
+The next step is to configureaccess restrictionsto ensure only resources on the virtual network can invoke the function.
+Private siteaccess is enabled by creating an Azure Virtual Networkservice endpointbetween the function app and the specified virtual network. Access restrictions are implemented via service endpoints. Service endpoints ensure only traffic originating from within the specified virtual network can access the designated resource. In this case, the designated resource is the Azure Function.
+Within the function app, select theNetworkinglink under theSettingssection header.
+Within the function app, select theNetworkinglink under theSettingssection header.
+TheNetworkingpage is the starting point to configure Azure Front Door, the Azure CDN, and also Access Restrictions.
+TheNetworkingpage is the starting point to configure Azure Front Door, the Azure CDN, and also Access Restrictions.
+SelectConfigure Access Restrictionsto configure private site access.
+SelectConfigure Access Restrictionsto configure private site access.
+On theAccess Restrictionspage, you see only the default restriction in place. The default doesn't place any restrictions on access to the function app.  SelectAdd ruleto create a private site access restriction configuration.
+On theAccess Restrictionspage, you see only the default restriction in place. The default doesn't place any restrictions on access to the function app.  SelectAdd ruleto create a private site access restriction configuration.
+In theAdd Access Restrictionpane, provide aName,Priority, andDescriptionfor the new rule.
+In theAdd Access Restrictionpane, provide aName,Priority, andDescriptionfor the new rule.
+SelectVirtual Networkfrom theTypedrop-down box, then select the previously created virtual network, and then select theTutorialsubnet.NoteIt may take several minutes to enable the service endpoint.
+SelectVirtual Networkfrom theTypedrop-down box, then select the previously created virtual network, and then select theTutorialsubnet.
+Note
+It may take several minutes to enable the service endpoint.
+TheAccess Restrictionspage now shows that there is a new restriction. It may take a few seconds for theEndpoint statusto change from Disabled through Provisioning to Enabled.ImportantEach function app has anAdvanced Tool (Kudu) sitethat is used to manage function app deployments. This site is accessed from a URL like:<FUNCTION_APP_NAME>.scm.azurewebsites.net. Enabling access restrictions on the Kudu site prevents the deployment of the project code from a local developer workstation, and then an agent is needed within the virtual network to perform the deployment.
+TheAccess Restrictionspage now shows that there is a new restriction. It may take a few seconds for theEndpoint statusto change from Disabled through Provisioning to Enabled.
+Important
+Each function app has anAdvanced Tool (Kudu) sitethat is used to manage function app deployments. This site is accessed from a URL like:<FUNCTION_APP_NAME>.scm.azurewebsites.net. Enabling access restrictions on the Kudu site prevents the deployment of the project code from a local developer workstation, and then an agent is needed within the virtual network to perform the deployment.
+<FUNCTION_APP_NAME>.scm.azurewebsites.net
+Access the functions app
+Return to the previously created function app.  In theOverviewsection, copy the URL.If you try to access the function app now from your computer outside of your virtual network, you'll receive an HTTP 403 page indicating that access is forbidden.
+Return to the previously created function app.  In theOverviewsection, copy the URL.
+
+If you try to access the function app now from your computer outside of your virtual network, you'll receive an HTTP 403 page indicating that access is forbidden.
+Return to the resource group and select the previously created virtual machine. In order to access the site from the VM, you need to connect to the VM via the Azure Bastion service.
+Return to the resource group and select the previously created virtual machine. In order to access the site from the VM, you need to connect to the VM via the Azure Bastion service.
+SelectConnectand then chooseBastion.
+SelectConnectand then chooseBastion.
+Provide the required username and password to log into the virtual machine.NoteFor enhanced security, you should require Microsoft Entra authentication to access your virtual machines in Azure.
+Provide the required username and password to log into the virtual machine.
+Note
+For enhanced security, you should require Microsoft Entra authentication to access your virtual machines in Azure.
+SelectConnect. A new browser window will pop up to allow you to interact with the virtual machine.
+It's possible to access the site from the web browser on the VM because the VM is accessing the site through the virtual network.  While the site is only accessible from within the designated virtual network, a public DNS entry remains.
+SelectConnect. A new browser window will pop up to allow you to interact with the virtual machine.
+It's possible to access the site from the web browser on the VM because the VM is accessing the site through the virtual network.  While the site is only accessible from within the designated virtual network, a public DNS entry remains.
+Create a function
+The next step in this tutorial is to create an HTTP-triggered Azure Function. Invoking the function via an HTTP GET or POST should result in a response of "Hello, {name}".
+Follow one of the following quickstarts to create and deploy your Azure Functions app.Visual Studio CodeVisual StudioCommand lineMaven (Java)
+Follow one of the following quickstarts to create and deploy your Azure Functions app.
+Visual Studio Code
+Visual Studio
+Command line
+Maven (Java)
+When publishing your Azure Functions project, choose the function app resource that you created earlier in this tutorial.
+When publishing your Azure Functions project, choose the function app resource that you created earlier in this tutorial.
+Verify the function is deployed.
+Verify the function is deployed.
+
+Invoke the function directly
+In order to test access to the function, you need to copy the function URL. Select the deployed function, and then selectGet Function Url. Then click theCopybutton to copy the URL to your clipboard.
+In order to test access to the function, you need to copy the function URL. Select the deployed function, and then selectGet Function Url. Then click theCopybutton to copy the URL to your clipboard.
+
+Paste the URL into a web browser. When you now try to access the function app from a computer outside of your virtual network, you receive an HTTP 403 response indicating access to the app is forbidden.
+Paste the URL into a web browser. When you now try to access the function app from a computer outside of your virtual network, you receive an HTTP 403 response indicating access to the app is forbidden.
+Invoke the function from the virtual network
+Accessing the function via a web browser (by using the Azure Bastion service) on the configured VM on the virtual network results in success!
+
+Clean up resources
+In the preceding steps, you created Azure resources in a resource group. If you don't expect to need these resources in the future, you can delete them by deleting the resource group.
+From the Azure portal menu orHomepage, selectResource groups. Then, on theResource groupspage, selectmyResourceGroup.
+On themyResourceGrouppage, make sure that the listed resources are the ones you want to delete.
+SelectDelete resource group, typemyResourceGroupin the text box to confirm, and then selectDelete.
+Next steps
+Learn more about the networking options in Functions
+Feedback
+Was this page helpful?
+Additional resources

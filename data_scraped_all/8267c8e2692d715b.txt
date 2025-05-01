@@ -1,0 +1,357 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Run your first DLT pipeline
+Article
+2025-03-04
+2 contributors
+In this article
+This tutorial takes you through the steps to configure your first DLT pipeline, write basic ETL code, and run a pipeline update.
+All steps in this tutorial are designed for workspaces with Unity Catalog enabled. You can also configure DLT pipelines to work with the legacy Hive metastore. SeeUse DLT pipelines with legacy Hive metastore.
+Note
+This tutorial has instructions for developing and validating new pipeline code using Databricks notebooks. You can also configure pipelines using source code in Python or SQL files.
+You can configure a pipeline to run your code if you already have source code written using DLT syntax. SeeConfigure a DLT pipeline.
+You can use fully declarative SQL syntax in Databricks SQL to register and set refresh schedules for materialized views and streaming tables as Unity Catalog-managed objects. SeeUse materialized views in Databricks SQLandUse streaming tables in Databricks SQL.
+Example: Ingest and process New York baby names data
+The example in this article uses a publicly available dataset that contains records ofNew York State baby names. This example demonstrates using a DLT pipeline to:
+Read raw CSV data from a volume into a table.
+Read the records from the ingestion table and use DLTexpectationsto create a new table that contains cleansed data.
+Use the cleansed records as input to DLT queries that create derived datasets.
+This code demonstrates a simplified example of the medallion architecture. SeeWhat is the medallion lakehouse architecture?.
+Implementations of this example are provided for Python and SQL. Follow the steps to create a new pipeline and notebook, and then copy-paste the provided code.
+Examplenotebookswith complete code are also provided.
+Requirements
+To start a pipeline, you must havecluster creation permissionor access to a cluster policy defining a DLT cluster. The DLT runtime creates a cluster before it runs your pipeline and fails if you donât have the correct permission.
+To start a pipeline, you must havecluster creation permissionor access to a cluster policy defining a DLT cluster. The DLT runtime creates a cluster before it runs your pipeline and fails if you donât have the correct permission.
+All users can trigger updates using serverless pipelines by default. Serverless must be enabled at the account level and might not be available in your workspace region. SeeEnable serverless compute.
+All users can trigger updates using serverless pipelines by default. Serverless must be enabled at the account level and might not be available in your workspace region. SeeEnable serverless compute.
+The examples in this tutorial useUnity Catalog. Databricks recommends creating a new schema to run this tutorial, as multiple database objects are created in the target schema.To create a new schema in a catalog, you must haveALL PRIVILEGESorUSE CATALOGandCREATE SCHEMAprivileges.If you cannot create a new schema, run this tutorial against an existing schema. You must have the following privileges:USE CATALOGfor the parent catalog.ALL PRIVILEGESorUSE SCHEMA,CREATE MATERIALIZED VIEW, andCREATE TABLEprivileges on the target schema.This tutorial uses a volume to store sample data. Databricks recommends creating a new volume for this tutorial. If you create a new schema for this tutorial, you can create a new volume in that schema.To create a new volume in an existing schema, you must have the following privileges:USE CATALOGfor the parent catalog.ALL PRIVILEGESorUSE SCHEMAandCREATE VOLUMEprivileges on the target schema.You can optionally use an existing volume. You must have the following privileges:USE CATALOGfor the parent catalog.USE SCHEMAfor the parent schema.ALL PRIVILEGESorREAD VOLUMEandWRITE VOLUMEon the target volume.To set these permissions, contact your Databricks administrator. For more on Unity Catalog privileges, seeUnity Catalog privileges and securable objects.
+The examples in this tutorial useUnity Catalog. Databricks recommends creating a new schema to run this tutorial, as multiple database objects are created in the target schema.
+To create a new schema in a catalog, you must haveALL PRIVILEGESorUSE CATALOGandCREATE SCHEMAprivileges.
+ALL PRIVILEGES
+USE CATALOG
+CREATE SCHEMA
+If you cannot create a new schema, run this tutorial against an existing schema. You must have the following privileges:USE CATALOGfor the parent catalog.ALL PRIVILEGESorUSE SCHEMA,CREATE MATERIALIZED VIEW, andCREATE TABLEprivileges on the target schema.
+USE CATALOGfor the parent catalog.
+USE CATALOG
+ALL PRIVILEGESorUSE SCHEMA,CREATE MATERIALIZED VIEW, andCREATE TABLEprivileges on the target schema.
+ALL PRIVILEGES
+USE SCHEMA
+CREATE MATERIALIZED VIEW
+CREATE TABLE
+This tutorial uses a volume to store sample data. Databricks recommends creating a new volume for this tutorial. If you create a new schema for this tutorial, you can create a new volume in that schema.To create a new volume in an existing schema, you must have the following privileges:USE CATALOGfor the parent catalog.ALL PRIVILEGESorUSE SCHEMAandCREATE VOLUMEprivileges on the target schema.You can optionally use an existing volume. You must have the following privileges:USE CATALOGfor the parent catalog.USE SCHEMAfor the parent schema.ALL PRIVILEGESorREAD VOLUMEandWRITE VOLUMEon the target volume.
+To create a new volume in an existing schema, you must have the following privileges:USE CATALOGfor the parent catalog.ALL PRIVILEGESorUSE SCHEMAandCREATE VOLUMEprivileges on the target schema.
+USE CATALOGfor the parent catalog.
+USE CATALOG
+ALL PRIVILEGESorUSE SCHEMAandCREATE VOLUMEprivileges on the target schema.
+ALL PRIVILEGES
+USE SCHEMA
+CREATE VOLUME
+You can optionally use an existing volume. You must have the following privileges:USE CATALOGfor the parent catalog.USE SCHEMAfor the parent schema.ALL PRIVILEGESorREAD VOLUMEandWRITE VOLUMEon the target volume.
+USE CATALOGfor the parent catalog.
+USE CATALOG
+USE SCHEMAfor the parent schema.
+USE SCHEMA
+ALL PRIVILEGESorREAD VOLUMEandWRITE VOLUMEon the target volume.
+ALL PRIVILEGES
+READ VOLUME
+WRITE VOLUME
+To set these permissions, contact your Databricks administrator. For more on Unity Catalog privileges, seeUnity Catalog privileges and securable objects.
+Step 0: Download data
+This example loads data from a Unity Catalog volume. The following code downloads a CSV file and stores it in the specified volume. Open a new notebook and run the following code to download this data to the specified volume:
+import urllib
+
+my_catalog = "<catalog-name>"
+my_schema = "<schema-name>"
+my_volume = "<volume-name>"
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {my_catalog}.{my_schema}")
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {my_catalog}.{my_schema}.{my_volume}")
+
+volume_path = f"/Volumes/{my_catalog}/{my_schema}/{my_volume}/"
+download_url = "https://health.data.ny.gov/api/views/jxy9-yhdk/rows.csv"
+filename = "babynames.csv"
+
+urllib.request.urlretrieve(download_url, volume_path + filename)
+import urllib
+
+my_catalog = "<catalog-name>"
+my_schema = "<schema-name>"
+my_volume = "<volume-name>"
+
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {my_catalog}.{my_schema}")
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {my_catalog}.{my_schema}.{my_volume}")
+
+volume_path = f"/Volumes/{my_catalog}/{my_schema}/{my_volume}/"
+download_url = "https://health.data.ny.gov/api/views/jxy9-yhdk/rows.csv"
+filename = "babynames.csv"
+
+urllib.request.urlretrieve(download_url, volume_path + filename)
+Replace<catalog-name>,<schema-name>, and<volume-name>with the catalog, schema, and volume names for a Unity Catalog volume. The provided code attempts to create the specified schema and volume if these objects do not exist. You must have the appropriate privileges to create and write to objects in Unity Catalog. SeeRequirements.
+<catalog-name>
+<schema-name>
+<volume-name>
+Note
+Make sure this notebook has successfully run before continuing with the tutorial. Do not configure this notebook as part of your pipeline.
+Step 1: Create a pipeline
+DLT creates pipelines by resolving dependencies defined in notebooks or files (calledsource code) using DLT syntax. Each source code file can contain only one language, but you can add multiple language-specific notebooks or files in the pipeline.
+Important
+Do not configure any assets in theSource codefield. Leaving this field black creates and configures a notebook for source code authoring.
+The instructions in this tutorial use serverless compute and Unity Catalog. Use the default settings for all configuration options not specified in these instructions.
+Note
+If serverless is not enabled or supported in your workspace, you can complete the tutorial as written using default compute settings. You must manually selectUnity CatalogunderStorage optionsin theDestinationsection of theCreate pipelineUI.
+To configure a new pipeline, do the following:
+In the sidebar, clickPipelines.
+ClickCreate pipeline.
+InPipeline name, type a unique pipeline name.
+Select theServerlesscheckbox.
+InDestination, to configure a Unity Catalog location where tables are published, select aCatalogand aSchema.
+InAdvanced, clickAdd configurationand then define pipeline parameters for the catalog, schema, and volume to which you downloaded data using the following parameter names:my_catalogmy_schemamy_volume
+my_catalog
+my_catalog
+my_schema
+my_schema
+my_volume
+my_volume
+ClickCreate.
+The pipelines UI appears for the new pipeline. A source code notebook is automatically created and configured for the pipeline.
+The notebook is created in a new directory in your user directory. The name of the new directory and file match the name of your pipeline. For example,/Users/your.username@databricks.com/my_pipeline/my_pipeline.
+/Users/your.username@databricks.com/my_pipeline/my_pipeline
+A link to access this notebook is under theSource codefield in thePipeline detailspanel. Click the link to open the notebook before proceeding to the next step.
+Step 2: Declare materialized views and streaming tables in a notebook with Python or SQL
+You can use Databricks notebooks to interactively develop and validate source code for DLT pipelines. You must attach your notebook to the pipeline to use this functionality. To attach your newly created notebook to the pipeline you just created:
+ClickConnectin the upper-right to open the compute configuration menu.
+Hover over the name of the pipeline you created in Step 1.
+ClickConnect.
+The UI changes to includeValidateandStartbuttons in the upper-right. To learn more about notebook support for pipeline code development, seeDevelop and debug ETL pipelines with a notebook in DLT.
+Important
+DLT pipelines evaluate all cells in a notebook during planning. Unlike notebooks that are run against all-purpose compute or scheduled as jobs, pipelines do not guarantee that cells run in the specified order.
+Notebooks can only contain a single programming language. Do not mix Python and SQL code in pipeline source code notebooks.
+For details on developing code with Python or SQL, seeDevelop pipeline code with PythonorDevelop pipeline code with SQL.
+Example pipeline code
+To implement the example in this tutorial, copy and paste the following code into a cell in the notebook configured as source code for your pipeline.
+The provided code does the following:
+Imports necessary modules (Python only).
+References parameters defined during pipeline configuration.
+Defines a streaming table namedbaby_names_rawthat ingests from a volume.
+baby_names_raw
+Defines a materialized view namedbaby_names_preparedthat validates ingested data.
+baby_names_prepared
+Defines a materialized view namedtop_baby_names_2021that has a highly refined view of the data.
+top_baby_names_2021
+# Import modules
+
+import dlt
+from pyspark.sql.functions import *
+
+# Assign pipeline parameters to variables
+
+my_catalog = spark.conf.get("my_catalog")
+my_schema = spark.conf.get("my_schema")
+my_volume = spark.conf.get("my_volume")
+
+# Define the path to source data
+
+volume_path = f"/Volumes/{my_catalog}/{my_schema}/{my_volume}/"
+
+# Define a streaming table to ingest data from a volume
+
+@dlt.table(
+  comment="Popular baby first names in New York. This data was ingested from the New York State Department of Health."
+)
+def baby_names_raw():
+  df = (spark.readStream
+    .format("cloudFiles")
+    .option("cloudFiles.format", "csv")
+    .option("inferSchema", True)
+    .option("header", True)
+    .load(volume_path)
+  )
+  df_renamed_column = df.withColumnRenamed("First Name", "First_Name")
+  return df_renamed_column
+
+# Define a materialized view that validates data and renames a column
+
+@dlt.table(
+  comment="New York popular baby first name data cleaned and prepared for analysis."
+)
+@dlt.expect("valid_first_name", "First_Name IS NOT NULL")
+@dlt.expect_or_fail("valid_count", "Count > 0")
+def baby_names_prepared():
+  return (
+    spark.read.table("baby_names_raw")
+      .withColumnRenamed("Year", "Year_Of_Birth")
+      .select("Year_Of_Birth", "First_Name", "Count")
+  )
+
+# Define a materialized view that has a filtered, aggregated, and sorted view of the data
+
+@dlt.table(
+  comment="A table summarizing counts of the top baby names for New York for 2021."
+)
+def top_baby_names_2021():
+  return (
+    spark.read.table("baby_names_prepared")
+      .filter(expr("Year_Of_Birth == 2021"))
+      .groupBy("First_Name")
+      .agg(sum("Count").alias("Total_Count"))
+      .sort(desc("Total_Count"))
+      .limit(10)
+  )
+# Import modules
+
+import dlt
+from pyspark.sql.functions import *
+
+# Assign pipeline parameters to variables
+
+my_catalog = spark.conf.get("my_catalog")
+my_schema = spark.conf.get("my_schema")
+my_volume = spark.conf.get("my_volume")
+
+# Define the path to source data
+
+volume_path = f"/Volumes/{my_catalog}/{my_schema}/{my_volume}/"
+
+# Define a streaming table to ingest data from a volume
+
+@dlt.table(
+  comment="Popular baby first names in New York. This data was ingested from the New York State Department of Health."
+)
+def baby_names_raw():
+  df = (spark.readStream
+    .format("cloudFiles")
+    .option("cloudFiles.format", "csv")
+    .option("inferSchema", True)
+    .option("header", True)
+    .load(volume_path)
+  )
+  df_renamed_column = df.withColumnRenamed("First Name", "First_Name")
+  return df_renamed_column
+
+# Define a materialized view that validates data and renames a column
+
+@dlt.table(
+  comment="New York popular baby first name data cleaned and prepared for analysis."
+)
+@dlt.expect("valid_first_name", "First_Name IS NOT NULL")
+@dlt.expect_or_fail("valid_count", "Count > 0")
+def baby_names_prepared():
+  return (
+    spark.read.table("baby_names_raw")
+      .withColumnRenamed("Year", "Year_Of_Birth")
+      .select("Year_Of_Birth", "First_Name", "Count")
+  )
+
+# Define a materialized view that has a filtered, aggregated, and sorted view of the data
+
+@dlt.table(
+  comment="A table summarizing counts of the top baby names for New York for 2021."
+)
+def top_baby_names_2021():
+  return (
+    spark.read.table("baby_names_prepared")
+      .filter(expr("Year_Of_Birth == 2021"))
+      .groupBy("First_Name")
+      .agg(sum("Count").alias("Total_Count"))
+      .sort(desc("Total_Count"))
+      .limit(10)
+  )
+-- Define a streaming table to ingest data from a volume
+
+CREATE OR REFRESH STREAMING TABLE baby_names_raw
+COMMENT "Popular baby first names in New York. This data was ingested from the New York State Department of Health."
+AS SELECT Year, `First Name` AS First_Name, County, Sex, Count
+FROM STREAM(read_files(
+  '/Volumes/${my_catalog}/${my_schema}/${my_volume}/',
+  format => 'csv',
+  header => true,
+  mode => 'FAILFAST'));
+
+-- Define a materialized view that validates data and renames a column
+
+CREATE OR REFRESH MATERIALIZED VIEW baby_names_prepared(
+  CONSTRAINT valid_first_name EXPECT (First_Name IS NOT NULL),
+  CONSTRAINT valid_count EXPECT (Count > 0) ON VIOLATION FAIL UPDATE
+)
+COMMENT "New York popular baby first name data cleaned and prepared for analysis."
+AS SELECT
+  Year AS Year_Of_Birth,
+  First_Name,
+  Count
+FROM baby_names_raw;
+
+-- Define a materialized view that provides a filtered, aggregated, and sorted view of the data
+
+CREATE OR REFRESH MATERIALIZED VIEW top_baby_names_2021
+COMMENT "A table summarizing counts of the top baby names for New York for 2021."
+AS SELECT
+  First_Name,
+  SUM(Count) AS Total_Count
+FROM baby_names_prepared
+WHERE Year_Of_Birth = 2021
+GROUP BY First_Name
+ORDER BY Total_Count DESC
+LIMIT 10;
+-- Define a streaming table to ingest data from a volume
+
+CREATE OR REFRESH STREAMING TABLE baby_names_raw
+COMMENT "Popular baby first names in New York. This data was ingested from the New York State Department of Health."
+AS SELECT Year, `First Name` AS First_Name, County, Sex, Count
+FROM STREAM(read_files(
+  '/Volumes/${my_catalog}/${my_schema}/${my_volume}/',
+  format => 'csv',
+  header => true,
+  mode => 'FAILFAST'));
+
+-- Define a materialized view that validates data and renames a column
+
+CREATE OR REFRESH MATERIALIZED VIEW baby_names_prepared(
+  CONSTRAINT valid_first_name EXPECT (First_Name IS NOT NULL),
+  CONSTRAINT valid_count EXPECT (Count > 0) ON VIOLATION FAIL UPDATE
+)
+COMMENT "New York popular baby first name data cleaned and prepared for analysis."
+AS SELECT
+  Year AS Year_Of_Birth,
+  First_Name,
+  Count
+FROM baby_names_raw;
+
+-- Define a materialized view that provides a filtered, aggregated, and sorted view of the data
+
+CREATE OR REFRESH MATERIALIZED VIEW top_baby_names_2021
+COMMENT "A table summarizing counts of the top baby names for New York for 2021."
+AS SELECT
+  First_Name,
+  SUM(Count) AS Total_Count
+FROM baby_names_prepared
+WHERE Year_Of_Birth = 2021
+GROUP BY First_Name
+ORDER BY Total_Count DESC
+LIMIT 10;
+Step 3: Start a pipeline update
+To start a pipeline update, click theStartbutton in the top right of the notebook UI.
+Example notebooks
+The following notebooks contain the same code examples provided in this article. These notebooks have the same requirements as the steps in this article. SeeRequirements.
+To import a notebook, complete the following steps:
+Open the notebook UI.Click+ New>Notebook.An empty notebook opens.
+Click+ New>Notebook.
+An empty notebook opens.
+ClickFile>Importâ¦. TheImportdialog appears.
+Select theURLoption forImport from.
+Paste the URL of the notebook.
+ClickImport.
+This tutorial requires that you run a data setup notebook before configuring and running your DLT pipeline. Import the following notebook, attach the notebook to a compute resource, fill in the required variable formy_catalog,my_schema, andmy_volume, and clickRun all.
+my_catalog
+my_schema
+my_volume
+Get notebook
+The following notebooks provide examples in Python or SQL. When you import a notebook, it is saved to your user home directory.
+After importing one of the below notebooks, complete the steps to create a pipeline, but use theSource codefile picker to select the downloaded notebook. After creating the pipeline with a notebook configured as source code, clickStartin the pipeline UI to trigger an update.
+Get notebook
+Get notebook
+Additional resources
+Convert an existing DLT pipeline to a bundle
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,1466 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use the Azure WebJobs SDK for event-driven background processing
+Article
+2025-03-25
+26 contributors
+In this article
+This article describes how to work with the Azure WebJobs SDK. To quickly get started with WebJobs, seeGet started with the Azure WebJobs SDK.
+WebJobs SDK versions
+The key differences between version 3.xand version 2.xof the WebJobs SDK are:
+Version 3.xadds support for .NET Core.
+In version 3.x, you install the Storage binding extension that is required by the WebJobs SDK. In version 2.x, the Storage bindings are included in the SDK.
+Visual Studio 2019 tooling for .NET Core (3.x) projects differs from tooling for .NET Framework (2.x) projects. For more information, seeDevelop and deploy WebJobs using Visual Studio.
+Some examples in this article are provided for both WebJobs version 3.xand WebJobs version 2.x.
+Azure Functionsis built on the WebJobs SDK:
+Azure Functions version 2.xis built on WebJobs SDK version 3.x.
+Azure Functions version 1.xis built on WebJobs SDK version 2.x.
+Source code repositories for both Azure Functions and the WebJobs SDK use the WebJobs SDK numbering. Several sections of this article link to Azure Functions documentation.
+For more information, seeCompare the WebJobs SDK and Azure Functions.
+WebJobs host
+The WebJobs host is a runtime container for functions. The host listens for triggers and calls functions. In version 3.x, the host is an implementation ofIHost. In version 2.x, you use theJobHostobject. You create a host instance in your code and write code to customize its behavior.
+IHost
+JobHost
+This architectural change is a key difference between using the WebJobs SDK directly and using it indirectly through Azure Functions. In Azure Functions, the service controls the host. You can't customize the host by writing code. In Azure Functions, you customize host behavior through settings in thehost.jsonfile. Those settings are strings, not code, and use of these strings limits the kinds of customizations you can do.
+host.json
+Host connections
+The WebJobs SDK looks for Azure Storage and Azure Service Bus connections in thelocal.settings.jsonfile when you run locally or in the environment of the WebJob when you run in Azure. By default, the WebJobs SDK requires a storage connection namedAzureWebJobsStorage.
+local.settings.json
+AzureWebJobsStorage
+When the connection name resolves to a single exact value, the runtime identifies the value as aconnection string, which typically includes a secret. The details of a connection string depend on the service to which you connect. However, a connection name can also refer to a collection of multiple configuration items, useful for configuring identity-based connections. Environment variables can be treated as a collection by using a shared prefix that ends in double underscores (__). The group can then be referenced by setting the connection name to this prefix.
+__
+For example, theconnectionproperty for an Azure Blob Storage trigger definition might beStorage1. As long as there's no single string value configured by an environment variable namedStorage1,  an environment variable namedStorage1__blobServiceUricould be used to inform theblobServiceUriproperty of the connection. The connection properties are different for each service. Refer to the documentation for the component that uses the connection.
+connection
+Storage1
+Storage1
+Storage1__blobServiceUri
+blobServiceUri
+To use identity-based connections in the WebJobs SDK, make sure that you use the latest versions of WebJobs packages in your project. Also ensure that you have a reference toMicrosoft.Azure.WebJobs.Host.Storage.
+The following example shows what your project file might look like after you make these updates:
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <IsWebJobProject>true</IsWebJobProject>
+    <WebJobName>$(AssemblyName)</WebJobName>
+    <WebJobType>Continuous</WebJobType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Azure.WebJobs" Version="3.0.41" />
+    <PackageReference Include="Microsoft.Azure.WebJobs.Extensions.Storage.Queues" Version="5.3.1" />
+    <PackageReference Include="Microsoft.Azure.WebJobs.Host.Storage" Version="5.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="2.1.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <IsWebJobProject>true</IsWebJobProject>
+    <WebJobName>$(AssemblyName)</WebJobName>
+    <WebJobType>Continuous</WebJobType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Azure.WebJobs" Version="3.0.41" />
+    <PackageReference Include="Microsoft.Azure.WebJobs.Extensions.Storage.Queues" Version="5.3.1" />
+    <PackageReference Include="Microsoft.Azure.WebJobs.Host.Storage" Version="5.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="2.1.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>
+When you set up WebJobs within your HostBuilder instance, make sure that you include a call toAddAzureStorageCoreServices. This call allowsAzureWebJobsStorageand other Storage triggers and bindings to use the identity.
+AddAzureStorageCoreServices
+AzureWebJobsStorage
+Here's an example:
+builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        // other configurations...
+    });
+builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        // other configurations...
+    });
+Then, you can configure theAzureWebJobsStorageconnection by setting environment variables (or application settings when hosted in App Service):
+AzureWebJobsStorage
+AzureWebJobsStorage__blobServiceUri
+AzureWebJobsStorage__queueServiceUri
+If you provide your configuration through any means other than environment variables, such as in anappsettings.jsonconfig file, you instead must provide a structured configuration for the connection and its properties:
+appsettings.json
+{
+    "AzureWebJobsStorage": {
+        "blobServiceUri": "https://<storage_account_name>.blob.core.windows.net",
+        "queueServiceUri": "https://<storage_account_name>.queue.core.windows.net"
+    }
+}
+{
+    "AzureWebJobsStorage": {
+        "blobServiceUri": "https://<storage_account_name>.blob.core.windows.net",
+        "queueServiceUri": "https://<storage_account_name>.queue.core.windows.net"
+    }
+}
+You can omit thequeueServiceUriproperty if you don't plan to use blob triggers.
+queueServiceUri
+When your code runs locally, the default is to use your developer identity as described forDefaultAzureCredential.
+DefaultAzureCredential
+When your code is hosted in Azure App Service, the configuration in the preceding example defaults to thesystem-assigned managed identityfor the resource. To instead use auser-assigned identitythat is assigned to the app, you must add properties for your connection to specify which identity to use. Thecredentialproperty (AzureWebJobsStorage__credentialas an environment variable) should be set to the stringmanagedidentity. TheclientIdproperty (AzureWebJobsStorage__clientIdas an environment variable) should be set to the client ID of the user-assigned managed identity to be used.
+credential
+AzureWebJobsStorage__credential
+managedidentity
+clientId
+AzureWebJobsStorage__clientId
+As a structured configuration, the complete object would be similar to this example:
+{
+    "AzureWebJobsStorage": {
+        "blobServiceUri": "https://<storage_account_name>.blob.core.windows.net",
+        "queueServiceUri": "https://<storage_account_name>.queue.core.windows.net",
+        "credential": "managedidentity",
+        "clientId": "<user-assigned-identity-client-id>"
+    }
+}
+{
+    "AzureWebJobsStorage": {
+        "blobServiceUri": "https://<storage_account_name>.blob.core.windows.net",
+        "queueServiceUri": "https://<storage_account_name>.queue.core.windows.net",
+        "credential": "managedidentity",
+        "clientId": "<user-assigned-identity-client-id>"
+    }
+}
+The identity used forAzureWebJobsStorageshould have role assignments that grant it theStorage Blob Data Owner,Storage Queue Data Contributor, andStorage Account Contributorroles. You can omit theStorage Queue Data ContributorandStorage Account Contributorroles if you don't plan to use blob triggers.
+AzureWebJobsStorage
+The following table shows built-in roles that we recommend when you use triggers in bindings in normal operation. Your application might require more permissions based on the code you write.
+AzureWebJobsStorage
+1For triggering from Azure Service Bus topics, the role assignment must have effective scope over the Service Bus subscription resource. If only the topic is included, an error occurs. Some clients, such as the Azure portal, don't expose the Service Bus subscription resource as a scope for role assignment. In these scenarios, you can use the Azure CLI instead. For more information, seeAzure built-in roles for Azure Service Bus.
+Version 2.xof the SDK doesn't require a specific name. In version 2.x, you can use your own names for these connection strings, and you can store them elsewhere. You can set names in code by usingJobHostConfiguration, like in this example:
+JobHostConfiguration
+static void Main(string[] args)
+{
+    var _storageConn = ConfigurationManager
+        .ConnectionStrings["MyStorageConnection"].ConnectionString;
+
+    //// Dashboard logging is deprecated; use Application Insights.
+    //var _dashboardConn = ConfigurationManager
+    //    .ConnectionStrings["MyDashboardConnection"].ConnectionString;
+
+    JobHostConfiguration config = new JobHostConfiguration();
+    config.StorageConnectionString = _storageConn;
+    //config.DashboardConnectionString = _dashboardConn;
+    JobHost host = new JobHost(config);
+    host.RunAndBlock();
+}
+static void Main(string[] args)
+{
+    var _storageConn = ConfigurationManager
+        .ConnectionStrings["MyStorageConnection"].ConnectionString;
+
+    //// Dashboard logging is deprecated; use Application Insights.
+    //var _dashboardConn = ConfigurationManager
+    //    .ConnectionStrings["MyDashboardConnection"].ConnectionString;
+
+    JobHostConfiguration config = new JobHostConfiguration();
+    config.StorageConnectionString = _storageConn;
+    //config.DashboardConnectionString = _dashboardConn;
+    JobHost host = new JobHost(config);
+    host.RunAndBlock();
+}
+Note
+Because version 3.xuses the default .NET Core configuration APIs, no API exists to change connection string names. For more information, seeDevelop and deploy WebJobs by using Visual Studio.
+Host development settings
+You can run the host in development mode to make local development more efficient. Here are some of the settings that automatically change when you run in development mode:
+Tracing.ConsoleLevel
+TraceLevel.Verbose
+Queues.MaxPollingInterval
+Singleton.ListenerLockPeriod
+The process for enabling development mode depends on the SDK version.
+Version 3.xuses the standard ASP.NET Core APIs. Call theUseEnvironmentmethod on theHostBuilderinstance. Pass a string nameddevelopment, as in this example:
+UseEnvironment
+HostBuilder
+development
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.UseEnvironment("development");
+    builder.ConfigureWebJobs(b =>
+            {
+                b.AddAzureStorageCoreServices();
+            });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.UseEnvironment("development");
+    builder.ConfigureWebJobs(b =>
+            {
+                b.AddAzureStorageCoreServices();
+            });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+TheJobHostConfigurationclass has aUseDevelopmentSettingsmethod that enables development mode. The following example shows how to use development settings. To makeconfig.IsDevelopmentreturntruewhen it runs locally, set a local environment variable namedAzureWebJobsEnvthat has the valueDevelopment.
+JobHostConfiguration
+UseDevelopmentSettings
+config.IsDevelopment
+true
+AzureWebJobsEnv
+Development
+static void Main()
+{
+    config = new JobHostConfiguration();
+
+    if (config.IsDevelopment)
+    {
+        config.UseDevelopmentSettings();
+    }
+
+    var host = new JobHost(config);
+    host.RunAndBlock();
+}
+static void Main()
+{
+    config = new JobHostConfiguration();
+
+    if (config.IsDevelopment)
+    {
+        config.UseDevelopmentSettings();
+    }
+
+    var host = new JobHost(config);
+    host.RunAndBlock();
+}
+Manage concurrent connections (version 2.x)
+In version 3.x, the connection limit defaults to infinite connections. If for some reason you need to change this limit, you can use theMaxConnectionsPerServerproperty of theWinHttpHandlerclass.
+MaxConnectionsPerServer
+WinHttpHandler
+In version 2.x, you control the number of concurrent connections to a host by using theServicePointManager.DefaultConnectionLimitAPI. In 2.x, you should increase this value from the default of2before you start your WebJobs host.
+ServicePointManager.DefaultConnectionLimit
+2
+All outgoing HTTP requests that you make from a function by usingHttpClientflow throughServicePointManager. After you reach the value set inDefaultConnectionLimit,ServicePointManagerstarts queueing requests before sending them. Suppose yourDefaultConnectionLimitis set to2and your code makes 1,000 HTTP requests. Initially, only 2 requests are allowed through to the OS. The other 998 requests are queued until there's room for them. YourHttpClientmight time out because it appears to have made the request, but the request was never sent by the OS to the destination server. You might see behavior that doesn't seem to make sense: your localHttpClientis taking 10 seconds to complete a request, but your service is returning every request in 200 ms.
+HttpClient
+ServicePointManager
+DefaultConnectionLimit
+ServicePointManager
+DefaultConnectionLimit
+2
+HttpClient
+HttpClient
+The default value for ASP.NET applications isInt32.MaxValue, and that's likely to work well for WebJobs running in a Basic or higher App Service plan. WebJobs typically need theAlways Onsetting, and that is supported only by Basic and higher App Service plans.
+Int32.MaxValue
+If your WebJob is running in a Free or Shared App Service plan, your application is restricted by the App Service sandbox, which currently has aconnection limit of 300. With an unbound connection limit inServicePointManager, it's more likely that the sandbox connection threshold is reached, and the site shuts down. In that case, settingDefaultConnectionLimitto something lower, like 50 or 100, can prevent this scenario from occurring and still allow sufficient throughput.
+ServicePointManager
+DefaultConnectionLimit
+The setting must be configured before any HTTP requests are made. For this reason, the WebJobs host shouldn't adjust the setting automatically. There might be HTTP requests that occur before the host starts, which can lead to unexpected behavior. The best approach is to set the value immediately in yourMainmethod before you initializeJobHost, as shown in this example:
+Main
+JobHost
+static void Main(string[] args)
+{
+    // Set this immediately so that it's used by all requests.
+    ServicePointManager.DefaultConnectionLimit = Int32.MaxValue;
+
+    var host = new JobHost();
+    host.RunAndBlock();
+}
+static void Main(string[] args)
+{
+    // Set this immediately so that it's used by all requests.
+    ServicePointManager.DefaultConnectionLimit = Int32.MaxValue;
+
+    var host = new JobHost();
+    host.RunAndBlock();
+}
+Triggers
+The WebJobs SDK supports the same set of triggers and binding thatAzure Functionsuses. In the WebJobs SDK, triggers are function-specific and not related to the WebJob deployment type. WebJobs that have event-triggered functions created by using the SDK should always be published as acontinuousWebJob, withAlways onenabled.
+Functions must be public methods, and they must have one trigger attribute or theNoAutomaticTriggerattribute.
+NoAutomaticTrigger
+Automatic triggers
+Automatic triggers call a function in response to an event. Consider this example of a function that is triggered by a message added to Azure Queue Storage. The function responds by reading a blob from Blob storage:
+public static void Run(
+    [QueueTrigger("myqueue-items")] string myQueueItem,
+    [Blob("samples-workitems/{queueTrigger}", FileAccess.Read)] Stream myBlob,
+    ILogger log)
+{
+    log.LogInformation($"BlobInput processed blob\n Name:{myQueueItem} \n Size: {myBlob.Length} bytes");
+}
+public static void Run(
+    [QueueTrigger("myqueue-items")] string myQueueItem,
+    [Blob("samples-workitems/{queueTrigger}", FileAccess.Read)] Stream myBlob,
+    ILogger log)
+{
+    log.LogInformation($"BlobInput processed blob\n Name:{myQueueItem} \n Size: {myBlob.Length} bytes");
+}
+TheQueueTriggerattribute tells the runtime to call the function whenever a queue message appears inmyqueue-items. TheBlobattribute tells the runtime to use the queue message to read a blob in thesample-workitemscontainer. The name of the blob item in thesamples-workitemscontainer is obtained directly from the queue trigger as a binding expression ({queueTrigger}).
+QueueTrigger
+myqueue-items
+Blob
+sample-workitems
+samples-workitems
+{queueTrigger}
+Note
+A web app can time out after 20 minutes of inactivity, and only requests to the actual web app can reset the timer. Viewing the app's configuration in the Azure portal or making requests to the advanced tools site (https://<app_name>.scm.azurewebsites.net) doesn't reset the timer. If you set the web app that hosts your job to run continuously, run on a schedule, or use event-driven triggers, enable theAlways onsetting on your web app's AzureConfigurationpane. TheAlways onsetting helps make sure that these kinds of WebJobs run reliably. This feature is available only in the Basic, Standard, and Premiumpricing tiers.
+https://<app_name>.scm.azurewebsites.net
+Manual triggers
+To trigger a function manually, use theNoAutomaticTriggerattribute:
+NoAutomaticTrigger
+[NoAutomaticTrigger]
+public static void CreateQueueMessage(
+ILogger logger,
+string value,
+[Queue("outputqueue")] out string message)
+{
+    message = value;
+    logger.LogInformation("Creating queue message: ", message);
+}
+[NoAutomaticTrigger]
+public static void CreateQueueMessage(
+ILogger logger,
+string value,
+[Queue("outputqueue")] out string message)
+{
+    message = value;
+    logger.LogInformation("Creating queue message: ", message);
+}
+The process for manually triggering the function depends on the SDK version.
+static async Task Main(string[] args)
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddAzureStorage();
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        var jobHost = host.Services.GetService(typeof(IJobHost)) as JobHost;
+        var inputs = new Dictionary<string, object>
+        {
+            { "value", "Hello world!" }
+        };
+
+        await host.StartAsync();
+        await jobHost.CallAsync("CreateQueueMessage", inputs);
+        await host.StopAsync();
+    }
+}
+static async Task Main(string[] args)
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddAzureStorage();
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        var jobHost = host.Services.GetService(typeof(IJobHost)) as JobHost;
+        var inputs = new Dictionary<string, object>
+        {
+            { "value", "Hello world!" }
+        };
+
+        await host.StartAsync();
+        await jobHost.CallAsync("CreateQueueMessage", inputs);
+        await host.StopAsync();
+    }
+}
+static void Main(string[] args)
+{
+    JobHost host = new JobHost();
+    host.Call(typeof(Program).GetMethod("CreateQueueMessage"), new { value = "Hello world!" });
+}
+static void Main(string[] args)
+{
+    JobHost host = new JobHost();
+    host.Call(typeof(Program).GetMethod("CreateQueueMessage"), new { value = "Hello world!" });
+}
+Input and output bindings
+Input bindings provide a declarative way to make data from Azure or third-party services available to your code. Output bindings provide a way to update data. TheGet startedarticle shows an example of each.
+You can use a method return value for an output binding by applying the attribute to the method return value. See the example inUsing the Azure Function return value.
+Binding types
+The process for installing and managing binding types depends on whether you're using version 3.xor version 2.xof the SDK. You can find the package to install for a particular binding type in the "Packages" section of that binding type's Azure Functionsreference article. An exception is the Files trigger and binding (for the local file system), which Azure Functions doesn't support.
+In version 3.x, the storage bindings are included in theMicrosoft.Azure.WebJobs.Extensions.Storagepackage. Call theAddAzureStorageextension method in theConfigureWebJobsmethod:
+Microsoft.Azure.WebJobs.Extensions.Storage
+AddAzureStorage
+ConfigureWebJobs
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+            {
+                b.AddAzureStorageCoreServices();
+                b.AddAzureStorage();
+            });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+            {
+                b.AddAzureStorageCoreServices();
+                b.AddAzureStorage();
+            });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+To use other trigger and binding types, install the NuGet package that contains them and call theAdd<binding>extension method implemented in the extension. For example, if you want to use an Azure Cosmos DB binding, installMicrosoft.Azure.WebJobs.Extensions.CosmosDBand callAddCosmosDB:
+Add<binding>
+Microsoft.Azure.WebJobs.Extensions.CosmosDB
+AddCosmosDB
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+            {
+                b.AddAzureStorageCoreServices();
+                b.AddCosmosDB();
+            });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+            {
+                b.AddAzureStorageCoreServices();
+                b.AddCosmosDB();
+            });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+To use the Timer trigger or the Files binding, which are part of core services, call theAddTimersorAddFilesextension methods.
+AddTimers
+AddFiles
+These trigger and binding types are included in version 2.xof theMicrosoft.Azure.WebJobspackage:
+Microsoft.Azure.WebJobs
+Blob storage
+Queue storage
+Table storage
+To use other trigger and binding types, install the NuGet package that contains them and call aUse<binding>method on theJobHostConfigurationobject. For example, if you want to use a Timer trigger, installMicrosoft.Azure.WebJobs.Extensionsand callUseTimersin theMainmethod:
+Use<binding>
+JobHostConfiguration
+Microsoft.Azure.WebJobs.Extensions
+UseTimers
+Main
+static void Main()
+{
+    config = new JobHostConfiguration();
+    config.UseTimers();
+    var host = new JobHost(config);
+    host.RunAndBlock();
+}
+static void Main()
+{
+    config = new JobHostConfiguration();
+    config.UseTimers();
+    var host = new JobHost(config);
+    host.RunAndBlock();
+}
+To use the Files binding, installMicrosoft.Azure.WebJobs.Extensionsand callUseFiles.
+Microsoft.Azure.WebJobs.Extensions
+UseFiles
+ExecutionContext
+In WebJobs, you can bind to anExecutionContextinstance. With this binding, you can accessExecutionContextas a parameter in your function signature. For example, the following code uses the context object to access the invocation ID, which you can use to correlate all logs produced by a given function invocation.
+ExecutionContext
+ExecutionContext
+public class Functions
+{
+    public static void ProcessQueueMessage([QueueTrigger("queue")] string message,
+        ExecutionContext executionContext,
+        ILogger logger)
+    {
+        logger.LogInformation($"{message}\n{executionContext.InvocationId}");
+    }
+}
+public class Functions
+{
+    public static void ProcessQueueMessage([QueueTrigger("queue")] string message,
+        ExecutionContext executionContext,
+        ILogger logger)
+    {
+        logger.LogInformation($"{message}\n{executionContext.InvocationId}");
+    }
+}
+The process for binding toExecutionContextdepends on your SDK version.
+ExecutionContext
+Call theAddExecutionContextBindingextension method in theConfigureWebJobsmethod:
+AddExecutionContextBinding
+ConfigureWebJobs
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+            {
+                b.AddAzureStorageCoreServices();
+                b.AddExecutionContextBinding();
+            });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+            {
+                b.AddAzureStorageCoreServices();
+                b.AddExecutionContextBinding();
+            });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+TheMicrosoft.Azure.WebJobs.Extensionspackage mentioned earlier also provides a special binding type that you can register by calling theUseCoremethod. You can use the binding to define anExecutionContextparameter in your function signature:
+Microsoft.Azure.WebJobs.Extensions
+UseCore
+ExecutionContext
+class Program
+{
+    static void Main()
+    {
+        config = new JobHostConfiguration();
+        config.UseCore();
+        var host = new JobHost(config);
+        host.RunAndBlock();
+    }
+}
+class Program
+{
+    static void Main()
+    {
+        config = new JobHostConfiguration();
+        config.UseCore();
+        var host = new JobHost(config);
+        host.RunAndBlock();
+    }
+}
+Binding configuration
+You can configure the behavior of some triggers and bindings. The process for configuring them depends on the SDK version.
+Version 3.x:Set configuration when theAdd<Binding>method is called inConfigureWebJobs.
+Add<Binding>
+ConfigureWebJobs
+Version 2.x:Set configuration by setting properties in a configuration object that you pass in toJobHost.
+JobHost
+These binding-specific settings are equivalent to settings in thehost.jsonproject filein Azure Functions.
+host.json
+You can configure the following bindings:
+Azure Cosmos DB trigger
+Event Hubs trigger
+Queue storage trigger
+SendGrid binding
+Service Bus trigger
+This example shows how to configure the Azure Cosmos DB trigger:
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddCosmosDB(a =>
+        {
+            a.ConnectionMode = ConnectionMode.Gateway;
+            a.Protocol = Protocol.Https;
+            a.LeaseOptions.LeasePrefix = "prefix1";
+
+        });
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddCosmosDB(a =>
+        {
+            a.ConnectionMode = ConnectionMode.Gateway;
+            a.Protocol = Protocol.Https;
+            a.LeaseOptions.LeasePrefix = "prefix1";
+
+        });
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+For more information, seeAzure Cosmos DB binding.
+This example shows how to configure the Event Hubs trigger:
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddEventHubs(a =>
+        {
+            a.BatchCheckpointFrequency = 5;
+            a.EventProcessorOptions.MaxBatchSize = 256;
+            a.EventProcessorOptions.PrefetchCount = 512;
+        });
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddEventHubs(a =>
+        {
+            a.BatchCheckpointFrequency = 5;
+            a.EventProcessorOptions.MaxBatchSize = 256;
+            a.EventProcessorOptions.PrefetchCount = 512;
+        });
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+For more information, seeEvent Hubs binding.
+Queue storage trigger configuration
+The following examples show how to configure the Queue storage trigger.
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddAzureStorage(a => {
+            a.BatchSize = 8;
+            a.NewBatchThreshold = 4;
+            a.MaxDequeueCount = 4;
+            a.MaxPollingInterval = TimeSpan.FromSeconds(15);
+        });
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddAzureStorage(a => {
+            a.BatchSize = 8;
+            a.NewBatchThreshold = 4;
+            a.MaxDequeueCount = 4;
+            a.MaxPollingInterval = TimeSpan.FromSeconds(15);
+        });
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+For more information, seeQueue storage binding.
+static void Main(string[] args)
+{
+    JobHostConfiguration config = new JobHostConfiguration();
+    config.Queues.BatchSize = 8;
+    config.Queues.NewBatchThreshold = 4;
+    config.Queues.MaxDequeueCount = 4;
+    config.Queues.MaxPollingInterval = TimeSpan.FromSeconds(15);
+    JobHost host = new JobHost(config);
+    host.RunAndBlock();
+}
+static void Main(string[] args)
+{
+    JobHostConfiguration config = new JobHostConfiguration();
+    config.Queues.BatchSize = 8;
+    config.Queues.NewBatchThreshold = 4;
+    config.Queues.MaxDequeueCount = 4;
+    config.Queues.MaxPollingInterval = TimeSpan.FromSeconds(15);
+    JobHost host = new JobHost(config);
+    host.RunAndBlock();
+}
+For more information, see thehost.jsonv1.x reference.
+host.json
+SendGrid binding configuration (version 3.x)
+This example shows how to configure the SendGrid output binding:
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddSendGrid(a =>
+        {
+            a.FromAddress.Email = "samples@functions.com";
+            a.FromAddress.Name = "Azure Functions";
+        });
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddSendGrid(a =>
+        {
+            a.FromAddress.Email = "samples@functions.com";
+            a.FromAddress.Name = "Azure Functions";
+        });
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+For more information, seeSendGridbinding.
+SendGrid
+Service Bus trigger configuration (version 3.x)
+This example shows how to configure the Service Bus trigger:
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddServiceBus(sbOptions =>
+        {
+            sbOptions.MessageHandlerOptions.AutoComplete = true;
+            sbOptions.MessageHandlerOptions.MaxConcurrentCalls = 16;
+        });
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddServiceBus(sbOptions =>
+        {
+            sbOptions.MessageHandlerOptions.AutoComplete = true;
+            sbOptions.MessageHandlerOptions.MaxConcurrentCalls = 16;
+        });
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+For more information, seeService Bus binding.
+Configuration for other bindings
+Some trigger and binding types define their own custom configuration types. For example, you can use the File trigger to specify the root path to monitor, as in the following examples.
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddFiles(a => a.RootPath = @"c:\data\import");
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+        b.AddFiles(a => a.RootPath = @"c:\data\import");
+    });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static void Main()
+{
+    config = new JobHostConfiguration();
+    var filesConfig = new FilesConfiguration
+    {
+        RootPath = @"c:\data\import"
+    };
+    config.UseFiles(filesConfig);
+    var host = new JobHost(config);
+    host.RunAndBlock();
+}
+static void Main()
+{
+    config = new JobHostConfiguration();
+    var filesConfig = new FilesConfiguration
+    {
+        RootPath = @"c:\data\import"
+    };
+    config.UseFiles(filesConfig);
+    var host = new JobHost(config);
+    host.RunAndBlock();
+}
+Binding expressions
+In attribute constructor parameters, you can use expressions that resolve to values from various sources. For example, in the following code, the path for theBlobTriggerattribute creates an expression namedfilename. When used for the output binding,filenameresolves to the name of the triggering blob.
+BlobTrigger
+filename
+filename
+public static void CreateThumbnail(
+    [BlobTrigger("sample-images/{filename}")] Stream image,
+    [Blob("sample-images-sm/{filename}", FileAccess.Write)] Stream imageSmall,
+    string filename,
+    ILogger logger)
+{
+    logger.Info($"Blob trigger processing: {filename}");
+    // ...
+}
+public static void CreateThumbnail(
+    [BlobTrigger("sample-images/{filename}")] Stream image,
+    [Blob("sample-images-sm/{filename}", FileAccess.Write)] Stream imageSmall,
+    string filename,
+    ILogger logger)
+{
+    logger.Info($"Blob trigger processing: {filename}");
+    // ...
+}
+For more information about binding expressions, seeBinding expressions and patternsin the Azure Functions documentation.
+Custom binding expressions
+Sometimes you want to specify a queue name, a blob name or container, or a table name in code rather than hard-coding it. For example, you might want to specify the queue name for theQueueTriggerattribute in a configuration file or environment variable.
+QueueTrigger
+You can assign a queue name to the attribute by passing a custom name resolver during configuration. You include placeholders in trigger or binding attribute constructor parameters, and your resolver code provides the actual values to be used in place of those placeholders. You identify placeholders by surrounding them with percent (%) signs:
+%
+public static void WriteLog([QueueTrigger("%logqueue%")] string logMessage)
+{
+    Console.WriteLine(logMessage);
+}
+public static void WriteLog([QueueTrigger("%logqueue%")] string logMessage)
+{
+    Console.WriteLine(logMessage);
+}
+In this code, you use a queue namedlogqueuetestin the test environment and a queue namedlogqueueprodin production. Instead of a hard-coded queue name, you specify the name of an entry in theappSettingscollection.
+logqueuetest
+logqueueprod
+appSettings
+A default resolver takes effect if you don't provide a custom one. The default gets values from app settings or environment variables.
+Starting in .NET Core 3.1, theConfigurationManagerinstance you use requires theSystem.Configuration.ConfigurationManagerNuGet package. The sample requires the followingusingstatement:
+ConfigurationManager
+System.Configuration.ConfigurationManager
+using
+using System.Configuration;
+using System.Configuration;
+YourNameResolverclass gets the queue name from app settings:
+NameResolver
+public class CustomNameResolver : INameResolver
+{
+    public string Resolve(string name)
+    {
+        return ConfigurationManager.AppSettings[name].ToString();
+    }
+}
+public class CustomNameResolver : INameResolver
+{
+    public string Resolve(string name)
+    {
+        return ConfigurationManager.AppSettings[name].ToString();
+    }
+}
+You configure the resolver by using dependency injection. These samples require the followingusingstatement:
+using
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
+You add the resolver by calling theConfigureServicesextension method onHostBuilder, as in this example:
+ConfigureServices
+HostBuilder
+static async Task Main(string[] args)
+{
+    var builder = new HostBuilder();
+    var resolver = new CustomNameResolver();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+    });
+    builder.ConfigureServices(s => s.AddSingleton<INameResolver>(resolver));
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main(string[] args)
+{
+    var builder = new HostBuilder();
+    var resolver = new CustomNameResolver();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+    });
+    builder.ConfigureServices(s => s.AddSingleton<INameResolver>(resolver));
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+Pass yourNameResolverclass in to theJobHostobject:
+NameResolver
+JobHost
+static void Main(string[] args)
+{
+    JobHostConfiguration config = new JobHostConfiguration();
+    config.NameResolver = new CustomNameResolver();
+    JobHost host = new JobHost(config);
+    host.RunAndBlock();
+}
+static void Main(string[] args)
+{
+    JobHostConfiguration config = new JobHostConfiguration();
+    config.NameResolver = new CustomNameResolver();
+    JobHost host = new JobHost(config);
+    host.RunAndBlock();
+}
+Azure Functions implementsINameResolverto get values from app settings, as shown in the example. When you use the WebJobs SDK directly, you can write a custom implementation that gets placeholder replacement values from whatever source you prefer.
+INameResolver
+Binding at runtime
+If you need to do some work in your function before you use a binding attribute likeQueue,Blob, orTable, you can use theIBinderinterface.
+Queue
+Blob
+Table
+IBinder
+The following example takes an input queue message and creates a new message that has the same content in an output queue. The output queue name is set by code in the body of the function.
+public static void CreateQueueMessage(
+    [QueueTrigger("inputqueue")] string queueMessage,
+    IBinder binder)
+{
+    string outputQueueName = "outputqueue" + DateTime.Now.Month.ToString();
+    QueueAttribute queueAttribute = new QueueAttribute(outputQueueName);
+    CloudQueue outputQueue = binder.Bind<CloudQueue>(queueAttribute);
+    outputQueue.AddMessageAsync(new CloudQueueMessage(queueMessage));
+}
+public static void CreateQueueMessage(
+    [QueueTrigger("inputqueue")] string queueMessage,
+    IBinder binder)
+{
+    string outputQueueName = "outputqueue" + DateTime.Now.Month.ToString();
+    QueueAttribute queueAttribute = new QueueAttribute(outputQueueName);
+    CloudQueue outputQueue = binder.Bind<CloudQueue>(queueAttribute);
+    outputQueue.AddMessageAsync(new CloudQueueMessage(queueMessage));
+}
+For more information, seeBinding at runtimein the Azure Functions documentation.
+Binding reference information
+The Azure Functions documentation provides reference information about each binding type. The following information is in each binding reference article. (This example is based on a Storage queue.)
+Packages. The package you need to install to include support for the binding in a WebJobs SDK project.
+Examples. Code samples. The C# class library example applies to the WebJobs SDK. Just omit theFunctionNameattribute.
+FunctionName
+Attributes. The attributes to use for the binding type.
+Configuration. Explanations of the attribute properties and constructor parameters.
+Usage. The types you can bind to and information about how the binding works. For example, a polling algorithm or poison queue processing.
+Note
+The HTTP, Webhooks, and Event Grid bindings are supported only by Azure Functions, not by the WebJobs SDK.
+For a full list of bindings supported in the Azure Functions runtime, seeSupported bindings.
+Attributes: Disable, Timeout, and Singleton
+With these attributes, you can control function triggering, cancel functions, and ensure that only one instance of a function runs.
+Disable attribute
+Use theDisableattribute to control whether a function can be triggered.
+Disable
+In the following example, if the app settingDisable_TestJobhas a value of1orTrue(not case specific), the function doesn't run. In that scenario, the runtime creates the log messageFunction 'Functions.TestJob' is disabled.
+Disable_TestJob
+1
+True
+[Disable("Disable_TestJob")]
+public static void TestJob([QueueTrigger("testqueue2")] string message)
+{
+    Console.WriteLine("Function with Disable attribute executed!");
+}
+[Disable("Disable_TestJob")]
+public static void TestJob([QueueTrigger("testqueue2")] string message)
+{
+    Console.WriteLine("Function with Disable attribute executed!");
+}
+When you change app setting values in the Azure portal, the WebJob restarts to pick up the new setting.
+The attribute can be declared at the level of parameter, method, or class. The setting name can also contain binding expressions.
+Timeout attribute
+TheTimeoutattribute causes a function to be canceled if it doesn't finish within a specified amount of time. In the following example, the function would run for one day without theTimeoutattribute. Time-out causes the function to be canceled after 15 seconds. When theTimeoutattributethrowOnErrorparameter is set totrue, the function invocation is terminated by having an exception thrown by the WebJobs SDK when the time-out interval is exceeded. The default value ofthrowOnErrorisfalse. When theTimeoutattribute is used, the default behavior is to cancel the function invocation by setting the cancellation token while allowing the invocation to run indefinitely until the function code returns or throws an exception.
+Timeout
+Timeout
+Timeout
+throwOnError
+true
+throwOnError
+false
+Timeout
+[Timeout("00:00:15")]
+public static async Task TimeoutJob(
+    [QueueTrigger("testqueue2")] string message,
+    CancellationToken token,
+    TextWriter log)
+{
+    await log.WriteLineAsync("Job starting");
+    await Task.Delay(TimeSpan.FromDays(1), token);
+    await log.WriteLineAsync("Job completed");
+}
+[Timeout("00:00:15")]
+public static async Task TimeoutJob(
+    [QueueTrigger("testqueue2")] string message,
+    CancellationToken token,
+    TextWriter log)
+{
+    await log.WriteLineAsync("Job starting");
+    await Task.Delay(TimeSpan.FromDays(1), token);
+    await log.WriteLineAsync("Job completed");
+}
+You can apply theTimeoutattribute at the class level or the method level, and you can specify a global time-out by usingJobHostConfiguration.FunctionTimeout. Class-level or method-level time-outs override global time-outs.
+Timeout
+JobHostConfiguration.FunctionTimeout
+Singleton attribute
+TheSingletonattribute ensures that only one instance of a function runs, even when there are multiple instances of the host web app. TheSingletonattribute usesdistributed lockingto ensure that only one instance runs.
+Singleton
+Singleton
+In this example, only a single instance of theProcessImagefunction runs at any given time:
+ProcessImage
+[Singleton]
+public static async Task ProcessImage([BlobTrigger("images")] Stream image)
+{
+     // Process the image.
+}
+[Singleton]
+public static async Task ProcessImage([BlobTrigger("images")] Stream image)
+{
+     // Process the image.
+}
+Some triggers have built-in support for concurrency management:
+QueueTrigger. SetJobHostConfiguration.Queues.BatchSizeto1.
+JobHostConfiguration.Queues.BatchSize
+1
+ServiceBusTrigger. SetServiceBusConfiguration.MessageOptions.MaxConcurrentCallsto1.
+ServiceBusConfiguration.MessageOptions.MaxConcurrentCalls
+1
+FileTrigger. SetFileProcessor.MaxDegreeOfParallelismto1.
+FileProcessor.MaxDegreeOfParallelism
+1
+You can use these settings to ensure that your function runs as a singleton on a single instance. To ensure that only a single instance of the function is running when the web app scales out to multiple instances, apply a listener-level singleton lock on the function ([Singleton(Mode = SingletonMode.Listener)]). Listener locks are acquired when the JobHost starts. If three scaled-out instances all start at the same time, only one of the instances acquires the lock and only one listener starts.
+[Singleton(Mode = SingletonMode.Listener)]
+Note
+To learn more about howSingletonMode.Functionworks, see theSingletonMode GitHub repo.
+SingletonMode.Function
+You can specify ascope expression/valueon a singleton. The expression/value ensures that all executions of the function at a specific scope are serialized. Implementing more granular locking in this way can allow for some level of parallelism for your function while serializing other invocations as dictated by your requirements. For example, in the following code, the scope expression binds to theRegionvalue of the incoming message. When the queue contains three messages in regions East, East, and West, the messages that have region East are run serially. The message with region West runs in parallel with the messages in region East.
+Region
+[Singleton("{Region}")]
+public static async Task ProcessWorkItem([QueueTrigger("workitems")] WorkItem workItem)
+{
+     // Process the work item.
+}
+
+public class WorkItem
+{
+     public int ID { get; set; }
+     public string Region { get; set; }
+     public int Category { get; set; }
+     public string Description { get; set; }
+}
+[Singleton("{Region}")]
+public static async Task ProcessWorkItem([QueueTrigger("workitems")] WorkItem workItem)
+{
+     // Process the work item.
+}
+
+public class WorkItem
+{
+     public int ID { get; set; }
+     public string Region { get; set; }
+     public int Category { get; set; }
+     public string Description { get; set; }
+}
+The default scope for a lock isSingletonScope.Function. The lock scope (the blob lease path) is tied to the fully qualified function name. To lock across functions, specifySingletonScope.Hostand use a scope ID name that's the same across all functions that you don't want to run simultaneously. In the following example, only one instance ofAddItemorRemoveItemruns at a time:
+SingletonScope.Function
+SingletonScope.Host
+AddItem
+RemoveItem
+[Singleton("ItemsLock", SingletonScope.Host)]
+public static void AddItem([QueueTrigger("add-item")] string message)
+{
+     // Perform the add operation.
+}
+
+[Singleton("ItemsLock", SingletonScope.Host)]
+public static void RemoveItem([QueueTrigger("remove-item")] string message)
+{
+     // Perform the remove operation.
+}
+[Singleton("ItemsLock", SingletonScope.Host)]
+public static void AddItem([QueueTrigger("add-item")] string message)
+{
+     // Perform the add operation.
+}
+
+[Singleton("ItemsLock", SingletonScope.Host)]
+public static void RemoveItem([QueueTrigger("remove-item")] string message)
+{
+     // Perform the remove operation.
+}
+Viewing lease blobs
+The WebJobs SDK usesAzure blob leasesto implement distributed locking. The lease blobs used bySingletoncan be found in theazure-webjobs-hostcontainer in theAzureWebJobsStoragestorage account under the path "locks." For example, the lease blob path for the firstProcessImageexample shown earlier might belocks/061851c758f04938a4426aa9ab3869c0/WebJobs.Functions.ProcessImage. All paths include the JobHost ID, in this case, 061851c758f04938a4426aa9ab3869c0.
+Singleton
+azure-webjobs-host
+AzureWebJobsStorage
+ProcessImage
+locks/061851c758f04938a4426aa9ab3869c0/WebJobs.Functions.ProcessImage
+Async functions
+For information about how to code async functions, see theAzure Functions documentation.
+Cancellation tokens
+For information about how to handle cancellation tokens, see the Azure Functions documentation oncancellation tokens and graceful shutdown.
+Multiple instances
+If your web app runs on multiple instances, a continuous WebJob runs on each instance, listening for triggers and calling functions. The various trigger bindings are designed to efficiently share work collaboratively across instances, so that scaling out to more instances allows you to handle more load.
+While some triggers might result in double-processing, queue and blob storage triggers automatically prevent a function from processing a queue message or blob more than once. For more information, seeDesigning for identical inputin the Azure Functions documentation.
+The timer trigger automatically ensures that only one instance of the timer runs, so you don't get more than one function instance running at a given scheduled time.
+If you want to ensure that only one instance of a function runs, even when there are multiple instances of the host web app, you can use theSingletonattribute.
+Singleton
+Filters
+Function Filters (preview) provide a way to customize the WebJobs execution pipeline by using your own logic. Filters are similar toASP.NET Core filters. You can implement them as declarative attributes that are applied to your functions or classes. For more information, seeFunction Filters.
+Logging and monitoring
+We recommend that you use the logging framework that was developed for ASP.NET. TheGet startedarticle shows how to use it.
+Log filtering
+Every log created by anILoggerinstance has associatedCategoryandLevelvalues.LogLevelis an enumeration, and the integer code indicates relative importance:
+ILogger
+Category
+Level
+LogLevel
+You can independently filter each category to a particularLogLevelvalue. For example, you might want to see all logs for blob trigger processing, but onlyErrorand higher for everything else.
+LogLevel
+Error
+Version 3.xof the SDK relies on the filtering that is built into .NET Core. Use theLogCategoriesclass to define categories for specific functions, triggers, or users. TheLogCategoriesclass also defines filters for specific host states, likeStartupandResults, so you can fine-tune the logging output. If no match is found in the defined categories, the filter falls back to theDefaultvalue when deciding whether to filter the message.
+LogCategories
+LogCategories
+Startup
+Results
+Default
+LogCategoriesrequires the followingusingstatement:
+LogCategories
+using
+using Microsoft.Azure.WebJobs.Logging;
+using Microsoft.Azure.WebJobs.Logging;
+The following example constructs a filter that, by default, filters all logs at theWarninglevel. TheFunctionandresultscategories (equivalent toHost.Resultsin version 2.x) are filtered at theErrorlevel. The filter compares the current category to all registered levels in theLogCategoriesinstance and chooses the longest match. TheDebuglevel registered forHost.Triggersthen matchesHost.Triggers.QueueorHost.Triggers.Blob. You can control broader categories without needing to add each one.
+Warning
+Function
+results
+Host.Results
+Error
+LogCategories
+Debug
+Host.Triggers
+Host.Triggers.Queue
+Host.Triggers.Blob
+static async Task Main(string[] args)
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+    });
+    builder.ConfigureLogging(logging =>
+            {
+                logging.SetMinimumLevel(LogLevel.Warning);
+                logging.AddFilter("Function", LogLevel.Error);
+                logging.AddFilter(LogCategories.CreateFunctionCategory("MySpecificFunctionName"),
+                    LogLevel.Debug);
+                logging.AddFilter(LogCategories.Results, LogLevel.Error);
+                logging.AddFilter("Host.Triggers", LogLevel.Debug);
+            });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main(string[] args)
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+    });
+    builder.ConfigureLogging(logging =>
+            {
+                logging.SetMinimumLevel(LogLevel.Warning);
+                logging.AddFilter("Function", LogLevel.Error);
+                logging.AddFilter(LogCategories.CreateFunctionCategory("MySpecificFunctionName"),
+                    LogLevel.Debug);
+                logging.AddFilter(LogCategories.Results, LogLevel.Error);
+                logging.AddFilter("Host.Triggers", LogLevel.Debug);
+            });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+In version 2.xof the SDK, you use theLogCategoryFilterclass to control filtering. TheLogCategoryFilterhas aDefaultproperty with an initial value ofInformation, meaning that any messages at theInformation,Warning,Error, orCriticallevels are logged, but any messages at theDebugorTracelevels are filtered away.
+LogCategoryFilter
+LogCategoryFilter
+Default
+Information
+Information
+Warning
+Error
+Critical
+Debug
+Trace
+As withLogCategoriesin version 3.x, theCategoryLevelsproperty allows you to specify log levels for specific categories so you can fine-tune the logging output. If no match is found within theCategoryLevelsdictionary, the filter falls back to theDefaultvalue when deciding whether to filter the message.
+LogCategories
+CategoryLevels
+CategoryLevels
+Default
+The following example constructs a filter that by default filters all logs at theWarninglevel. TheFunctionandHost.Resultscategories are filtered at theErrorlevel. TheLogCategoryFiltercompares the current category to all registeredCategoryLevelsand chooses the longest match. TheDebuglevel registered forHost.Triggersthen matchesHost.Triggers.QueueorHost.Triggers.Blob. You can control broader categories without needing to add each one.
+Warning
+Function
+Host.Results
+Error
+LogCategoryFilter
+CategoryLevels
+Debug
+Host.Triggers
+Host.Triggers.Queue
+Host.Triggers.Blob
+var filter = new LogCategoryFilter();
+filter.DefaultLevel = LogLevel.Warning;
+filter.CategoryLevels[LogCategories.Function] = LogLevel.Error;
+filter.CategoryLevels[LogCategories.Results] = LogLevel.Error;
+filter.CategoryLevels["Host.Triggers"] = LogLevel.Debug;
+
+config.LoggerFactory = new LoggerFactory()
+    .AddApplicationInsights(instrumentationKey, filter.Filter)
+    .AddConsole(filter.Filter);
+var filter = new LogCategoryFilter();
+filter.DefaultLevel = LogLevel.Warning;
+filter.CategoryLevels[LogCategories.Function] = LogLevel.Error;
+filter.CategoryLevels[LogCategories.Results] = LogLevel.Error;
+filter.CategoryLevels["Host.Triggers"] = LogLevel.Debug;
+
+config.LoggerFactory = new LoggerFactory()
+    .AddApplicationInsights(instrumentationKey, filter.Filter)
+    .AddConsole(filter.Filter);
+Custom telemetry for Application Insights
+The process for implementing custom telemetry forApplication Insightsdepends on the SDK version. To learn how to configure Application Insights, seeAdd Application Insights logging.
+Because version 3.xof the WebJobs SDK relies on the .NET Core generic host, a custom telemetry factory is no longer provided. But you can add custom telemetry to the pipeline by using dependency injection. The examples in this section require the followingusingstatements:
+using
+using Microsoft.ApplicationInsights.Extensibility;
+using Microsoft.ApplicationInsights.Channel;
+using Microsoft.ApplicationInsights.Extensibility;
+using Microsoft.ApplicationInsights.Channel;
+You can use the following custom implementation ofITelemetryInitializerto add your ownITelemetryinstance to the defaultTelemetryConfiguration.
+ITelemetryInitializer
+ITelemetry
+TelemetryConfiguration
+internal class CustomTelemetryInitializer : ITelemetryInitializer
+{
+    public void Initialize(ITelemetry telemetry)
+    {
+        // Do something with telemetry.
+    }
+}
+internal class CustomTelemetryInitializer : ITelemetryInitializer
+{
+    public void Initialize(ITelemetry telemetry)
+    {
+        // Do something with telemetry.
+    }
+}
+CallConfigureServicesin the builder to add a customITelemetryInitializerinstance to the pipeline.
+ConfigureServices
+ITelemetryInitializer
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+    });
+    builder.ConfigureLogging((context, b) =>
+    {
+        // Add logging providers.
+        b.AddConsole();
+
+        // If this key exists in any config, use it to enable Application Insights.
+        string appInsightsKey = context.Configuration["APPINSIGHTS_INSTRUMENTATIONKEY"];
+        if (!string.IsNullOrEmpty(appInsightsKey))
+        {
+            // This uses the options callback to explicitly set the instrumentation key.
+            b.AddApplicationInsights(o => o.InstrumentationKey = appInsightsKey);
+        }
+    });
+    builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<ITelemetryInitializer, CustomTelemetryInitializer>();
+        });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+static async Task Main()
+{
+    var builder = new HostBuilder();
+    builder.ConfigureWebJobs(b =>
+    {
+        b.AddAzureStorageCoreServices();
+    });
+    builder.ConfigureLogging((context, b) =>
+    {
+        // Add logging providers.
+        b.AddConsole();
+
+        // If this key exists in any config, use it to enable Application Insights.
+        string appInsightsKey = context.Configuration["APPINSIGHTS_INSTRUMENTATIONKEY"];
+        if (!string.IsNullOrEmpty(appInsightsKey))
+        {
+            // This uses the options callback to explicitly set the instrumentation key.
+            b.AddApplicationInsights(o => o.InstrumentationKey = appInsightsKey);
+        }
+    });
+    builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<ITelemetryInitializer, CustomTelemetryInitializer>();
+        });
+    var host = builder.Build();
+    using (host)
+    {
+        await host.RunAsync();
+    }
+}
+WhenTelemetryConfigurationis constructed, all registered types ofITelemetryInitializerare included. For more information, seeApplication Insights API for custom events and metrics.
+TelemetryConfiguration
+ITelemetryInitializer
+In version 3.x, you don't have to flushTelemetryClientwhen the host stops. The .NET Core dependency injection system automatically disposes of the registeredApplicationInsightsLoggerProviderinstance, which flushes theTelemetryClient.
+TelemetryClient
+ApplicationInsightsLoggerProvider
+TelemetryClient
+In version 2.x, theTelemetryClientinstance created internally by the Application Insights provider for the WebJobs SDK usesServerTelemetryChannel. When the Application Insights endpoint is unavailable or is throttling incoming requests, this channelsaves requests in the web app's file system and resubmits them later.
+TelemetryClient
+ServerTelemetryChannel
+TelemetryClientis created by a class that implementsITelemetryClientFactory. By default, this class isDefaultTelemetryClientFactory.
+TelemetryClient
+ITelemetryClientFactory
+DefaultTelemetryClientFactory
+If you want to modify any part of the Application Insights pipeline, you can supply your own instance ofITelemetryClientFactory. The host then uses your class to constructTelemetryClient. For example, this code overridesDefaultTelemetryClientFactoryto modify a property ofServerTelemetryChannel:
+ITelemetryClientFactory
+TelemetryClient
+DefaultTelemetryClientFactory
+ServerTelemetryChannel
+private class CustomTelemetryClientFactory : DefaultTelemetryClientFactory
+{
+    public CustomTelemetryClientFactory(string instrumentationKey, Func<string, LogLevel, bool> filter)
+        : base(instrumentationKey, new SamplingPercentageEstimatorSettings(), filter)
+    {
+    }
+
+    protected override ITelemetryChannel CreateTelemetryChannel()
+    {
+        ServerTelemetryChannel channel = new ServerTelemetryChannel();
+
+        // Change the default from 30 seconds to 15 seconds.
+        channel.MaxTelemetryBufferDelay = TimeSpan.FromSeconds(15);
+
+        return channel;
+    }
+}
+private class CustomTelemetryClientFactory : DefaultTelemetryClientFactory
+{
+    public CustomTelemetryClientFactory(string instrumentationKey, Func<string, LogLevel, bool> filter)
+        : base(instrumentationKey, new SamplingPercentageEstimatorSettings(), filter)
+    {
+    }
+
+    protected override ITelemetryChannel CreateTelemetryChannel()
+    {
+        ServerTelemetryChannel channel = new ServerTelemetryChannel();
+
+        // Change the default from 30 seconds to 15 seconds.
+        channel.MaxTelemetryBufferDelay = TimeSpan.FromSeconds(15);
+
+        return channel;
+    }
+}
+TheSamplingPercentageEstimatorSettingsobject configuresadaptive sampling. In this scenario, in certain high-volume scenarios, Applications Insights sends a selected subset of telemetry data to the server.
+SamplingPercentageEstimatorSettings
+After you create the telemetry factory, you pass it in to the Application Insights logging provider:
+var clientFactory = new CustomTelemetryClientFactory(instrumentationKey, filter.Filter);
+
+config.LoggerFactory = new LoggerFactory()
+    .AddApplicationInsights(clientFactory);
+var clientFactory = new CustomTelemetryClientFactory(instrumentationKey, filter.Filter);
+
+config.LoggerFactory = new LoggerFactory()
+    .AddApplicationInsights(clientFactory);
+Related content
+This article provides code snippets that show you how to handle common scenarios for working with the WebJobs SDK. For complete samples, seeazure-webjobs-sdk-samples.
+Feedback
+Was this page helpful?
+Additional resources

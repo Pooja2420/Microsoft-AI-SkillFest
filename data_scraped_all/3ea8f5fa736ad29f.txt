@@ -1,0 +1,218 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Time series analysis
+Article
+2024-08-12
+6 contributors
+In this article
+Applies to: âMicrosoft FabricâAzure Data ExplorerâAzure MonitorâMicrosoft Sentinel
+Cloud services and IoT devices generate telemetry data that can be used to gain insights such as monitoring service health, physical production processes, and usage trends. Performing time series analysis is one way to identify deviations in the pattern of these metrics compared to their typical baseline pattern.
+Kusto Query Language (KQL) contains native support for creation, manipulation, and analysis of multiple time series. In this article, learn how KQL is used to create and analyze thousands of time series in seconds, enabling near real-time monitoring solutions and workflows.
+Time series creation
+In this section, we'll create a large set of regular time series simply and intuitively using themake-seriesoperator, and fill-in missing values as needed.
+The first step in time series analysis is to partition and transform the original telemetry table to a set of time series. The table usually contains a timestamp column, contextual dimensions, and optional metrics. The dimensions are used to partition the data. The goal is to create thousands of time series per partition at regular time intervals.
+make-series
+The input tabledemo_make_series1contains 600K records of arbitrary web service traffic. Use the following command to sample 10 records:
+Run the query
+demo_make_series1 | take 10
+demo_make_series1 | take 10
+The resulting table contains a timestamp column, three contextual dimensions columns, and no metrics:
+Since there are no metrics, we can only build a set of time series representing the traffic count itself, partitioned by OS using the following query:
+Run the query
+let min_t = toscalar(demo_make_series1 | summarize min(TimeStamp));
+let max_t = toscalar(demo_make_series1 | summarize max(TimeStamp));
+demo_make_series1
+| make-series num=count() default=0 on TimeStamp from min_t to max_t step 1h by OsVer
+| render timechart
+let min_t = toscalar(demo_make_series1 | summarize min(TimeStamp));
+let max_t = toscalar(demo_make_series1 | summarize max(TimeStamp));
+demo_make_series1
+| make-series num=count() default=0 on TimeStamp from min_t to max_t step 1h by OsVer
+| render timechart
+Use themake-seriesoperator to create a set of three time series, where:num=count(): time series of trafficfrom min_t to max_t step 1h: time series is created in 1-hour bins in the time range (oldest and newest timestamps of table records)default=0: specify fill method for missing bins to create regular time series. Alternatively useseries_fill_const(),series_fill_forward(),series_fill_backward()andseries_fill_linear()for changesby OsVer:  partition by OS
+make-series
+num=count(): time series of traffic
+num=count()
+from min_t to max_t step 1h: time series is created in 1-hour bins in the time range (oldest and newest timestamps of table records)
+from min_t to max_t step 1h
+default=0: specify fill method for missing bins to create regular time series. Alternatively useseries_fill_const(),series_fill_forward(),series_fill_backward()andseries_fill_linear()for changes
+default=0
+series_fill_const()
+series_fill_forward()
+series_fill_backward()
+series_fill_linear()
+by OsVer:  partition by OS
+by OsVer
+The actual time series data structure is a numeric array of the aggregated value per each time bin. We userender timechartfor visualization.
+render timechart
+In the table above, we have three partitions. We can create a separate time series: Windows 10 (red), 7 (blue) and 8.1 (green) for each OS version as seen in the graph:
+
+Time series analysis functions
+In this section, we'll perform typical series processing functions. Once a set of time series is created, KQL supports a growing list of functions to process and analyze them. We'll describe a few representative functions for processing and analyzing time series.
+Filtering
+Filtering is a common practice in signal processing and useful for time series processing tasks (for example, smooth a noisy signal, change detection).
+There are two generic filtering functions:series_fir(): Applying FIR filter. Used for simple calculation of moving average and differentiation of the time series for change detection.series_iir(): Applying IIR filter. Used for exponential smoothing and cumulative sum.
+series_fir(): Applying FIR filter. Used for simple calculation of moving average and differentiation of the time series for change detection.
+series_fir()
+series_iir(): Applying IIR filter. Used for exponential smoothing and cumulative sum.
+series_iir()
+Extendthe time series set by adding a new moving average series of size 5 bins (namedma_num) to the query:
+Extend
+Run the query
+let min_t = toscalar(demo_make_series1 | summarize min(TimeStamp));
+let max_t = toscalar(demo_make_series1 | summarize max(TimeStamp));
+demo_make_series1
+| make-series num=count() default=0 on TimeStamp from min_t to max_t step 1h by OsVer
+| extend ma_num=series_fir(num, repeat(1, 5), true, true)
+| render timechart
+let min_t = toscalar(demo_make_series1 | summarize min(TimeStamp));
+let max_t = toscalar(demo_make_series1 | summarize max(TimeStamp));
+demo_make_series1
+| make-series num=count() default=0 on TimeStamp from min_t to max_t step 1h by OsVer
+| extend ma_num=series_fir(num, repeat(1, 5), true, true)
+| render timechart
+
+Regression analysis
+A segmented linear regression analysis can be used to estimate the trend of the time series.
+Useseries_fit_line()to fit the best line to a time series for general trend detection.
+Useseries_fit_2lines()to detect trend changes, relative to the baseline, that are useful in monitoring scenarios.
+Example ofseries_fit_line()andseries_fit_2lines()functions in a time series query:
+series_fit_line()
+series_fit_2lines()
+Run the query
+demo_series2
+| extend series_fit_2lines(y), series_fit_line(y)
+| render linechart with(xcolumn=x)
+demo_series2
+| extend series_fit_2lines(y), series_fit_line(y)
+| render linechart with(xcolumn=x)
+
+Blue: original time series
+Green: fitted line
+Red: two fitted lines
+Note
+The function accurately detected the jump (level change) point.
+Seasonality detection
+Many metrics follow seasonal (periodic) patterns. User traffic of cloud services usually contains daily and weekly patterns that are highest around the middle of the business day and lowest at night and over the weekend. IoT sensors measure in periodic intervals. Physical measurements such as temperature, pressure, or humidity may also show seasonal behavior.
+The following example applies seasonality detection on one month traffic of a web service (2-hour bins):
+Run the query
+demo_series3
+| render timechart
+demo_series3
+| render timechart
+
+Useseries_periods_detect()to automatically detect the periods in the time series.
+Useseries_periods_validate()if we know that a metric should have specific distinct period(s) and we want to verify that they exist.
+Note
+It's an anomaly if specific distinct periods don't exist
+Run the query
+demo_series3
+| project (periods, scores) = series_periods_detect(num, 0., 14d/2h, 2) //to detect the periods in the time series
+| mv-expand periods, scores
+| extend days=2h*todouble(periods)/1d
+demo_series3
+| project (periods, scores) = series_periods_detect(num, 0., 14d/2h, 2) //to detect the periods in the time series
+| mv-expand periods, scores
+| extend days=2h*todouble(periods)/1d
+The function detects daily and weekly seasonality. The daily scores less than the weekly because weekend days are different from weekdays.
+Element-wise functions
+Arithmetic and logical operations can be done on a time series. Usingseries_subtract()we can calculate a residual time series, that is, the difference between original raw metric and a smoothed one, and look for anomalies in the residual signal:
+Run the query
+let min_t = toscalar(demo_make_series1 | summarize min(TimeStamp));
+let max_t = toscalar(demo_make_series1 | summarize max(TimeStamp));
+demo_make_series1
+| make-series num=count() default=0 on TimeStamp from min_t to max_t step 1h by OsVer
+| extend ma_num=series_fir(num, repeat(1, 5), true, true)
+| extend residual_num=series_subtract(num, ma_num) //to calculate residual time series
+| where OsVer == "Windows 10"   // filter on Win 10 to visualize a cleaner chart 
+| render timechart
+let min_t = toscalar(demo_make_series1 | summarize min(TimeStamp));
+let max_t = toscalar(demo_make_series1 | summarize max(TimeStamp));
+demo_make_series1
+| make-series num=count() default=0 on TimeStamp from min_t to max_t step 1h by OsVer
+| extend ma_num=series_fir(num, repeat(1, 5), true, true)
+| extend residual_num=series_subtract(num, ma_num) //to calculate residual time series
+| where OsVer == "Windows 10"   // filter on Win 10 to visualize a cleaner chart 
+| render timechart
+
+Blue: original time series
+Red: smoothed time series
+Green: residual time series
+Time series workflow at scale
+The example below shows how these functions can run at scale on thousands of time series in seconds for anomaly detection. To see a few sample telemetry records of a DB service's read count metric over four days run the following query:
+Run the query
+demo_many_series1
+| take 4
+demo_many_series1
+| take 4
+And simple statistics:
+Run the query
+demo_many_series1
+| summarize num=count(), min_t=min(TIMESTAMP), max_t=max(TIMESTAMP)
+demo_many_series1
+| summarize num=count(), min_t=min(TIMESTAMP), max_t=max(TIMESTAMP)
+Building a time series in 1-hour bins of the read metric (total four days * 24 hours = 96 points), results in normal pattern fluctuation:
+Run the query
+let min_t = toscalar(demo_many_series1 | summarize min(TIMESTAMP));  
+let max_t = toscalar(demo_many_series1 | summarize max(TIMESTAMP));  
+demo_many_series1
+| make-series reads=avg(DataRead) on TIMESTAMP from min_t to max_t step 1h
+| render timechart with(ymin=0)
+let min_t = toscalar(demo_many_series1 | summarize min(TIMESTAMP));  
+let max_t = toscalar(demo_many_series1 | summarize max(TIMESTAMP));  
+demo_many_series1
+| make-series reads=avg(DataRead) on TIMESTAMP from min_t to max_t step 1h
+| render timechart with(ymin=0)
+
+The above behavior is misleading, since the single normal time series is aggregated from thousands of different instances that may have abnormal patterns. Therefore, we create a time series per instance. An instance is defined by Loc (location), Op (operation), and DB (specific machine).
+How many time series can we create?
+Run the query
+demo_many_series1
+| summarize by Loc, Op, DB
+| count
+demo_many_series1
+| summarize by Loc, Op, DB
+| count
+Now, we're going to create a set of 18339 time series of the read count metric. We add thebyclause to the make-series statement, apply linear regression, and select the top two time series that had the most significant decreasing trend:
+by
+Run the query
+let min_t = toscalar(demo_many_series1 | summarize min(TIMESTAMP));  
+let max_t = toscalar(demo_many_series1 | summarize max(TIMESTAMP));  
+demo_many_series1
+| make-series reads=avg(DataRead) on TIMESTAMP from min_t to max_t step 1h by Loc, Op, DB
+| extend (rsquare, slope) = series_fit_line(reads)
+| top 2 by slope asc 
+| render timechart with(title='Service Traffic Outage for 2 instances (out of 18339)')
+let min_t = toscalar(demo_many_series1 | summarize min(TIMESTAMP));  
+let max_t = toscalar(demo_many_series1 | summarize max(TIMESTAMP));  
+demo_many_series1
+| make-series reads=avg(DataRead) on TIMESTAMP from min_t to max_t step 1h by Loc, Op, DB
+| extend (rsquare, slope) = series_fit_line(reads)
+| top 2 by slope asc 
+| render timechart with(title='Service Traffic Outage for 2 instances (out of 18339)')
+
+Display the instances:
+Run the query
+let min_t = toscalar(demo_many_series1 | summarize min(TIMESTAMP));  
+let max_t = toscalar(demo_many_series1 | summarize max(TIMESTAMP));  
+demo_many_series1
+| make-series reads=avg(DataRead) on TIMESTAMP from min_t to max_t step 1h by Loc, Op, DB
+| extend (rsquare, slope) = series_fit_line(reads)
+| top 2 by slope asc
+| project Loc, Op, DB, slope
+let min_t = toscalar(demo_many_series1 | summarize min(TIMESTAMP));  
+let max_t = toscalar(demo_many_series1 | summarize max(TIMESTAMP));  
+demo_many_series1
+| make-series reads=avg(DataRead) on TIMESTAMP from min_t to max_t step 1h by Loc, Op, DB
+| extend (rsquare, slope) = series_fit_line(reads)
+| top 2 by slope asc
+| project Loc, Op, DB, slope
+In less than two minutes, close to 20,000 time series were analyzed and two abnormal time series in which the read count suddenly dropped were detected.
+These advanced capabilities combined with fast performance supply a unique and powerful solution for time series analysis.
+Related content
+Learn aboutAnomaly detection and forecastingwith KQL.
+Learn aboutMachine learning capabilitieswith KQL.
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,193 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Improper Instantiation antipattern
+Article
+2022-12-16
+18 contributors
+In this article
+Sometimes new instances of a class are continually created, when it is meant to be created once and then shared. This behavior can hurt performance, and is called animproper instantiation antipattern. An antipattern is a common response to a recurring problem that is usually ineffective and may even be counter-productive.
+Problem description
+Many libraries provide abstractions of external resources. Internally, these classes typically manage their own connections to the resource, acting as brokers that clients can use to access the resource. Here are some examples of broker classes that are relevant to Azure applications:
+System.Net.Http.HttpClient. Communicates with a web service using HTTP.
+System.Net.Http.HttpClient
+Microsoft.ServiceBus.Messaging.QueueClient. Posts and receives messages to a Service Bus queue.
+Microsoft.ServiceBus.Messaging.QueueClient
+Microsoft.Azure.Documents.Client.DocumentClient. Connects to an Azure Cosmos DB instance.
+Microsoft.Azure.Documents.Client.DocumentClient
+StackExchange.Redis.ConnectionMultiplexer. Connects to Redis, including Azure Cache for Redis.
+StackExchange.Redis.ConnectionMultiplexer
+These classes are intended to be instantiated once and reused throughout the lifetime of an application. However, it's a common misunderstanding that these classes should be acquired only as necessary and released quickly. (The ones listed here happen to be .NET libraries, but the pattern is not unique to .NET.) The following ASP.NET example creates an instance ofHttpClientto communicate with a remote service. You can find the complete samplehere.
+HttpClient
+public class NewHttpClientInstancePerRequestController : ApiController
+{
+    // This method creates a new instance of HttpClient and disposes it for every call to GetProductAsync.
+    public async Task<Product> GetProductAsync(string id)
+    {
+        using (var httpClient = new HttpClient())
+        {
+            var hostName = HttpContext.Current.Request.Url.Host;
+            var result = await httpClient.GetStringAsync(string.Format("http://{0}:8080/api/...", hostName));
+            return new Product { Name = result };
+        }
+    }
+}
+public class NewHttpClientInstancePerRequestController : ApiController
+{
+    // This method creates a new instance of HttpClient and disposes it for every call to GetProductAsync.
+    public async Task<Product> GetProductAsync(string id)
+    {
+        using (var httpClient = new HttpClient())
+        {
+            var hostName = HttpContext.Current.Request.Url.Host;
+            var result = await httpClient.GetStringAsync(string.Format("http://{0}:8080/api/...", hostName));
+            return new Product { Name = result };
+        }
+    }
+}
+In a web application, this technique is not scalable. A newHttpClientobject is created for each user request. Under heavy load, the web server may exhaust the number of available sockets, resulting inSocketExceptionerrors.
+HttpClient
+SocketException
+This problem is not restricted to theHttpClientclass. Other classes that wrap resources or are expensive to create might cause similar issues. The following example creates an instance of theExpensiveToCreateServiceclass. Here the issue is not necessarily socket exhaustion, but simply how long it takes to create each instance. Continually creating and destroying instances of this class might adversely affect the scalability of the system.
+HttpClient
+ExpensiveToCreateService
+public class NewServiceInstancePerRequestController : ApiController
+{
+    public async Task<Product> GetProductAsync(string id)
+    {
+        var expensiveToCreateService = new ExpensiveToCreateService();
+        return await expensiveToCreateService.GetProductByIdAsync(id);
+    }
+}
+
+public class ExpensiveToCreateService
+{
+    public ExpensiveToCreateService()
+    {
+        // Simulate delay due to setup and configuration of ExpensiveToCreateService
+        Thread.SpinWait(Int32.MaxValue / 100);
+    }
+    ...
+}
+public class NewServiceInstancePerRequestController : ApiController
+{
+    public async Task<Product> GetProductAsync(string id)
+    {
+        var expensiveToCreateService = new ExpensiveToCreateService();
+        return await expensiveToCreateService.GetProductByIdAsync(id);
+    }
+}
+
+public class ExpensiveToCreateService
+{
+    public ExpensiveToCreateService()
+    {
+        // Simulate delay due to setup and configuration of ExpensiveToCreateService
+        Thread.SpinWait(Int32.MaxValue / 100);
+    }
+    ...
+}
+How to fix improper instantiation antipattern
+If the class that wraps the external resource is shareable and thread-safe, create a shared singleton instance or a pool of reusable instances of the class.
+The following example uses a staticHttpClientinstance, thus sharing the connection across all requests.
+HttpClient
+public class SingleHttpClientInstanceController : ApiController
+{
+    private static readonly HttpClient httpClient;
+
+    static SingleHttpClientInstanceController()
+    {
+        httpClient = new HttpClient();
+    }
+
+    // This method uses the shared instance of HttpClient for every call to GetProductAsync.
+    public async Task<Product> GetProductAsync(string id)
+    {
+        var hostName = HttpContext.Current.Request.Url.Host;
+        var result = await httpClient.GetStringAsync(string.Format("http://{0}:8080/api/...", hostName));
+        return new Product { Name = result };
+    }
+}
+public class SingleHttpClientInstanceController : ApiController
+{
+    private static readonly HttpClient httpClient;
+
+    static SingleHttpClientInstanceController()
+    {
+        httpClient = new HttpClient();
+    }
+
+    // This method uses the shared instance of HttpClient for every call to GetProductAsync.
+    public async Task<Product> GetProductAsync(string id)
+    {
+        var hostName = HttpContext.Current.Request.Url.Host;
+        var result = await httpClient.GetStringAsync(string.Format("http://{0}:8080/api/...", hostName));
+        return new Product { Name = result };
+    }
+}
+Considerations
+The key element of this antipattern is repeatedly creating and destroying instances of ashareableobject. If a class is not shareable (not thread-safe), then this antipattern does not apply.
+The key element of this antipattern is repeatedly creating and destroying instances of ashareableobject. If a class is not shareable (not thread-safe), then this antipattern does not apply.
+The type of shared resource might dictate whether you should use a singleton or create a pool. TheHttpClientclass is designed to be shared rather than pooled. Other objects might support pooling, enabling the system to spread the workload across multiple instances.
+The type of shared resource might dictate whether you should use a singleton or create a pool. TheHttpClientclass is designed to be shared rather than pooled. Other objects might support pooling, enabling the system to spread the workload across multiple instances.
+HttpClient
+Objects that you share across multiple requestsmustbe thread-safe. TheHttpClientclass is designed to be used in this manner, but other classes might not support concurrent requests, so check the available documentation.
+Objects that you share across multiple requestsmustbe thread-safe. TheHttpClientclass is designed to be used in this manner, but other classes might not support concurrent requests, so check the available documentation.
+HttpClient
+Be careful about setting properties on shared objects, as this can lead to race conditions. For example, settingDefaultRequestHeaderson theHttpClientclass before each request can create a race condition. Set such properties once (for example, during startup), and create separate instances if you need to configure different settings.
+Be careful about setting properties on shared objects, as this can lead to race conditions. For example, settingDefaultRequestHeaderson theHttpClientclass before each request can create a race condition. Set such properties once (for example, during startup), and create separate instances if you need to configure different settings.
+DefaultRequestHeaders
+HttpClient
+Some resource types are scarce and should not be held onto. Database connections are an example. Holding an open database connection that is not required may prevent other concurrent users from gaining access to the database.
+Some resource types are scarce and should not be held onto. Database connections are an example. Holding an open database connection that is not required may prevent other concurrent users from gaining access to the database.
+In the .NET Framework, many objects that establish connections to external resources are created by using static factory methods of other classes that manage these connections. These objects are intended to be saved and reused, rather than disposed and re-created. For example, in Azure Service Bus, theQueueClientobject is created through aMessagingFactoryobject. Internally, theMessagingFactorymanages connections. For more information, seeBest Practices for performance improvements using Service Bus Messaging.
+In the .NET Framework, many objects that establish connections to external resources are created by using static factory methods of other classes that manage these connections. These objects are intended to be saved and reused, rather than disposed and re-created. For example, in Azure Service Bus, theQueueClientobject is created through aMessagingFactoryobject. Internally, theMessagingFactorymanages connections. For more information, seeBest Practices for performance improvements using Service Bus Messaging.
+QueueClient
+MessagingFactory
+MessagingFactory
+How to detect improper instantiation antipattern
+Symptoms of this problem include a drop in throughput or an increased error rate, along with one or more of the following:
+An increase in exceptions that indicate exhaustion of resources such as sockets, database connections, file handles, and so on.
+Increased memory use and garbage collection.
+An increase in network, disk, or database activity.
+You can perform the following steps to help identify this problem:
+Performing process monitoring of the production system, to identify points when response times slow down or the system fails due to lack of resources.
+Examine the telemetry data captured at these points to determine which operations might be creating and destroying resource-consuming objects.
+Load test each suspected operation, in a controlled test environment rather than the production system.
+Review the source code and examine how the broker objects are managed.
+Look at stack traces for operations that are slow-running or that generate exceptions when the system is under load. This information can help to identify how these operations are using resources. Exceptions can help to determine whether errors are caused by shared resources being exhausted.
+Example diagnosis
+The following sections apply these steps to the sample application described earlier.
+Identify points of slowdown or failure
+The following image shows results generated usingNew Relic APM, showing operations that have a poor response time. In this case, theGetProductAsyncmethod in theNewHttpClientInstancePerRequestcontroller is worth investigating further. Notice that the error rate also increases when these operations are running.
+GetProductAsync
+NewHttpClientInstancePerRequest
+
+Examine telemetry data and find correlations
+The next image shows data captured using thread profiling, over the same period corresponding as the previous image. The system spends a significant time opening socket connections, and even more time closing them and handling socket exceptions.
+
+Performing load testing
+Use load testing to simulate the typical operations that users might perform. This can help to identify which parts of a system suffer from resource exhaustion under varying loads. Perform these tests in a controlled environment rather than the production system. The following graph shows the throughput of requests handled by theNewHttpClientInstancePerRequestcontroller as the user load increases to 100 concurrent users.
+NewHttpClientInstancePerRequest
+
+At first, the volume of requests handled per second increases as the workload increases. At about 30 users, however, the volume of successful requests reaches a limit, and the system starts to generate exceptions. From then on, the volume of exceptions gradually increases with the user load.
+The load test reported these failures as HTTP 500 (Internal Server) errors. Reviewing the telemetry showed that these errors were caused by the system running out of socket resources, as more and moreHttpClientobjects were created.
+HttpClient
+The next graph shows a similar test for a controller that creates the customExpensiveToCreateServiceobject.
+ExpensiveToCreateService
+
+This time, the controller does not generate any exceptions, but throughput still reaches a plateau, while the average response time increases by a factor of 20. (The graph uses a logarithmic scale for response time and throughput.) Telemetry showed that creating new instances of theExpensiveToCreateServicewas the main cause of the problem.
+ExpensiveToCreateService
+Implement the solution and verify the result
+After switching theGetProductAsyncmethod to share a singleHttpClientinstance, a second load test showed improved performance. No errors were reported, and the system was able to handle an increasing load of up to 500 requests per second. The average response time was cut in half, compared with the previous test.
+GetProductAsync
+HttpClient
+
+For comparison, the following image shows the stack trace telemetry. This time, the system spends most of its time performing real work, rather than opening and closing sockets.
+
+The next graph shows a similar load test using a shared instance of theExpensiveToCreateServiceobject. Again, the volume of handled requests increases in line with the user load, while the average response time remains low.
+ExpensiveToCreateService
+
+Feedback
+Was this page helpful?
+Additional resources

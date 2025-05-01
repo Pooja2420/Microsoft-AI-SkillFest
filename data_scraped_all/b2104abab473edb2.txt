@@ -1,0 +1,131 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Azure SQL Database and Azure Synapse Analytics network access controls
+Article
+2024-12-04
+22 contributors
+In this article
+Applies to:Azure SQL DatabaseAzure Synapse Analytics (dedicated SQL pools only)
+When you create a logical server from theAzure portalfor Azure SQL Database and Azure Synapse Analytics, the result is a public endpoint in the format:yourservername.database.windows.net.
+yourservername.database.windows.net
+By default, the logical server denies all connections to ensure security. You can use one or more of the following network access controls to selectively allow access to a database via thepublic endpoint
+IP based firewall rules: Use this feature to explicitly allow connections from a specific IP address. For example, from on-premises machines or a range of IP addresses by specifying the start and end IP address.
+IP based firewall rules: Use this feature to explicitly allow connections from a specific IP address. For example, from on-premises machines or a range of IP addresses by specifying the start and end IP address.
+Allow Azure services and resources to access this server: When enabled, other resources within the Azure boundary can access SQL Database. For example, an Azure Virtual Machine can access the SQL Database resources.
+Allow Azure services and resources to access this server: When enabled, other resources within the Azure boundary can access SQL Database. For example, an Azure Virtual Machine can access the SQL Database resources.
+You can also allowprivate accessto the database fromvirtual networksvia:
+Virtual network firewall rules: Use this feature to allow traffic from a specific virtual network within the Azure boundary.
+Virtual network firewall rules: Use this feature to allow traffic from a specific virtual network within the Azure boundary.
+Private Link: Use this feature to create a private endpoint for thelogical server in Azurewithin a specific virtual network.
+Private Link: Use this feature to create a private endpoint for thelogical server in Azurewithin a specific virtual network.
+Important
+This article doesnotapply toSQL Managed Instance. For more information about the networking configuration, seeconnecting to Azure SQL Managed Instance.
+IP firewall rules
+IP based firewall rules is a feature of the logical server in Azure that prevents all access to your server until you explicitlyadd IP addressesof the client machines.
+There are two types of firewall rules:
+Server-level firewall rules: These rules apply to all databases on the server. They can be configured through the Azure portal, PowerShell, or T-SQL commands likesp_set_firewall_rule.
+Database-level firewall rules: These rules apply to individual databases and canonlybe configured using T-SQL commands likesp_set_database_firewall_rule
+The following are constraints for naming firewall rules:
+The firewall rule name can't be empty.
+It can't contain the following characters:<, >, *, %, &, :, \\, /, ?.
+<, >, *, %, &, :, \\, /, ?.
+It can't end with a period (.).
+The firewall rule name cannot exceed 128 characters.
+Any attempts to create firewall rules that do not meet these constraints fails with an error message. Any modifications made to existing IP based firewall rules can take up to 5 minutes to take effect.
+Allow Azure services
+By default, during creation of a new logical serverfrom the Azure portal,Allow Azure services and resources to access this serveris unchecked and not enabled. This setting appears when connectivity is allowed via public endpoint.
+You can also change this setting via theNetworkingsetting after the logical server is created as follows:
+
+WhenAllow Azure services and resources to access this serveris enabled, your server allows communications from all resources inside the Azure boundary,regardless of whether they are part of your subscription. Behind the scenes, a special server-level firewall rule is added that starts and ends with IP address of0.0.0.0.
+0.0.0.0
+In many cases, enabling the setting is more permissive than what most customers want. You might want to uncheck this setting and replace it with more restrictive IP firewall rules or use one the options for private access.
+Important
+CheckingAllow Azure services and resources to access this serveradds an IP based firewall rule with start and end IP address of 0.0.0.0
+However, doing so affects the following features that run on virtual machines in Azure that aren't part of your virtual network and hence connect to the database via an Azure IP address:
+Import Export Service
+Import Export Service doesn't work whenAllow Azure services and resources to access this serverisn't enabled. However you can work around the problemby manually running SqlPackage from an Azure VM or performing the exportdirectly in your code by using the DACFx API.
+Data Sync
+To use the Data sync feature withAllow Azure services and resources to access this servernot enabled, you need to create individual firewall rule entries toadd IP addressesfrom theSql service tagfor the region hosting theHubdatabase. Add these server-level firewall rules to the servers hosting bothHubandMemberdatabases (which might be in different regions).
+Use the following PowerShell script to generate IP addresses corresponding to the SQL service tag for West US region.
+PS C:\>  $serviceTags = Get-AzNetworkServiceTag -Location eastus2
+PS C:\>  $sql = $serviceTags.Values | Where-Object { $_.Name -eq "Sql.WestUS" }
+PS C:\> $sql.Properties.AddressPrefixes.Count
+70
+PS C:\> $sql.Properties.AddressPrefixes
+13.86.216.0/25
+13.86.216.128/26
+13.86.216.192/27
+13.86.217.0/25
+13.86.217.128/26
+13.86.217.192/27
+PS C:\>  $serviceTags = Get-AzNetworkServiceTag -Location eastus2
+PS C:\>  $sql = $serviceTags.Values | Where-Object { $_.Name -eq "Sql.WestUS" }
+PS C:\> $sql.Properties.AddressPrefixes.Count
+70
+PS C:\> $sql.Properties.AddressPrefixes
+13.86.216.0/25
+13.86.216.128/26
+13.86.216.192/27
+13.86.217.0/25
+13.86.217.128/26
+13.86.217.192/27
+Tip
+Get-AzNetworkServiceTag returns the global range for SQL Service Tag despite specifying the Location parameter. Be sure to filter it to the region that hosts the Hub database used by your sync group
+The output of the PowerShell script is in Classless Inter-Domain Routing (CIDR) notation. This needs to be converted to a format of Start and End IP address usingGet-IPrangeStartEnd.ps1like this:
+PS C:\> Get-IPrangeStartEnd -ip 52.229.17.93 -cidr 26
+start        end
+-----        ---
+52.229.17.64 52.229.17.127
+PS C:\> Get-IPrangeStartEnd -ip 52.229.17.93 -cidr 26
+start        end
+-----        ---
+52.229.17.64 52.229.17.127
+You can use the following PowerShell script to convert all the IP addresses from CIDR to Start and End IP address format.
+PS C:\>foreach( $i in $sql.Properties.AddressPrefixes) {$ip,$cidr= $i.split('/') ; Get-IPrangeStartEnd -ip $ip -cidr $cidr;}
+start          end
+-----          ---
+13.86.216.0    13.86.216.127
+13.86.216.128  13.86.216.191
+13.86.216.192  13.86.216.223
+PS C:\>foreach( $i in $sql.Properties.AddressPrefixes) {$ip,$cidr= $i.split('/') ; Get-IPrangeStartEnd -ip $ip -cidr $cidr;}
+start          end
+-----          ---
+13.86.216.0    13.86.216.127
+13.86.216.128  13.86.216.191
+13.86.216.192  13.86.216.223
+You can now add these as distinct firewall rules and then disable the settingAllow Azure services and resources to access this server.
+Sql Service Tag
+Service tagscan be used in security rules and routes from clients to SQL Database. Service tags can be used in network security groups, Azure Firewall, and user-defined routes by specifying them in the source or destination field of a security rule.
+TheSqlservice tag consists of all IP addresses that are being used by SQL Database. The tag is further segmented by regions. For exampleSql.WestUSlists all the IP addresses used by SQL Database in West US.
+TheSqlservice tag consists of IP addresses that are required to establish connectivity to SQL Database as documented inGateway IP addresses. Additionally, a service tag will also be associated with any outbound traffic from SQL Database used in features such as:
+Auditing
+Vulnerability assessment
+Import/Export service
+OPENROWSET
+Bulk Insert
+sp_invoke_external_rest_endpoint
+Ledger
+Azure SQL transparent data encryption with customer-managed key
+SqlManagement Service Tag
+SqlManagement service tag is used for control plane operations against SQL Database.
+Virtual network firewall rules
+Virtual network firewall rulesare easier alternatives to establish and manage access from a specific subnet that contains your VMs.
+Private Link
+Private Link allows you to connect to a server via aprivate endpoint. Aprivate endpointis a private IP address within a specificvirtual networkand subnet.
+Related content
+For a quickstart on creating a server-level IP firewall rule, seeCreate a database in SQL Database.
+For a quickstart on creating a server-level IP firewall rule, seeCreate a database in SQL Database.
+For a quickstart on creating a server-level virtual network firewall rule, seeVirtual Network service endpoints and rules for Azure SQL Database.
+For a quickstart on creating a server-level virtual network firewall rule, seeVirtual Network service endpoints and rules for Azure SQL Database.
+For help with connecting to a database in SQL Database from open source or partner applications, seeClient quickstart code samples to SQL Database.
+For help with connecting to a database in SQL Database from open source or partner applications, seeClient quickstart code samples to SQL Database.
+For information on other ports that you might need to open, see theSQL Database: Outside vs insidesection ofPorts beyond 1433 for ADO.NET 4.5 and SQL Database
+For information on other ports that you might need to open, see theSQL Database: Outside vs insidesection ofPorts beyond 1433 for ADO.NET 4.5 and SQL Database
+For an overview of Azure SQL Database Connectivity, seeAzure SQL Connectivity Architecture
+For an overview of Azure SQL Database Connectivity, seeAzure SQL Connectivity Architecture
+For an overview of Azure SQL Database security, seeSecuring your database
+For an overview of Azure SQL Database security, seeSecuring your database
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,135 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Find and delete unattached Azure managed and unmanaged disks using the Azure CLI
+Article
+2024-08-22
+9 contributors
+In this article
+Applies to:âï¸ Linux VMs âï¸ Flexible scale sets
+When you delete a virtual machine (VM) in Azure, by default, any disks that are attached to the VM aren't deleted. This feature helps to prevent data loss due to the unintentional deletion of VMs. After a VM is deleted, you will continue to pay for unattached disks. This article shows you how to find and delete any unattached disks and reduce unnecessary costs.
+Note
+You can use theaz disk showcommand to get the LastOwnershipUpdateTime for any disk. This property represents when the diskâs state was last updated. For an unattached disk, this shows the time when the disk was unattached. This property is blank for newly created disks, until their state changes.
+Managed disks: Find and delete unattached disks
+The following script looks for unattachedmanaged disksby examining the value of theManagedByproperty. When a managed disk is attached to a VM, theManagedByproperty contains the resource ID of the VM. When a managed disk is unattached, theManagedByproperty is null. The script examines all the managed disks in an Azure subscription. When the script locates a managed disk with theManagedByproperty set to null, the script determines that the disk is unattached.
+Important
+First, run the script by setting thedeleteUnattachedDisksvariable to 0. This action lets you find and view all the unattached managed disks.
+After you review all the unattached disks, run the script again and set thedeleteUnattachedDisksvariable to 1. This action lets you delete all the unattached managed disks.
+# Set deleteUnattachedDisks=1 if you want to delete unattached Managed Disks
+# Set deleteUnattachedDisks=0 if you want to see the Id of the unattached Managed Disks
+deleteUnattachedDisks=0
+unattachedDiskIds=$(az disk list --query '[?managedBy==`null`].[id]' -o tsv)
+for id in ${unattachedDiskIds[@]}
+do
+    if (( $deleteUnattachedDisks == 1 ))
+    then
+
+        echo "Deleting unattached Managed Disk with Id: "$id
+        az disk delete --ids $id --yes
+        echo "Deleted unattached Managed Disk with Id: "$id
+
+    else
+        echo $id
+    fi
+done
+# Set deleteUnattachedDisks=1 if you want to delete unattached Managed Disks
+# Set deleteUnattachedDisks=0 if you want to see the Id of the unattached Managed Disks
+deleteUnattachedDisks=0
+unattachedDiskIds=$(az disk list --query '[?managedBy==`null`].[id]' -o tsv)
+for id in ${unattachedDiskIds[@]}
+do
+    if (( $deleteUnattachedDisks == 1 ))
+    then
+
+        echo "Deleting unattached Managed Disk with Id: "$id
+        az disk delete --ids $id --yes
+        echo "Deleted unattached Managed Disk with Id: "$id
+
+    else
+        echo $id
+    fi
+done
+Unmanaged disks: Find and delete unattached disks
+Unmanaged disks are VHD files that are stored aspage blobsinAzure storage accounts. The following script looks for unattached unmanaged disks (page blobs) by examining the value of theLeaseStatusproperty. When an unmanaged disk is attached to a VM, theLeaseStatusproperty is set toLocked. When an unmanaged disk is unattached, theLeaseStatusproperty is set toUnlocked. The script examines all the unmanaged disks in all the Azure storage accounts in an Azure subscription. When the script locates an unmanaged disk with aLeaseStatusproperty set toUnlocked, the script determines that the disk is unattached.
+Important
+First, run the script by setting thedeleteUnattachedVHDsvariable to 0. This action lets you find and view all the unattached unmanaged VHDs.
+After you review all the unattached disks, run the script again and set thedeleteUnattachedVHDsvariable to 1. This action lets you delete all the unattached unmanaged VHDs.
+# Set deleteUnattachedVHDs=1 if you want to delete unattached VHDs
+# Set deleteUnattachedVHDs=0 if you want to see the details of the unattached VHDs
+deleteUnattachedVHDs=0
+storageAccountIds=$(az storage account list --query [].[id] -o tsv)
+for id in ${storageAccountIds[@]}
+do
+    connectionString=$(az storage account show-connection-string --ids $id --query connectionString -o tsv)
+    containers=$(az storage container list --connection-string $connectionString --query [].[name] -o tsv)
+
+    for container in ${containers[@]}
+    do 
+        
+        blobs=$(az storage blob list --show-next-marker -c $container --connection-string $connectionString --query "[?properties.blobType=='PageBlob' && ends_with(name,'.vhd')].[name]" -o tsv)
+        
+        for blob in ${blobs[@]}
+        do
+            leaseStatus=$(az storage blob show -n $blob -c $container --connection-string $connectionString --query "properties.lease.status" -o tsv)
+            
+            if [ "$leaseStatus" == "unlocked" ]
+            then 
+
+                if (( $deleteUnattachedVHDs == 1 ))
+                then 
+
+                    echo "Deleting VHD: "$blob" in container: "$container" in storage account: "$id
+
+                    az storage blob delete --delete-snapshots include  -n $blob -c $container --connection-string $connectionString
+
+                    echo "Deleted VHD: "$blob" in container: "$container" in storage account: "$id
+                else
+                    echo "StorageAccountId: "$id" container: "$container" VHD: "$blob
+                fi
+
+            fi
+        done
+    done
+done
+# Set deleteUnattachedVHDs=1 if you want to delete unattached VHDs
+# Set deleteUnattachedVHDs=0 if you want to see the details of the unattached VHDs
+deleteUnattachedVHDs=0
+storageAccountIds=$(az storage account list --query [].[id] -o tsv)
+for id in ${storageAccountIds[@]}
+do
+    connectionString=$(az storage account show-connection-string --ids $id --query connectionString -o tsv)
+    containers=$(az storage container list --connection-string $connectionString --query [].[name] -o tsv)
+
+    for container in ${containers[@]}
+    do 
+        
+        blobs=$(az storage blob list --show-next-marker -c $container --connection-string $connectionString --query "[?properties.blobType=='PageBlob' && ends_with(name,'.vhd')].[name]" -o tsv)
+        
+        for blob in ${blobs[@]}
+        do
+            leaseStatus=$(az storage blob show -n $blob -c $container --connection-string $connectionString --query "properties.lease.status" -o tsv)
+            
+            if [ "$leaseStatus" == "unlocked" ]
+            then 
+
+                if (( $deleteUnattachedVHDs == 1 ))
+                then 
+
+                    echo "Deleting VHD: "$blob" in container: "$container" in storage account: "$id
+
+                    az storage blob delete --delete-snapshots include  -n $blob -c $container --connection-string $connectionString
+
+                    echo "Deleted VHD: "$blob" in container: "$container" in storage account: "$id
+                else
+                    echo "StorageAccountId: "$id" container: "$container" VHD: "$blob
+                fi
+
+            fi
+        done
+    done
+done
+Next steps
+For more information, seeDelete a storage account.
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,563 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Understand and resolve blocking problems
+Article
+2025-03-31
+15 contributors
+In this article
+Applies to:Azure SQL DatabaseSQL database in Fabric
+The article describes blocking in Azure SQL Database and Fabric SQL database, and demonstrates how to troubleshoot and resolve blocking.
+Objective
+In this article, the term connection refers to a single logged-on session of the database. Each connection appears as a session ID, orsession_idin many DMVs. Each of these session IDs is often referred to as a process, although it isn't a separate process context in the usual sense. Rather, each session ID consists of the server resources and data structures necessary to service the requests of a single connection from a given client. A single client application might have one or more connections. From the perspective of Azure SQL Database, there's no difference between multiple connections from a single client application on a single client computer and multiple connections from multiple client applications or multiple client computers; they're atomic. One connection can block another connection, regardless of the source client.
+session_id
+For information on troubleshooting deadlocks, seeAnalyze and prevent deadlocks in Azure SQL Database and Fabric SQL database.
+Note
+This content is focused on Azure SQL Database.Azure SQL Database is based on the latest stable version of the Microsoft SQL Server database engine, so much of the content is similar though troubleshooting options and tools might differ. For more on blocking in SQL Server, seeUnderstand and resolve SQL Server blocking problems.
+Fabric SQL database shares many features with Azure SQL Database. For more information on performance monitoring, seeMonitor SQL database in Microsoft Fabric.
+Understand blocking
+Blocking is an unavoidable and by-design characteristic of any relational database management system (RDBMS) with lock-based concurrency. Blocking in a database in Azure SQL Database occurs when one session holds a lock on a specific resource and a second session ID attempts to acquire a conflicting lock type on the same resource. Typically, the time frame for which the first session ID locks the resource is small. When the owning session releases the lock, the second connection is then free to acquire its own lock on the resource and continue processing. This behavior is normal, and can happen many times throughout the course of a day with no noticeable effect on system performance.
+Each new database in Azure SQL Database has theread committed snapshot(RCSI) database setting enabled by default. Blocking between sessions reading data and sessions writing data is minimized under RCSI, which uses row versioning to increase concurrency. However, blocking and deadlocks can still occur in databases in Azure SQL Database because:
+Queries that modify data might block one another.
+Queries might run under isolation levels that increase blocking. Isolation levels can be specified in application connection strings,query hints, orSET statementsin Transact-SQL.
+RCSI might be disabled, causing the database to use shared (S) locks to protect SELECT statements run under the read committed isolation level. This can increase blocking and deadlocks.
+Snapshot isolation levelis also enabled by default for new databases in Azure SQL Database. Snapshot isolation is an additional row-based isolation level that provides transaction-level consistency for data and which uses row versions to select rows to update. To use snapshot isolation, queries or connections must explicitly set their transaction isolation level toSNAPSHOT. This can only be done when snapshot isolation is enabled for the database.
+SNAPSHOT
+You can identify if RCSI and/or snapshot isolation are enabled with Transact-SQL. Connect to your database in Azure SQL Database and run the following query:
+SELECT name, is_read_committed_snapshot_on, snapshot_isolation_state_desc
+FROM sys.databases
+WHERE name = DB_NAME();
+GO
+SELECT name, is_read_committed_snapshot_on, snapshot_isolation_state_desc
+FROM sys.databases
+WHERE name = DB_NAME();
+GO
+If RCSI is enabled, theis_read_committed_snapshot_oncolumn returns the value1. If snapshot isolation is enabled, thesnapshot_isolation_state_desccolumn returns the valueON.
+is_read_committed_snapshot_on
+snapshot_isolation_state_desc
+The duration and transaction context of a query determine how long its locks are held, and their effect on other queries. SELECT statements run under RCSIdon't acquire shared (S) locks on the data being read, and therefore don't block transactions that are modifying data. For INSERT, UPDATE, and DELETE statements, the locks are held during the query, both for data consistency and to allow the query to be rolled back if necessary.
+For queries executed within anexplicit transaction, the type of locks and duration for which the locks are held are determined by the type of query, the transaction isolation level, and whether lock hints are used in the query. For a description of locking, lock hints, and transaction isolation levels, see the following articles:
+Locking in the Database Engine
+Customizing Locking and Row Versioning
+Lock Modes
+Lock Compatibility
+Transactions
+When locking and blocking persists to the point where there's a detrimental effect on system performance, it's due to one of the following reasons:
+A session ID holds locks on a set of resources for an extended period of time before releasing them. This type of blocking resolves itself over time but can cause performance degradation.
+A session ID holds locks on a set of resources for an extended period of time before releasing them. This type of blocking resolves itself over time but can cause performance degradation.
+A session ID holds locks on a set of resources and never releases them. This type of blocking doesn't resolve itself and prevents access to the affected resources indefinitely.
+A session ID holds locks on a set of resources and never releases them. This type of blocking doesn't resolve itself and prevents access to the affected resources indefinitely.
+In the first scenario, the situation can be very fluid as different session IDs cause blocking on different resources over time, creating a moving target. These situations are difficult to troubleshoot usingSQL Server Management Studioto narrow down the issue to individual queries. In contrast, the second situation results in a consistent state that can be easier to diagnose.
+Optimized locking
+Optimized locking is a new Database Engine feature drastically reduces lock memory and the number of locks concurrently required for writes. Optimized locking uses two primary components:Transaction ID (TID)locking (also used in other row versioning features) andlock after qualification (LAQ). It doesn't require any extra configuration.
+This article currently applies to the behavior of the Database Engine without optimized locking.
+For more information and to learn where optimized locking is available, seeOptimized locking.
+Applications and blocking
+There can be a tendency to focus on server-side tuning and platform issues when facing a blocking problem. However, paying attention only to the database might not lead to a resolution, and can absorb time and energy better directed at examining the client application and the queries it submits. No matter what level of visibility the application exposes regarding the database calls being made, a blocking problem frequently requires both the inspection of the exact SQL statements submitted by the application, and the application's exact behavior regarding query cancellation, connection management, fetching all result rows, and so on. If the development tool doesn't allow explicit control over connection management, query cancellation, query time-out, result fetching, and so on, blocking problems might not be resolvable. This potential should be closely examined before selecting an application development tool for Azure SQL Database, especially for performance sensitive OLTP environments.
+Pay attention to database performance during the design and construction phase of the database and application. In particular, the resource consumption, isolation level, and transaction path length should be evaluated for each query. Each query and transaction should be as lightweight as possible. Good connection management discipline must be exercised. Without it, the application can appear to have acceptable performance at low numbers of users, but the performance might degrade significantly as the number of users scales upward.
+With proper application and query design, Azure SQL Database is capable of supporting many thousands of simultaneous users on a single server, with little blocking.
+Note
+For more application development guidance, seeTroubleshoot connectivity issues and other errorsandTransient Fault Handling.
+Troubleshoot blocking
+Regardless of which blocking situation we are in, the methodology for troubleshooting locking is the same. These logical separations are what dictates the rest of the composition of this article. The concept is to find the head blocker and identify what that query is doing and why it's blocking. Once the problematic query is identified (that is, what is holding locks for the prolonged period), the next step is to analyze and determine why the blocking is happening. After we understand the reasons why, we can then make changes by redesigning the query and the transaction.
+Steps in troubleshooting:
+Identify the main blocking session (head blocker)
+Identify the main blocking session (head blocker)
+Find the query and transaction that is causing the blocking (what is holding locks for a prolonged period)
+Find the query and transaction that is causing the blocking (what is holding locks for a prolonged period)
+Analyze/understand why the prolonged blocking occurs
+Analyze/understand why the prolonged blocking occurs
+Resolve blocking issue by redesigning query and transaction
+Resolve blocking issue by redesigning query and transaction
+Now let's dive in to discuss how to pinpoint the main blocking session with an appropriate data capture.
+Gather blocking information
+To counteract the difficulty of troubleshooting blocking problems, a database administrator can use SQL scripts that constantly monitor the state of locking and blocking in the database in Azure SQL Database. To gather this data, there are essentially two methods.
+The first is to query dynamic management objects (DMOs) and store the results for comparison over time. Some objects referenced in this article are dynamic management views (DMVs) and some are dynamic management functions (DMFs). The second method is to use XEvents to capture what is executing.
+Gather information from DMVs
+Referencing DMVs to troubleshoot blocking has the goal of identifying the session ID at the head of the blocking chain and the SQL Statement. Look for victim session IDs that are being blocked. If any session ID is being blocked by another session ID, then investigate the session ID owning the resource (the blocking session ID). Is that owner session ID being blocked as well? You can walk the chain to find the head blocker then investigate why it's maintaining its lock.
+Remember to run each of these scripts in the target database in Azure SQL Database.
+Thesp_whoandsp_who2commands are older commands to show all current sessions. The DMVsys.dm_exec_sessionsreturns more data in a result set that is easier to query and filter. You can findsys.dm_exec_sessionsat the core of other queries.
+Thesp_whoandsp_who2commands are older commands to show all current sessions. The DMVsys.dm_exec_sessionsreturns more data in a result set that is easier to query and filter. You can findsys.dm_exec_sessionsat the core of other queries.
+sp_who
+sp_who2
+sys.dm_exec_sessions
+sys.dm_exec_sessions
+If you already have a particular session identified, you can useDBCC INPUTBUFFER(<session_id>)to find the last statement that was submitted by a session. Similar results can be returned with thesys.dm_exec_input_bufferdynamic management function (DMF), in a result set that is easier to query and filter, providing the session_id and the request_id. For example, to return the most recent query submitted by session_id 66 and request_id 0:
+If you already have a particular session identified, you can useDBCC INPUTBUFFER(<session_id>)to find the last statement that was submitted by a session. Similar results can be returned with thesys.dm_exec_input_bufferdynamic management function (DMF), in a result set that is easier to query and filter, providing the session_id and the request_id. For example, to return the most recent query submitted by session_id 66 and request_id 0:
+DBCC INPUTBUFFER(<session_id>)
+sys.dm_exec_input_buffer
+SELECT * FROM sys.dm_exec_input_buffer (66,0);
+SELECT * FROM sys.dm_exec_input_buffer (66,0);
+Refer to theblocking_session_idcolumn insys.dm_exec_requests. Whenblocking_session_id= 0, a session isn't being blocked. Whilesys.dm_exec_requestslists only requests currently executing, any connection (active or not) is listed insys.dm_exec_sessions. Build on this common join betweensys.dm_exec_requestsandsys.dm_exec_sessionsin the next query.
+Refer to theblocking_session_idcolumn insys.dm_exec_requests. Whenblocking_session_id= 0, a session isn't being blocked. Whilesys.dm_exec_requestslists only requests currently executing, any connection (active or not) is listed insys.dm_exec_sessions. Build on this common join betweensys.dm_exec_requestsandsys.dm_exec_sessionsin the next query.
+blocking_session_id
+sys.dm_exec_requests
+blocking_session_id
+sys.dm_exec_requests
+sys.dm_exec_sessions
+sys.dm_exec_requests
+sys.dm_exec_sessions
+Run this sample query to find the actively executing queries and their current SQL batch text or input buffer text, using thesys.dm_exec_sql_textorsys.dm_exec_input_bufferDMVs. If the data returned by thetextfield ofsys.dm_exec_sql_textis NULL, the query isn't currently executing. In that case, theevent_infofield ofsys.dm_exec_input_buffercontains the last command string passed to the SQL engine. This query can also be used to identify sessions blocking other sessions, including a list of session_ids blocked per session_id.
+Run this sample query to find the actively executing queries and their current SQL batch text or input buffer text, using thesys.dm_exec_sql_textorsys.dm_exec_input_bufferDMVs. If the data returned by thetextfield ofsys.dm_exec_sql_textis NULL, the query isn't currently executing. In that case, theevent_infofield ofsys.dm_exec_input_buffercontains the last command string passed to the SQL engine. This query can also be used to identify sessions blocking other sessions, including a list of session_ids blocked per session_id.
+text
+sys.dm_exec_sql_text
+event_info
+sys.dm_exec_input_buffer
+WITH cteBL (session_id, blocking_these) AS 
+(SELECT s.session_id, blocking_these = x.blocking_these FROM sys.dm_exec_sessions s 
+CROSS APPLY    (SELECT isnull(convert(varchar(6), er.session_id),'') + ', '  
+                FROM sys.dm_exec_requests as er
+                WHERE er.blocking_session_id = isnull(s.session_id ,0)
+                AND er.blocking_session_id <> 0
+                FOR XML PATH('') ) AS x (blocking_these)
+)
+SELECT s.session_id, blocked_by = r.blocking_session_id, bl.blocking_these
+, batch_text = t.text, input_buffer = ib.event_info, * 
+FROM sys.dm_exec_sessions s 
+LEFT OUTER JOIN sys.dm_exec_requests r on r.session_id = s.session_id
+INNER JOIN cteBL as bl on s.session_id = bl.session_id
+OUTER APPLY sys.dm_exec_sql_text (r.sql_handle) t
+OUTER APPLY sys.dm_exec_input_buffer(s.session_id, NULL) AS ib
+WHERE blocking_these is not null or r.blocking_session_id > 0
+ORDER BY len(bl.blocking_these) desc, r.blocking_session_id desc, r.session_id;
+WITH cteBL (session_id, blocking_these) AS 
+(SELECT s.session_id, blocking_these = x.blocking_these FROM sys.dm_exec_sessions s 
+CROSS APPLY    (SELECT isnull(convert(varchar(6), er.session_id),'') + ', '  
+                FROM sys.dm_exec_requests as er
+                WHERE er.blocking_session_id = isnull(s.session_id ,0)
+                AND er.blocking_session_id <> 0
+                FOR XML PATH('') ) AS x (blocking_these)
+)
+SELECT s.session_id, blocked_by = r.blocking_session_id, bl.blocking_these
+, batch_text = t.text, input_buffer = ib.event_info, * 
+FROM sys.dm_exec_sessions s 
+LEFT OUTER JOIN sys.dm_exec_requests r on r.session_id = s.session_id
+INNER JOIN cteBL as bl on s.session_id = bl.session_id
+OUTER APPLY sys.dm_exec_sql_text (r.sql_handle) t
+OUTER APPLY sys.dm_exec_input_buffer(s.session_id, NULL) AS ib
+WHERE blocking_these is not null or r.blocking_session_id > 0
+ORDER BY len(bl.blocking_these) desc, r.blocking_session_id desc, r.session_id;
+Run this more elaborate sample query, provided by Microsoft Support, to identify the head of a multiple session blocking chain, including the query text of the sessions involved in a blocking chain.
+WITH cteHead ( session_id,request_id,wait_type,wait_resource,last_wait_type,is_user_process,request_cpu_time
+,request_logical_reads,request_reads,request_writes,wait_time,blocking_session_id,memory_usage
+,session_cpu_time,session_reads,session_writes,session_logical_reads
+,percent_complete,est_completion_time,request_start_time,request_status,command
+,plan_handle,sql_handle,statement_start_offset,statement_end_offset,most_recent_sql_handle
+,session_status,group_id,query_hash,query_plan_hash) 
+AS ( SELECT sess.session_id, req.request_id, LEFT (ISNULL (req.wait_type, ''), 50) AS 'wait_type'
+    , LEFT (ISNULL (req.wait_resource, ''), 40) AS 'wait_resource', LEFT (req.last_wait_type, 50) AS 'last_wait_type'
+    , sess.is_user_process, req.cpu_time AS 'request_cpu_time', req.logical_reads AS 'request_logical_reads'
+    , req.reads AS 'request_reads', req.writes AS 'request_writes', req.wait_time, req.blocking_session_id,sess.memory_usage
+    , sess.cpu_time AS 'session_cpu_time', sess.reads AS 'session_reads', sess.writes AS 'session_writes', sess.logical_reads AS 'session_logical_reads'
+    , CONVERT (decimal(5,2), req.percent_complete) AS 'percent_complete', req.estimated_completion_time AS 'est_completion_time'
+    , req.start_time AS 'request_start_time', LEFT (req.status, 15) AS 'request_status', req.command
+    , req.plan_handle, req.[sql_handle], req.statement_start_offset, req.statement_end_offset, conn.most_recent_sql_handle
+    , LEFT (sess.status, 15) AS 'session_status', sess.group_id, req.query_hash, req.query_plan_hash
+    FROM sys.dm_exec_sessions AS sess
+    LEFT OUTER JOIN sys.dm_exec_requests AS req ON sess.session_id = req.session_id
+    LEFT OUTER JOIN sys.dm_exec_connections AS conn on conn.session_id = sess.session_id 
+    )
+, cteBlockingHierarchy (head_blocker_session_id, session_id, blocking_session_id, wait_type, wait_duration_ms,
+wait_resource, statement_start_offset, statement_end_offset, plan_handle, sql_handle, most_recent_sql_handle, [Level])
+AS ( SELECT head.session_id AS head_blocker_session_id, head.session_id AS session_id, head.blocking_session_id
+    , head.wait_type, head.wait_time, head.wait_resource, head.statement_start_offset, head.statement_end_offset
+    , head.plan_handle, head.sql_handle, head.most_recent_sql_handle, 0 AS [Level]
+    FROM cteHead AS head
+    WHERE (head.blocking_session_id IS NULL OR head.blocking_session_id = 0)
+    AND head.session_id IN (SELECT DISTINCT blocking_session_id FROM cteHead WHERE blocking_session_id != 0)
+    UNION ALL
+    SELECT h.head_blocker_session_id, blocked.session_id, blocked.blocking_session_id, blocked.wait_type,
+    blocked.wait_time, blocked.wait_resource, h.statement_start_offset, h.statement_end_offset,
+    h.plan_handle, h.sql_handle, h.most_recent_sql_handle, [Level] + 1
+    FROM cteHead AS blocked
+    INNER JOIN cteBlockingHierarchy AS h ON h.session_id = blocked.blocking_session_id and h.session_id!=blocked.session_id --avoid infinite recursion for latch type of blocking
+    WHERE h.wait_type COLLATE Latin1_General_BIN NOT IN ('EXCHANGE', 'CXPACKET') or h.wait_type is null
+    )
+SELECT bh.*, txt.text AS blocker_query_or_most_recent_query 
+FROM cteBlockingHierarchy AS bh 
+OUTER APPLY sys.dm_exec_sql_text (ISNULL ([sql_handle], most_recent_sql_handle)) AS txt;
+WITH cteHead ( session_id,request_id,wait_type,wait_resource,last_wait_type,is_user_process,request_cpu_time
+,request_logical_reads,request_reads,request_writes,wait_time,blocking_session_id,memory_usage
+,session_cpu_time,session_reads,session_writes,session_logical_reads
+,percent_complete,est_completion_time,request_start_time,request_status,command
+,plan_handle,sql_handle,statement_start_offset,statement_end_offset,most_recent_sql_handle
+,session_status,group_id,query_hash,query_plan_hash) 
+AS ( SELECT sess.session_id, req.request_id, LEFT (ISNULL (req.wait_type, ''), 50) AS 'wait_type'
+    , LEFT (ISNULL (req.wait_resource, ''), 40) AS 'wait_resource', LEFT (req.last_wait_type, 50) AS 'last_wait_type'
+    , sess.is_user_process, req.cpu_time AS 'request_cpu_time', req.logical_reads AS 'request_logical_reads'
+    , req.reads AS 'request_reads', req.writes AS 'request_writes', req.wait_time, req.blocking_session_id,sess.memory_usage
+    , sess.cpu_time AS 'session_cpu_time', sess.reads AS 'session_reads', sess.writes AS 'session_writes', sess.logical_reads AS 'session_logical_reads'
+    , CONVERT (decimal(5,2), req.percent_complete) AS 'percent_complete', req.estimated_completion_time AS 'est_completion_time'
+    , req.start_time AS 'request_start_time', LEFT (req.status, 15) AS 'request_status', req.command
+    , req.plan_handle, req.[sql_handle], req.statement_start_offset, req.statement_end_offset, conn.most_recent_sql_handle
+    , LEFT (sess.status, 15) AS 'session_status', sess.group_id, req.query_hash, req.query_plan_hash
+    FROM sys.dm_exec_sessions AS sess
+    LEFT OUTER JOIN sys.dm_exec_requests AS req ON sess.session_id = req.session_id
+    LEFT OUTER JOIN sys.dm_exec_connections AS conn on conn.session_id = sess.session_id 
+    )
+, cteBlockingHierarchy (head_blocker_session_id, session_id, blocking_session_id, wait_type, wait_duration_ms,
+wait_resource, statement_start_offset, statement_end_offset, plan_handle, sql_handle, most_recent_sql_handle, [Level])
+AS ( SELECT head.session_id AS head_blocker_session_id, head.session_id AS session_id, head.blocking_session_id
+    , head.wait_type, head.wait_time, head.wait_resource, head.statement_start_offset, head.statement_end_offset
+    , head.plan_handle, head.sql_handle, head.most_recent_sql_handle, 0 AS [Level]
+    FROM cteHead AS head
+    WHERE (head.blocking_session_id IS NULL OR head.blocking_session_id = 0)
+    AND head.session_id IN (SELECT DISTINCT blocking_session_id FROM cteHead WHERE blocking_session_id != 0)
+    UNION ALL
+    SELECT h.head_blocker_session_id, blocked.session_id, blocked.blocking_session_id, blocked.wait_type,
+    blocked.wait_time, blocked.wait_resource, h.statement_start_offset, h.statement_end_offset,
+    h.plan_handle, h.sql_handle, h.most_recent_sql_handle, [Level] + 1
+    FROM cteHead AS blocked
+    INNER JOIN cteBlockingHierarchy AS h ON h.session_id = blocked.blocking_session_id and h.session_id!=blocked.session_id --avoid infinite recursion for latch type of blocking
+    WHERE h.wait_type COLLATE Latin1_General_BIN NOT IN ('EXCHANGE', 'CXPACKET') or h.wait_type is null
+    )
+SELECT bh.*, txt.text AS blocker_query_or_most_recent_query 
+FROM cteBlockingHierarchy AS bh 
+OUTER APPLY sys.dm_exec_sql_text (ISNULL ([sql_handle], most_recent_sql_handle)) AS txt;
+To catch long-running or uncommitted transactions, use another set of DMVs for viewing current open transactions, includingsys.dm_tran_database_transactions,sys.dm_tran_session_transactions,sys.dm_exec_connections, and sys.dm_exec_sql_text. There are several DMVs associated with tracking transactions, reviewTransaction-related dynamic management views and functionsfor more information.
+SELECT [s_tst].[session_id],
+[database_name] = DB_NAME (s_tdt.database_id),
+[s_tdt].[database_transaction_begin_time], 
+[sql_text] = [s_est].[text] 
+FROM sys.dm_tran_database_transactions [s_tdt]
+INNER JOIN sys.dm_tran_session_transactions [s_tst] ON [s_tst].[transaction_id] = [s_tdt].[transaction_id]
+INNER JOIN sys.dm_exec_connections [s_ec] ON [s_ec].[session_id] = [s_tst].[session_id]
+CROSS APPLY sys.dm_exec_sql_text ([s_ec].[most_recent_sql_handle]) AS [s_est];
+SELECT [s_tst].[session_id],
+[database_name] = DB_NAME (s_tdt.database_id),
+[s_tdt].[database_transaction_begin_time], 
+[sql_text] = [s_est].[text] 
+FROM sys.dm_tran_database_transactions [s_tdt]
+INNER JOIN sys.dm_tran_session_transactions [s_tst] ON [s_tst].[transaction_id] = [s_tdt].[transaction_id]
+INNER JOIN sys.dm_exec_connections [s_ec] ON [s_ec].[session_id] = [s_tst].[session_id]
+CROSS APPLY sys.dm_exec_sql_text ([s_ec].[most_recent_sql_handle]) AS [s_est];
+Referencesys.dm_os_waiting_tasksthat is at the thread/task layer of SQL. This returns information about what SQL wait type the request is currently experiencing. Likesys.dm_exec_requests, only active requests are returned bysys.dm_os_waiting_tasks.
+sys.dm_exec_requests
+sys.dm_os_waiting_tasks
+Note
+For much more on wait types including aggregated wait stats over time, see the DMVsys.dm_db_wait_stats. This DMV returns aggregate wait stats for the current database only.
+Use thesys.dm_tran_locksDMV for more granular information on what locks have been placed by queries. This DMV can return large amounts of data on a production database, and is useful for diagnosing what locks are currently held.
+Due to the INNER JOIN onsys.dm_os_waiting_tasks, the following query restricts the output fromsys.dm_tran_locksonly to currently blocked requests, their wait status, and their locks:
+sys.dm_os_waiting_tasks
+sys.dm_tran_locks
+SELECT table_name = schema_name(o.schema_id) + '.' + o.name
+, wt.wait_duration_ms, wt.wait_type, wt.blocking_session_id, wt.resource_description
+, tm.resource_type, tm.request_status, tm.request_mode, tm.request_session_id
+FROM sys.dm_tran_locks AS tm
+INNER JOIN sys.dm_os_waiting_tasks as wt ON tm.lock_owner_address = wt.resource_address
+LEFT OUTER JOIN sys.partitions AS p on p.hobt_id = tm.resource_associated_entity_id
+LEFT OUTER JOIN sys.objects o on o.object_id = p.object_id or tm.resource_associated_entity_id = o.object_id
+WHERE resource_database_id = DB_ID()
+AND object_name(p.object_id) = '<table_name>';
+SELECT table_name = schema_name(o.schema_id) + '.' + o.name
+, wt.wait_duration_ms, wt.wait_type, wt.blocking_session_id, wt.resource_description
+, tm.resource_type, tm.request_status, tm.request_mode, tm.request_session_id
+FROM sys.dm_tran_locks AS tm
+INNER JOIN sys.dm_os_waiting_tasks as wt ON tm.lock_owner_address = wt.resource_address
+LEFT OUTER JOIN sys.partitions AS p on p.hobt_id = tm.resource_associated_entity_id
+LEFT OUTER JOIN sys.objects o on o.object_id = p.object_id or tm.resource_associated_entity_id = o.object_id
+WHERE resource_database_id = DB_ID()
+AND object_name(p.object_id) = '<table_name>';
+With DMVs, storing the query results over time provides data points that allow you to review blocking over a specified time interval to identify persisted blocking or trends.
+Gather information from Extended Events
+In addition to the previous information, it's often necessary to capture a trace of the activities on the server to thoroughly investigate a blocking problem on Azure SQL Database. For example, if a session executes multiple statements within a transaction, only the last statement that was submitted is represented. However, one of the earlier statements might be the reason locks are still being held. A trace enables you to see all the commands executed by a session within the current transaction.
+There are two ways to capture traces in SQL Server; Extended Events (XEvents) and Profiler Traces. However,SQL Server
+Profileris deprecated trace technology not supported for Azure SQL Database.Extended Eventsis the newer tracing technology that allows more versatility and less effect on the observed system, and its interface is integrated into SQL Server Management Studio (SSMS).
+Refer to the document that explains how to use theExtended Events New Session Wizardin SSMS. For Azure SQL databases however, SSMS provides an Extended Events subfolder under each database in Object Explorer. Use an Extended Events session wizard to capture these useful events:
+Category Errors:AttentionError_reportedExecution_warning
+Category Errors:
+Attention
+Error_reported
+Execution_warning
+Category Warnings:Missing_join_predicate
+Category Warnings:
+Missing_join_predicate
+Category Execution:Rpc_completedRpc_startingSql_batch_completedSql_batch_starting
+Category Execution:
+Rpc_completed
+Rpc_starting
+Sql_batch_completed
+Sql_batch_starting
+Category deadlock_monitordatabase_xml_deadlock_report
+Category deadlock_monitor
+database_xml_deadlock_report
+Category sessionExisting_connectionLoginLogout
+Category session
+Existing_connection
+Login
+Logout
+Note
+For detailed information on deadlocks, seeAnalyze and prevent deadlocks in Azure SQL Database and Fabric SQL database.
+Identify and resolve common blocking scenarios
+By examining the previous information, you can determine the cause of most blocking problems. The rest of this article is a discussion of how to use this information to identify and resolve some common blocking scenarios. This discussion assumes you have used the blocking scripts (referenced earlier) to capture information on the blocking session IDs and have captured application activity using an XEvent session.
+Analyze blocking data
+Examine theâ¯output of the DMVssys.dm_exec_requestsandsys.dm_exec_sessionsto determine the heads of the blocking chains, usingblocking_theseandsession_id. This most clearly identifies which requests are blocked and which are blocking. Look further into the sessions that are blocked and blocking. Is there a common or root to the blocking chain? They likely share a common table, and one or more of the sessions involved in a blocking chain is performing a write operation.
+Examine theâ¯output of the DMVssys.dm_exec_requestsandsys.dm_exec_sessionsto determine the heads of the blocking chains, usingblocking_theseandsession_id. This most clearly identifies which requests are blocked and which are blocking. Look further into the sessions that are blocked and blocking. Is there a common or root to the blocking chain? They likely share a common table, and one or more of the sessions involved in a blocking chain is performing a write operation.
+sys.dm_exec_requests
+sys.dm_exec_sessions
+blocking_these
+session_id
+Examine theâ¯output of the DMVssys.dm_exec_requestsandsys.dm_exec_sessionsfor information on the session IDs at the head of the blocking chain. Look for the following fields:sys.dm_exec_requests.statusThis column shows the status of a particular request. Typically, aâ¯sleepingâ¯status indicates that the session ID has completed execution and is waiting for the application to submit another query or batch. Aâ¯runnable orâ¯runningâ¯status indicates that the session ID is currently processing a query. The following table gives brief explanations of the various status values.StatusMeaningBackgroundThe session ID is running a background task, such as deadlock detection, log writer, or checkpoint.SleepingThe session ID isn't currently executing. This usually indicates that the session ID is awaiting a command from the application.RunningThe session ID is currently running on a scheduler.RunnableThe session ID is in the runnable queue of a scheduler and waiting to get scheduler time.SuspendedThe session ID is waiting for a resource, such as a lock or a latch.sys.dm_exec_sessions.open_transaction_countThis field tells you the number of open transactions in this session. If this value is greater than 0, the session ID is within an open transaction and might be holding locks acquired by any statement within the transaction.sys.dm_exec_requests.open_transaction_countSimilarly, this field tells you the number of open transactions in this request. If this value is greater than 0, the session ID is within an open transaction and might be holding locks acquired by any statement within the transaction.sys.dm_exec_requests.wait_type,wait_time, andlast_wait_typeIf theâ¯sys.dm_exec_requests.wait_typeâ¯is NULL, the request isn't currently waiting for anything and theâ¯last_wait_typeâ¯value indicates the lastâ¯wait_typeâ¯that the request encountered. For more information aboutâ¯sys.dm_os_wait_statsand a description of the most commonâ¯waitâ¯types, seesys.dm_os_wait_stats. Theâ¯wait_timeâ¯value can be used to determine if the request is making progress. When a query against theâ¯sys.dm_exec_requestsâ¯table returns a value in theâ¯wait_timeâ¯column that is less than theâ¯wait_timeâ¯value from a previous query ofâ¯sys.dm_exec_requests, this indicates that the prior lock was acquired and released and is now waiting on a new lock (assuming nonzerowait_time). This can be verified by comparing thewait_resourceâ¯betweenâ¯sys.dm_exec_requestsâ¯output, which displays the resource for which the request is waiting.sys.dm_exec_requests.wait_resourceThis field indicates the resource that a blocked request is waiting on. The following table lists commonâ¯wait_resourceâ¯formats and their meaning:ResourceFormatExampleExplanationTableDatabaseID:ObjectID:IndexIDTAB: 5:261575970:1In this case, database ID 5 is theâ¯pubsâ¯sample database and object ID 261575970 is theâ¯titlesâ¯table and 1 is the clustered index.PageDatabaseID:FileID:PageIDPAGE: 5:1:104In this case, database ID 5isâ¯pubs, file ID 1 is the primary data file, and page 104 is a page belonging to theâ¯titlesâ¯table. To identify theobject_idthe page belongs to, use the dynamic management functionsys.dm_db_page_info, passing in the DatabaseID, FileId, PageId from thewait_resource.KeyDatabaseID:Hobt_id (Hash value for index key)KEY: 5:72057594044284928 (3300a4f361aa)In this case, database ID 5 ispubs, andHobt_ID72057594044284928 corresponds toindex_id2 forobject_id261575970 (titlesâ¯table). Use thesys.partitionscatalog view to associate thehobt_idto a particularindex_idandobject_id. There's no way to unhash the index key hash to a specific key value.RowDatabaseID:FileID:PageID:Slot(row)RID: 5:1:104:3In this case, database ID 5 ispubs, file ID 1 is the primary data file, page 104 is a page belonging to the titles table, and slot 3 indicates the row's position on the page.CompileDatabaseID:FileID:PageID:Slot(row)RID: 5:1:104:3In this case, database ID 5 ispubs, file ID 1 is the primary data file, page 104 is a page belonging to the titles table, and slot 3 indicates the row's position on the page.sys.dm_tran_active_transactionsThesys.dm_tran_active_transactionsDMV contains data about open transactions that can be joined to other DMVs for a complete picture of transactions awaiting commit or rollback. Use the following query to return information on open transactions, joined to other DMVs includingsys.dm_tran_session_transactions. Consider a transaction's current state,transaction_begin_time, and other situational data to evaluate whether it could be a source of blocking.SELECT tst.session_id, [database_name] = db_name(s.database_id)
+, tat.transaction_begin_time
+, transaction_duration_s = datediff(s, tat.transaction_begin_time, sysdatetime()) 
+, transaction_type = CASE tat.transaction_type  WHEN 1 THEN 'Read/write transaction'
+                                                WHEN 2 THEN 'Read-only transaction'
+                                                WHEN 3 THEN 'System transaction'
+                                                WHEN 4 THEN 'Distributed transaction' END
+, input_buffer = ib.event_info, tat.transaction_uow     
+, transaction_state  = CASE tat.transaction_state    
+            WHEN 0 THEN 'The transaction has not been completely initialized yet.'
+            WHEN 1 THEN 'The transaction has been initialized but has not started.'
+            WHEN 2 THEN 'The transaction is active - has not been committed or rolled back.'
+            WHEN 3 THEN 'The transaction has ended. This is used for read-only transactions.'
+            WHEN 4 THEN 'The commit process has been initiated on the distributed transaction.'
+            WHEN 5 THEN 'The transaction is in a prepared state and waiting resolution.'
+            WHEN 6 THEN 'The transaction has been committed.'
+            WHEN 7 THEN 'The transaction is being rolled back.'
+            WHEN 8 THEN 'The transaction has been rolled back.' END 
+, transaction_name = tat.name, request_status = r.status
+, azure_dtc_state = CASE tat.dtc_state 
+                    WHEN 1 THEN 'ACTIVE'
+                    WHEN 2 THEN 'PREPARED'
+                    WHEN 3 THEN 'COMMITTED'
+                    WHEN 4 THEN 'ABORTED'
+                    WHEN 5 THEN 'RECOVERED' END
+, tst.is_user_transaction, tst.is_local
+, session_open_transaction_count = tst.open_transaction_count  
+, s.host_name, s.program_name, s.client_interface_name, s.login_name, s.is_user_process
+FROM sys.dm_tran_active_transactions tat 
+INNER JOIN sys.dm_tran_session_transactions tst  on tat.transaction_id = tst.transaction_id
+INNER JOIN sys.dm_exec_sessions s on s.session_id = tst.session_id 
+LEFT OUTER JOIN sys.dm_exec_requests r on r.session_id = s.session_id
+CROSS APPLY sys.dm_exec_input_buffer(s.session_id, null) AS ib;Other columnsThe remainingâ¯columns insys.dm_exec_sessionsandsys.dm_exec_requestcan provide insight into the root of a problem as well. Their usefulness varies depending on the circumstances of the problem. For example, you can determine if the problem happens only from certain clients (hostname), on certain network libraries (net_library), when the last batch submitted by a session ID waslast_request_start_timeinsys.dm_exec_sessions, how long a request had been running usingstart_timeinsys.dm_exec_requests, and so on.
+Examine theâ¯output of the DMVssys.dm_exec_requestsandsys.dm_exec_sessionsfor information on the session IDs at the head of the blocking chain. Look for the following fields:
+sys.dm_exec_requests
+sys.dm_exec_sessions
+sys.dm_exec_requests.statusThis column shows the status of a particular request. Typically, aâ¯sleepingâ¯status indicates that the session ID has completed execution and is waiting for the application to submit another query or batch. Aâ¯runnable orâ¯runningâ¯status indicates that the session ID is currently processing a query. The following table gives brief explanations of the various status values.
+sys.dm_exec_requests.status
+sys.dm_exec_sessions.open_transaction_countThis field tells you the number of open transactions in this session. If this value is greater than 0, the session ID is within an open transaction and might be holding locks acquired by any statement within the transaction.
+sys.dm_exec_sessions.open_transaction_countThis field tells you the number of open transactions in this session. If this value is greater than 0, the session ID is within an open transaction and might be holding locks acquired by any statement within the transaction.
+sys.dm_exec_sessions.open_transaction_count
+sys.dm_exec_requests.open_transaction_countSimilarly, this field tells you the number of open transactions in this request. If this value is greater than 0, the session ID is within an open transaction and might be holding locks acquired by any statement within the transaction.
+sys.dm_exec_requests.open_transaction_countSimilarly, this field tells you the number of open transactions in this request. If this value is greater than 0, the session ID is within an open transaction and might be holding locks acquired by any statement within the transaction.
+sys.dm_exec_requests.open_transaction_count
+sys.dm_exec_requests.wait_type,wait_time, andlast_wait_typeIf theâ¯sys.dm_exec_requests.wait_typeâ¯is NULL, the request isn't currently waiting for anything and theâ¯last_wait_typeâ¯value indicates the lastâ¯wait_typeâ¯that the request encountered. For more information aboutâ¯sys.dm_os_wait_statsand a description of the most commonâ¯waitâ¯types, seesys.dm_os_wait_stats. Theâ¯wait_timeâ¯value can be used to determine if the request is making progress. When a query against theâ¯sys.dm_exec_requestsâ¯table returns a value in theâ¯wait_timeâ¯column that is less than theâ¯wait_timeâ¯value from a previous query ofâ¯sys.dm_exec_requests, this indicates that the prior lock was acquired and released and is now waiting on a new lock (assuming nonzerowait_time). This can be verified by comparing thewait_resourceâ¯betweenâ¯sys.dm_exec_requestsâ¯output, which displays the resource for which the request is waiting.
+sys.dm_exec_requests.wait_type,wait_time, andlast_wait_typeIf theâ¯sys.dm_exec_requests.wait_typeâ¯is NULL, the request isn't currently waiting for anything and theâ¯last_wait_typeâ¯value indicates the lastâ¯wait_typeâ¯that the request encountered. For more information aboutâ¯sys.dm_os_wait_statsand a description of the most commonâ¯waitâ¯types, seesys.dm_os_wait_stats. Theâ¯wait_timeâ¯value can be used to determine if the request is making progress. When a query against theâ¯sys.dm_exec_requestsâ¯table returns a value in theâ¯wait_timeâ¯column that is less than theâ¯wait_timeâ¯value from a previous query ofâ¯sys.dm_exec_requests, this indicates that the prior lock was acquired and released and is now waiting on a new lock (assuming nonzerowait_time). This can be verified by comparing thewait_resourceâ¯betweenâ¯sys.dm_exec_requestsâ¯output, which displays the resource for which the request is waiting.
+sys.dm_exec_requests.wait_type
+wait_time
+last_wait_type
+sys.dm_exec_requests.wait_type
+last_wait_type
+wait_type
+sys.dm_os_wait_stats
+wait_time
+sys.dm_exec_requests
+wait_time
+wait_time
+sys.dm_exec_requests
+wait_time
+wait_resource
+sys.dm_exec_requests
+sys.dm_exec_requests.wait_resourceThis field indicates the resource that a blocked request is waiting on. The following table lists commonâ¯wait_resourceâ¯formats and their meaning:
+sys.dm_exec_requests.wait_resourceThis field indicates the resource that a blocked request is waiting on. The following table lists commonâ¯wait_resourceâ¯formats and their meaning:
+sys.dm_exec_requests.wait_resource
+wait_resource
+isâ¯pubs
+object_id
+wait_resource
+pubs
+Hobt_ID
+index_id
+object_id
+sys.partitions
+hobt_id
+index_id
+object_id
+pubs
+pubs
+sys.dm_tran_active_transactionsThesys.dm_tran_active_transactionsDMV contains data about open transactions that can be joined to other DMVs for a complete picture of transactions awaiting commit or rollback. Use the following query to return information on open transactions, joined to other DMVs includingsys.dm_tran_session_transactions. Consider a transaction's current state,transaction_begin_time, and other situational data to evaluate whether it could be a source of blocking.
+sys.dm_tran_active_transactions
+transaction_begin_time
+SELECT tst.session_id, [database_name] = db_name(s.database_id)
+, tat.transaction_begin_time
+, transaction_duration_s = datediff(s, tat.transaction_begin_time, sysdatetime()) 
+, transaction_type = CASE tat.transaction_type  WHEN 1 THEN 'Read/write transaction'
+                                                WHEN 2 THEN 'Read-only transaction'
+                                                WHEN 3 THEN 'System transaction'
+                                                WHEN 4 THEN 'Distributed transaction' END
+, input_buffer = ib.event_info, tat.transaction_uow     
+, transaction_state  = CASE tat.transaction_state    
+            WHEN 0 THEN 'The transaction has not been completely initialized yet.'
+            WHEN 1 THEN 'The transaction has been initialized but has not started.'
+            WHEN 2 THEN 'The transaction is active - has not been committed or rolled back.'
+            WHEN 3 THEN 'The transaction has ended. This is used for read-only transactions.'
+            WHEN 4 THEN 'The commit process has been initiated on the distributed transaction.'
+            WHEN 5 THEN 'The transaction is in a prepared state and waiting resolution.'
+            WHEN 6 THEN 'The transaction has been committed.'
+            WHEN 7 THEN 'The transaction is being rolled back.'
+            WHEN 8 THEN 'The transaction has been rolled back.' END 
+, transaction_name = tat.name, request_status = r.status
+, azure_dtc_state = CASE tat.dtc_state 
+                    WHEN 1 THEN 'ACTIVE'
+                    WHEN 2 THEN 'PREPARED'
+                    WHEN 3 THEN 'COMMITTED'
+                    WHEN 4 THEN 'ABORTED'
+                    WHEN 5 THEN 'RECOVERED' END
+, tst.is_user_transaction, tst.is_local
+, session_open_transaction_count = tst.open_transaction_count  
+, s.host_name, s.program_name, s.client_interface_name, s.login_name, s.is_user_process
+FROM sys.dm_tran_active_transactions tat 
+INNER JOIN sys.dm_tran_session_transactions tst  on tat.transaction_id = tst.transaction_id
+INNER JOIN sys.dm_exec_sessions s on s.session_id = tst.session_id 
+LEFT OUTER JOIN sys.dm_exec_requests r on r.session_id = s.session_id
+CROSS APPLY sys.dm_exec_input_buffer(s.session_id, null) AS ib;
+SELECT tst.session_id, [database_name] = db_name(s.database_id)
+, tat.transaction_begin_time
+, transaction_duration_s = datediff(s, tat.transaction_begin_time, sysdatetime()) 
+, transaction_type = CASE tat.transaction_type  WHEN 1 THEN 'Read/write transaction'
+                                                WHEN 2 THEN 'Read-only transaction'
+                                                WHEN 3 THEN 'System transaction'
+                                                WHEN 4 THEN 'Distributed transaction' END
+, input_buffer = ib.event_info, tat.transaction_uow     
+, transaction_state  = CASE tat.transaction_state    
+            WHEN 0 THEN 'The transaction has not been completely initialized yet.'
+            WHEN 1 THEN 'The transaction has been initialized but has not started.'
+            WHEN 2 THEN 'The transaction is active - has not been committed or rolled back.'
+            WHEN 3 THEN 'The transaction has ended. This is used for read-only transactions.'
+            WHEN 4 THEN 'The commit process has been initiated on the distributed transaction.'
+            WHEN 5 THEN 'The transaction is in a prepared state and waiting resolution.'
+            WHEN 6 THEN 'The transaction has been committed.'
+            WHEN 7 THEN 'The transaction is being rolled back.'
+            WHEN 8 THEN 'The transaction has been rolled back.' END 
+, transaction_name = tat.name, request_status = r.status
+, azure_dtc_state = CASE tat.dtc_state 
+                    WHEN 1 THEN 'ACTIVE'
+                    WHEN 2 THEN 'PREPARED'
+                    WHEN 3 THEN 'COMMITTED'
+                    WHEN 4 THEN 'ABORTED'
+                    WHEN 5 THEN 'RECOVERED' END
+, tst.is_user_transaction, tst.is_local
+, session_open_transaction_count = tst.open_transaction_count  
+, s.host_name, s.program_name, s.client_interface_name, s.login_name, s.is_user_process
+FROM sys.dm_tran_active_transactions tat 
+INNER JOIN sys.dm_tran_session_transactions tst  on tat.transaction_id = tst.transaction_id
+INNER JOIN sys.dm_exec_sessions s on s.session_id = tst.session_id 
+LEFT OUTER JOIN sys.dm_exec_requests r on r.session_id = s.session_id
+CROSS APPLY sys.dm_exec_input_buffer(s.session_id, null) AS ib;
+Other columnsThe remainingâ¯columns insys.dm_exec_sessionsandsys.dm_exec_requestcan provide insight into the root of a problem as well. Their usefulness varies depending on the circumstances of the problem. For example, you can determine if the problem happens only from certain clients (hostname), on certain network libraries (net_library), when the last batch submitted by a session ID waslast_request_start_timeinsys.dm_exec_sessions, how long a request had been running usingstart_timeinsys.dm_exec_requests, and so on.
+Other columns
+The remainingâ¯columns insys.dm_exec_sessionsandsys.dm_exec_requestcan provide insight into the root of a problem as well. Their usefulness varies depending on the circumstances of the problem. For example, you can determine if the problem happens only from certain clients (hostname), on certain network libraries (net_library), when the last batch submitted by a session ID waslast_request_start_timeinsys.dm_exec_sessions, how long a request had been running usingstart_timeinsys.dm_exec_requests, and so on.
+last_request_start_time
+sys.dm_exec_sessions
+start_time
+sys.dm_exec_requests
+Common blocking scenarios
+The table below maps common symptoms to their probable causes.
+TheWaittype,Open_Tran, andStatuscolumns refer to information returned bysys.dm_exec_request. Other columns might be returned bysys.dm_exec_sessions. The "Resolves?" column indicates whether or not the blocking resolves on its own, or whether the session should be killed via theKILLcommand. For more information, seeKILL.
+Waittype
+Open_Tran
+Status
+KILL
+sys.dm_exec_sessions
+reads
+cpu_time
+memory_usage
+hostname
+sys.dm_exec_sessions
+last_request_start_time
+sys.dm_exec_sessions
+Detailed blocking scenarios
+Blocking caused by a normally running query with a long execution timeResolution: The solution to this type of blocking problem is to look for ways to optimize the query. Actually, this class of blocking problem can just be a performance problem, and require you to pursue it as such. For information on troubleshooting a specific slow-running query, seeHow to troubleshoot slow-running queries on SQL Server. For more information, seeMonitor and Tune for Performance.Reports from theQuery Storein SSMS are also a highly recommended and valuable tool for identifying the most costly queries, suboptimal execution plans. Also reviewQuery Performance Insight.If the query performs only SELECT operations, considerrunning the statement under snapshot isolationif it's enabled in your database, especially if RCSI has been disabled. As when RCSI is enabled, queries reading data don't require shared (S) locks under snapshot isolation level. Additionally, snapshot isolation provides transaction level consistency for all statements in an explicit multi-statement transaction. Snapshot isolation mightalready be enabled in your database. Snapshot isolation might also be used with queries performing modifications, but you must handleupdate conflicts.If you have a long-running query that is blocking other users and can't be optimized, consider moving it from an OLTP environment to a dedicated reporting system, asynchronous read-only replica of the database.
+Blocking caused by a normally running query with a long execution time
+Resolution: The solution to this type of blocking problem is to look for ways to optimize the query. Actually, this class of blocking problem can just be a performance problem, and require you to pursue it as such. For information on troubleshooting a specific slow-running query, seeHow to troubleshoot slow-running queries on SQL Server. For more information, seeMonitor and Tune for Performance.
+Reports from theQuery Storein SSMS are also a highly recommended and valuable tool for identifying the most costly queries, suboptimal execution plans. Also reviewQuery Performance Insight.
+If the query performs only SELECT operations, considerrunning the statement under snapshot isolationif it's enabled in your database, especially if RCSI has been disabled. As when RCSI is enabled, queries reading data don't require shared (S) locks under snapshot isolation level. Additionally, snapshot isolation provides transaction level consistency for all statements in an explicit multi-statement transaction. Snapshot isolation mightalready be enabled in your database. Snapshot isolation might also be used with queries performing modifications, but you must handleupdate conflicts.
+If you have a long-running query that is blocking other users and can't be optimized, consider moving it from an OLTP environment to a dedicated reporting system, asynchronous read-only replica of the database.
+Blocking caused by a sleeping session ID that has an uncommitted transactionThis type of blocking can often be identified by a session ID that is sleeping or awaiting a command, yet whose transaction nesting level (@@TRANCOUNT,open_transaction_countfromsys.dm_exec_requests) is greater than zero. This can occur if the application experiences a query time-out, or issues a cancel without also issuing the required number of
+ROLLBACK and/or COMMIT statements. When a session ID receives a query time-out or a cancel, it terminates the current query and batch, but doesn't automatically roll back or commit the transaction. The application is responsible for this, as Azure SQL Database can't assume that an entire transaction must be rolled back due to a single query being canceled. The query time-out or cancel appears as an ATTENTION signal event for the session ID in the Extended Event session.To demonstrate an uncommitted explicit transaction, issue the following query:CREATE TABLE #test (col1 INT);
+INSERT INTO #test SELECT 1;
+BEGIN TRAN
+UPDATE #test SET col1 = 2 where col1 = 1;Then, execute this query in the same window:SELECT @@TRANCOUNT;
+ROLLBACK TRAN
+DROP TABLE #test;The output of the second query indicates that the transaction nesting level is one. All the locks acquired in the transaction are still be held until the transaction was committed or rolled back. If applications explicitly open and commit transactions, a communication or other error could leave the session and its transaction in an open state.Use the script earlier in this article based onsys.dm_tran_active_transactionsto identify currently uncommitted transactions across the instance.Resolutions:Additionally, this class of blocking problem can also be a performance problem, and require you to pursue it as such. If the query execution time can be diminished, the query time-out or cancel wouldn't occur. It's important that the application is able to handle the time-out or cancel scenarios should they arise, but you might also benefit from examining the performance of the query.Applications must properly manage transaction nesting levels, or they can cause a blocking problem following the cancellation of the query in this manner. Consider:In the error handler of the client application, executeIF @@TRANCOUNT > 0 ROLLBACK TRANfollowing any error, even if the client application doesn't believe a transaction is open. Checking for open transactions is required, because a stored procedure called during the batch could have started a transaction without the client application's knowledge. Certain conditions, such as canceling the query, prevent the procedure from executing past the current statement, so even if the procedure has logic to checkIF @@ERROR <> 0and abort the transaction, this rollback code isn't executed in such cases.If connection pooling is being used in an application that opens the connection and runs a few queries before releasing the connection back to the pool, such as a Web-based application, temporarily disabling connection pooling might help alleviate the problem until the client application is modified to handle the errors appropriately. By disabling connection pooling, releasing the connection causes a physical disconnect of the Azure SQL Database connection, resulting in the server rolling back any open transactions.UseSET XACT_ABORT ONfor the connection, or in any stored procedures that begin transactions and aren't cleaning up following an error. In the event of a run-time error, this setting aborts any open transactions and return control to the client. For more information, reviewSET XACT_ABORT.NoteThe connection is not reset until it is reused from the connection pool, so it is possible that a user could open a transaction and then release the connection to the connection pool, but it might not be reused for several seconds, during which time the transaction would remain open. If the connection is not reused, the transaction is aborted when the connection times out and is removed from the connection pool. Thus, it is optimal for the client application to abort transactions in their error handler or useSET XACT_ABORT ONto avoid this potential delay.CautionFollowingSET XACT_ABORT ON, T-SQL statements following a statement that causes an error aren't executed. This could affect the intended flow of existing code.
+Blocking caused by a sleeping session ID that has an uncommitted transaction
+This type of blocking can often be identified by a session ID that is sleeping or awaiting a command, yet whose transaction nesting level (@@TRANCOUNT,open_transaction_countfromsys.dm_exec_requests) is greater than zero. This can occur if the application experiences a query time-out, or issues a cancel without also issuing the required number of
+ROLLBACK and/or COMMIT statements. When a session ID receives a query time-out or a cancel, it terminates the current query and batch, but doesn't automatically roll back or commit the transaction. The application is responsible for this, as Azure SQL Database can't assume that an entire transaction must be rolled back due to a single query being canceled. The query time-out or cancel appears as an ATTENTION signal event for the session ID in the Extended Event session.
+@@TRANCOUNT
+open_transaction_count
+sys.dm_exec_requests
+To demonstrate an uncommitted explicit transaction, issue the following query:
+CREATE TABLE #test (col1 INT);
+INSERT INTO #test SELECT 1;
+BEGIN TRAN
+UPDATE #test SET col1 = 2 where col1 = 1;
+CREATE TABLE #test (col1 INT);
+INSERT INTO #test SELECT 1;
+BEGIN TRAN
+UPDATE #test SET col1 = 2 where col1 = 1;
+Then, execute this query in the same window:
+SELECT @@TRANCOUNT;
+ROLLBACK TRAN
+DROP TABLE #test;
+SELECT @@TRANCOUNT;
+ROLLBACK TRAN
+DROP TABLE #test;
+The output of the second query indicates that the transaction nesting level is one. All the locks acquired in the transaction are still be held until the transaction was committed or rolled back. If applications explicitly open and commit transactions, a communication or other error could leave the session and its transaction in an open state.
+Use the script earlier in this article based onsys.dm_tran_active_transactionsto identify currently uncommitted transactions across the instance.
+sys.dm_tran_active_transactions
+Resolutions:
+Additionally, this class of blocking problem can also be a performance problem, and require you to pursue it as such. If the query execution time can be diminished, the query time-out or cancel wouldn't occur. It's important that the application is able to handle the time-out or cancel scenarios should they arise, but you might also benefit from examining the performance of the query.
+Additionally, this class of blocking problem can also be a performance problem, and require you to pursue it as such. If the query execution time can be diminished, the query time-out or cancel wouldn't occur. It's important that the application is able to handle the time-out or cancel scenarios should they arise, but you might also benefit from examining the performance of the query.
+Applications must properly manage transaction nesting levels, or they can cause a blocking problem following the cancellation of the query in this manner. Consider:In the error handler of the client application, executeIF @@TRANCOUNT > 0 ROLLBACK TRANfollowing any error, even if the client application doesn't believe a transaction is open. Checking for open transactions is required, because a stored procedure called during the batch could have started a transaction without the client application's knowledge. Certain conditions, such as canceling the query, prevent the procedure from executing past the current statement, so even if the procedure has logic to checkIF @@ERROR <> 0and abort the transaction, this rollback code isn't executed in such cases.If connection pooling is being used in an application that opens the connection and runs a few queries before releasing the connection back to the pool, such as a Web-based application, temporarily disabling connection pooling might help alleviate the problem until the client application is modified to handle the errors appropriately. By disabling connection pooling, releasing the connection causes a physical disconnect of the Azure SQL Database connection, resulting in the server rolling back any open transactions.UseSET XACT_ABORT ONfor the connection, or in any stored procedures that begin transactions and aren't cleaning up following an error. In the event of a run-time error, this setting aborts any open transactions and return control to the client. For more information, reviewSET XACT_ABORT.
+Applications must properly manage transaction nesting levels, or they can cause a blocking problem following the cancellation of the query in this manner. Consider:
+In the error handler of the client application, executeIF @@TRANCOUNT > 0 ROLLBACK TRANfollowing any error, even if the client application doesn't believe a transaction is open. Checking for open transactions is required, because a stored procedure called during the batch could have started a transaction without the client application's knowledge. Certain conditions, such as canceling the query, prevent the procedure from executing past the current statement, so even if the procedure has logic to checkIF @@ERROR <> 0and abort the transaction, this rollback code isn't executed in such cases.
+IF @@TRANCOUNT > 0 ROLLBACK TRAN
+IF @@ERROR <> 0
+If connection pooling is being used in an application that opens the connection and runs a few queries before releasing the connection back to the pool, such as a Web-based application, temporarily disabling connection pooling might help alleviate the problem until the client application is modified to handle the errors appropriately. By disabling connection pooling, releasing the connection causes a physical disconnect of the Azure SQL Database connection, resulting in the server rolling back any open transactions.
+UseSET XACT_ABORT ONfor the connection, or in any stored procedures that begin transactions and aren't cleaning up following an error. In the event of a run-time error, this setting aborts any open transactions and return control to the client. For more information, reviewSET XACT_ABORT.
+SET XACT_ABORT ON
+Note
+The connection is not reset until it is reused from the connection pool, so it is possible that a user could open a transaction and then release the connection to the connection pool, but it might not be reused for several seconds, during which time the transaction would remain open. If the connection is not reused, the transaction is aborted when the connection times out and is removed from the connection pool. Thus, it is optimal for the client application to abort transactions in their error handler or useSET XACT_ABORT ONto avoid this potential delay.
+SET XACT_ABORT ON
+Caution
+FollowingSET XACT_ABORT ON, T-SQL statements following a statement that causes an error aren't executed. This could affect the intended flow of existing code.
+SET XACT_ABORT ON
+Blocking caused by a session ID whose corresponding client application didn't fetch all result rows to completionAfter sending a query to the server, all applications must immediately fetch all result rows to completion. If an application doesn't fetch all result rows, locks can be left on the tables, blocking other users. If you're using an application that transparently submits SQL statements to the server, the application must fetch all result rows. If it doesn't (and if it can't be configured to do so), you might be unable to resolve the blocking problem. To avoid the problem, you can restrict poorly behaved applications to a reporting or a decision-support database, separate from the main OLTP database.The impact of this scenario is reduced when read committed snapshot is enabled on the database, which is the default configuration in Azure SQL Database. Learn more in theUnderstand blockingsection of this article.NoteSeeguidance for retry logicfor applications connecting to Azure SQL Database.Resolution: The application must be rewritten to fetch all rows of the result to completion. This doesn't rule out the use ofOFFSET and FETCH in the ORDER BY clauseof a query to perform server-side paging.
+Blocking caused by a session ID whose corresponding client application didn't fetch all result rows to completion
+After sending a query to the server, all applications must immediately fetch all result rows to completion. If an application doesn't fetch all result rows, locks can be left on the tables, blocking other users. If you're using an application that transparently submits SQL statements to the server, the application must fetch all result rows. If it doesn't (and if it can't be configured to do so), you might be unable to resolve the blocking problem. To avoid the problem, you can restrict poorly behaved applications to a reporting or a decision-support database, separate from the main OLTP database.
+The impact of this scenario is reduced when read committed snapshot is enabled on the database, which is the default configuration in Azure SQL Database. Learn more in theUnderstand blockingsection of this article.
+Note
+Seeguidance for retry logicfor applications connecting to Azure SQL Database.
+Resolution: The application must be rewritten to fetch all rows of the result to completion. This doesn't rule out the use ofOFFSET and FETCH in the ORDER BY clauseof a query to perform server-side paging.
+Blocking caused by a session in a rollback stateA data modification query that is KILLed, or canceled outside of a user-defined transaction, is rolled back. This can also occur as a side effect of the client network session disconnecting, or when a request is selected as the deadlock victim. This can often be identified by observing the output ofsys.dm_exec_requests, which might indicate the ROLLBACK command, and thepercent_completecolumn might show progress.Thanks toAccelerated database recoveryintroduced in 2019, lengthy rollbacks should be rare.Resolution: Wait for the session ID to finish rolling back the changes that were made.To avoid this situation, don't perform large batch write operations or index creation or maintenance operations during busy hours on OLTP systems. If possible, perform such operations during periods of low activity.
+Blocking caused by a session in a rollback state
+A data modification query that is KILLed, or canceled outside of a user-defined transaction, is rolled back. This can also occur as a side effect of the client network session disconnecting, or when a request is selected as the deadlock victim. This can often be identified by observing the output ofsys.dm_exec_requests, which might indicate the ROLLBACK command, and thepercent_completecolumn might show progress.
+sys.dm_exec_requests
+percent_complete
+Thanks toAccelerated database recoveryintroduced in 2019, lengthy rollbacks should be rare.
+Resolution: Wait for the session ID to finish rolling back the changes that were made.
+To avoid this situation, don't perform large batch write operations or index creation or maintenance operations during busy hours on OLTP systems. If possible, perform such operations during periods of low activity.
+Blocking caused by an orphaned connectionIf the client application traps errors or the client workstation is restarted, the network session to the server might not be immediately canceled under some conditions. From the Azure SQL Database perspective, the client still appears to be present, and any locks acquired might still be retained. For more information, seeHow to troubleshoot orphaned connections in SQL Server.Resolution: If the client application has disconnected without appropriately cleaning up its resources, you can terminate the session ID by using theKILLcommand. TheKILLcommand takes the session ID value as input. For example, to kill session ID 99, issue the following command:KILL 99
+Blocking caused by an orphaned connection
+If the client application traps errors or the client workstation is restarted, the network session to the server might not be immediately canceled under some conditions. From the Azure SQL Database perspective, the client still appears to be present, and any locks acquired might still be retained. For more information, seeHow to troubleshoot orphaned connections in SQL Server.
+Resolution: If the client application has disconnected without appropriately cleaning up its resources, you can terminate the session ID by using theKILLcommand. TheKILLcommand takes the session ID value as input. For example, to kill session ID 99, issue the following command:
+KILL
+KILL
+KILL 99
+KILL 99
+Related content
+Analyze and prevent deadlocks in Azure SQL Database and Fabric SQL database
+Monitor and performance tuning in Azure SQL Database and Azure SQL Managed Instance
+Monitor performance by using the Query Store
+Transaction Locking and Row Versioning Guide
+SET TRANSACTION ISOLATION LEVEL (Transact-SQL)
+Quickstart: Extended Events
+Azure SQL Database: improving performance tuning with automatic tuning
+Deliver consistent performance with Azure SQL
+Troubleshoot connectivity issues and other errors
+Transient Fault Handling
+Configure the max degree of parallelism (MAXDOP) in Azure SQL Database
+Diagnose and troubleshoot high CPU on Azure SQL Database and SQL database in Microsoft Fabric
+Feedback
+Was this page helpful?
+Additional resources

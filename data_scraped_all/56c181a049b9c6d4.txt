@@ -1,0 +1,170 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Manage connections in Azure Functions
+Article
+2021-11-18
+12 contributors
+In this article
+Functions in a function app share resources. Among those shared resources are connections: HTTP connections, database connections, and connections to services such as Azure Storage. When many functions are running concurrently in a Consumption plan, it's possible to run out of available connections. This article explains how to code your functions to avoid using more connections than they need.
+Note
+Connection limits described in this article apply only when running in aConsumption plan. However, the techniques described here may be beneficial when running on any plan.
+Connection limit
+The number of available connections in a Consumption plan is limited partly because a function app in this plan runs in asandbox environment. One of the restrictions that the sandbox imposes on your code is a limit on the number of outbound connections, which is currently 600 active (1,200 total) connections per instance. When you reach this limit, the functions runtime writes the following message to the logs:Host thresholds exceeded: Connections. For more information, see theFunctions service limits.
+Host thresholds exceeded: Connections
+This limit is per instance. When thescale controller adds function app instancesto handle more requests, each instance has an independent connection limit. That means there's no global connection limit, and you can have much more than 600 active connections across all active instances.
+When troubleshooting, make sure that you have enabled Application Insights for your function app. Application Insights lets you view metrics for your function apps like executions. For more information, seeView telemetry in Application Insights.
+Static clients
+To avoid holding more connections than necessary, reuse client instances rather than creating new ones with each function invocation. We recommend reusing client connections for any language that you might write your function in. For example, .NET clients like theHttpClient,DocumentClient, and Azure Storage clients can manage connections if you use a single, static client.
+Here are some guidelines to follow when you're using a service-specific client in an Azure Functions application:
+Do notcreate a new client with every function invocation.
+Docreate a single, static client that every function invocation can use.
+Considercreating a single, static client in a shared helper class if different functions use the same service.
+Client code examples
+This section demonstrates best practices for creating and using clients from your function code.
+HTTP requests
+C#
+JavaScript
+Here's an example of C# function code that creates a staticHttpClientinstance:
+// Create a single, static HttpClient
+private static HttpClient httpClient = new HttpClient();
+
+public static async Task Run(string input)
+{
+    var response = await httpClient.GetAsync("https://example.com");
+    // Rest of function
+}
+// Create a single, static HttpClient
+private static HttpClient httpClient = new HttpClient();
+
+public static async Task Run(string input)
+{
+    var response = await httpClient.GetAsync("https://example.com");
+    // Rest of function
+}
+A common question aboutHttpClientin .NET is "Should I dispose of my client?" In general, you dispose of objects that implementIDisposablewhen you're done using them. But you don't dispose of a static client because you aren't done using it when the function ends. You want the static client to live for the duration of your application.
+IDisposable
+Because it provides better connection management options, you should use the nativehttp.agentclass instead of non-native methods, such as thenode-fetchmodule. Connection parameters are configured through options on thehttp.agentclass. For detailed options available with the HTTP agent, seenew Agent([options]).
+http.agent
+node-fetch
+http.agent
+The globalhttp.globalAgentclass used byhttp.request()has all of these values set to their respective defaults. The recommended way to configure connection limits in Functions is to set a maximum number globally. The following example sets the maximum number of sockets for the function app:
+http.globalAgent
+http.request()
+http.globalAgent.maxSockets = 200;
+http.globalAgent.maxSockets = 200;
+The following example creates a new HTTP request with a custom HTTP agent only for that request:
+var http = require('http');
+var httpAgent = new http.Agent();
+httpAgent.maxSockets = 200;
+const options = { agent: httpAgent };
+http.request(options, onResponseCallback);
+var http = require('http');
+var httpAgent = new http.Agent();
+httpAgent.maxSockets = 200;
+const options = { agent: httpAgent };
+http.request(options, onResponseCallback);
+Azure Cosmos DB clients
+C#
+JavaScript
+CosmosClientconnects to an Azure Cosmos DB instance. The Azure Cosmos DB documentation recommends that youuse a singleton Azure Cosmos DB client for the lifetime of your application. The following example shows one pattern for doing that in a function:
+#r "Microsoft.Azure.Cosmos"
+using Microsoft.Azure.Cosmos;
+
+private static Lazy<CosmosClient> lazyClient = new Lazy<CosmosClient>(InitializeCosmosClient);
+private static CosmosClient cosmosClient => lazyClient.Value;
+
+private static CosmosClient InitializeCosmosClient()
+{
+    // Perform any initialization here
+    var uri = "https://youraccount.documents.azure.com:443";
+    var authKey = "authKey";
+   
+    return new CosmosClient(uri, authKey);
+}
+
+public static async Task Run(string input)
+{
+    Container container = cosmosClient.GetContainer("database", "collection");
+    MyItem item = new MyItem{ id = "myId", partitionKey = "myPartitionKey", data = "example" };
+    await container.UpsertItemAsync(document);
+   
+    // Rest of function
+}
+#r "Microsoft.Azure.Cosmos"
+using Microsoft.Azure.Cosmos;
+
+private static Lazy<CosmosClient> lazyClient = new Lazy<CosmosClient>(InitializeCosmosClient);
+private static CosmosClient cosmosClient => lazyClient.Value;
+
+private static CosmosClient InitializeCosmosClient()
+{
+    // Perform any initialization here
+    var uri = "https://youraccount.documents.azure.com:443";
+    var authKey = "authKey";
+   
+    return new CosmosClient(uri, authKey);
+}
+
+public static async Task Run(string input)
+{
+    Container container = cosmosClient.GetContainer("database", "collection");
+    MyItem item = new MyItem{ id = "myId", partitionKey = "myPartitionKey", data = "example" };
+    await container.UpsertItemAsync(document);
+   
+    // Rest of function
+}
+Also, create a file named "function.proj" for your trigger and add the below content :
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>netcoreapp3.1</TargetFramework>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Azure.Cosmos" Version="3.23.0" />
+    </ItemGroup>
+</Project>
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>netcoreapp3.1</TargetFramework>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Azure.Cosmos" Version="3.23.0" />
+    </ItemGroup>
+</Project>
+CosmosClientconnects to an Azure Cosmos DB instance. The Azure Cosmos DB documentation recommends that youuse a singleton Azure Cosmos DB client for the lifetime of your application. The following example shows one pattern for doing that in a function:
+const cosmos = require('@azure/cosmos');
+const endpoint = process.env.COSMOS_API_URL;
+const key = process.env.COSMOS_API_KEY;
+const { CosmosClient } = cosmos;
+
+const client = new CosmosClient({ endpoint, key });
+// All function invocations also reference the same database and container.
+const container = client.database("MyDatabaseName").container("MyContainerName");
+
+module.exports = async function (context) {
+    const { resources: itemArray } = await container.items.readAll().fetchAll();
+    context.log(itemArray);
+}
+const cosmos = require('@azure/cosmos');
+const endpoint = process.env.COSMOS_API_URL;
+const key = process.env.COSMOS_API_KEY;
+const { CosmosClient } = cosmos;
+
+const client = new CosmosClient({ endpoint, key });
+// All function invocations also reference the same database and container.
+const container = client.database("MyDatabaseName").container("MyContainerName");
+
+module.exports = async function (context) {
+    const { resources: itemArray } = await container.items.readAll().fetchAll();
+    context.log(itemArray);
+}
+SqlClient connections
+Your function code can use the .NET Framework Data Provider for SQL Server (SqlClient) to make connections to a SQL relational database. This is also the underlying provider for data frameworks that rely on ADO.NET, such asEntity Framework. UnlikeHttpClientandDocumentClientconnections, ADO.NET implements connection pooling by default. But because you can still run out of connections, you should optimize connections to the database. For more information, seeSQL Server Connection Pooling (ADO.NET).
+Tip
+Some data frameworks, such as Entity Framework, typically get connection strings from theConnectionStringssection of a configuration file. In this case, you must explicitly add SQL database connection strings to theConnection stringscollection of your function app settings and in thelocal.settings.json filein your local project. If you're creating an instance ofSqlConnectionin your function code, you should store the connection string value inApplication settingswith your other connections.
+Next steps
+For more information about why we recommend static clients, seeImproper instantiation antipattern.
+For more Azure Functions performance tips, seeOptimize the performance and reliability of Azure Functions.
+Feedback
+Was this page helpful?
+Additional resources

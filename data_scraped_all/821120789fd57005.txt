@@ -1,0 +1,1009 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Quickstart: Create an Azure Firewall with multiple public IP addresses - Terraform
+Article
+2024-02-23
+4 contributors
+In this article
+In this quickstart, you use Terraform to deploy an Azure Firewall with multiple public IP addresses from a public IP address prefix. The deployed firewall has NAT rule collection rules that allow RDP connections to two Windows Server 2019 virtual machines.
+Terraformenables the definition, preview, and deployment of cloud infrastructure. Using Terraform, you create configuration files usingHCL syntax. The HCL syntax allows you to specify the cloud provider - such as Azure - and the elements that make up your cloud infrastructure. After you create your configuration files, you create anexecution planthat allows you to preview your infrastructure changes before they're deployed. Once you verify the changes, you apply the execution plan to deploy the infrastructure.
+For more information about Azure Firewall with multiple public IP addresses, seeDeploy an Azure Firewall with multiple public IP addresses using Azure PowerShell.
+In this article, you learn how to:
+Create a random value (to be used in the resource group name) usingrandom_pet
+Create a random password for the Windows VM usingrandom_password
+Create an Azure resource group usingazurerm_resource_group
+Create an Azure public IP prefix usingazurerm_public_ip_prefix
+Create an Azure public IP usingazurerm_public_ip
+Create an Azure Virtual Network usingazurerm_virtual_network
+Create an Azure subnet usingazurerm_subnet
+Create a network interface usingazurerm_network_interface
+Create a network security group (to contain a list of network security rules) usingazurerm_network_security_group
+Create an association between a Network Interface and a Network Security Group usingazurerm_network_interface_security_group_association
+Create an Windows Virtual Machine usingazurerm_windows_virtual_machine
+Create an Azure Firewall Policy usingazurerm_firewall_policy
+Create an Azure Firewall Policy Rule Collection Group usingazurerm_firewall_policy_rule_collection_group
+Create an Azure Firewall usingazurerm_firewall
+Create a route table usingazurerm_route_table
+Create an association between the route table and the subnet using -azurerm_subnet_route_table_association
+Prerequisites
+Install and configure Terraform
+Implement the Terraform code
+Note
+The sample code for this article is located in theAzure Terraform GitHub repo. You can view the log file containing thetest results from current and previous versions of Terraform.
+See morearticles and sample code showing how to use Terraform to manage Azure resources
+Create a directory in which to test the sample Terraform code and make it the current directory.
+Create a directory in which to test the sample Terraform code and make it the current directory.
+Create a file namedproviders.tfand insert the following code:terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~>3.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~>3.0"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {
+    virtual_machine {
+      delete_os_disk_on_deletion     = true
+      skip_shutdown_and_force_delete = true
+    }
+  }
+}
+Create a file namedproviders.tfand insert the following code:
+providers.tf
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~>3.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~>3.0"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {
+    virtual_machine {
+      delete_os_disk_on_deletion     = true
+      skip_shutdown_and_force_delete = true
+    }
+  }
+}
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~>3.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~>3.0"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {
+    virtual_machine {
+      delete_os_disk_on_deletion     = true
+      skip_shutdown_and_force_delete = true
+    }
+  }
+}
+Create a file namedmain.tfand insert the following code:resource "random_pet" "rg_name" {
+  prefix = var.resource_group_name_prefix
+}
+
+resource "random_password" "password" {
+  count       = 2
+  length      = 20
+  min_lower   = 1
+  min_upper   = 1
+  min_numeric = 1
+  min_special = 1
+  special     = true
+}
+
+resource "azurerm_resource_group" "rg" {
+  name     = random_pet.rg_name.id
+  location = var.resource_group_location
+}
+
+resource "azurerm_public_ip_prefix" "pip_prefix" {
+  name                = "pip-prefix"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+  prefix_length       = 31
+}
+
+resource "azurerm_public_ip" "pip_azfw" {
+  name                = "pip-azfw"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+  allocation_method   = "Static"
+  public_ip_prefix_id = azurerm_public_ip_prefix.pip_prefix.id
+}
+
+resource "azurerm_public_ip" "pip_azfw_2" {
+  name                = "pip-azfw-1"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+  allocation_method   = "Static"
+  public_ip_prefix_id = azurerm_public_ip_prefix.pip_prefix.id
+}
+
+resource "azurerm_virtual_network" "azfw_vnet" {
+  name                = "azfw-vnet"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  address_space       = ["10.10.0.0/16"]
+}
+
+resource "azurerm_subnet" "azfw_subnet" {
+  name                 = "AzureFirewallSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.azfw_vnet.name
+  address_prefixes     = ["10.10.0.0/26"]
+}
+
+resource "azurerm_subnet" "backend_subnet" {
+  name                 = "subnet-backend"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.azfw_vnet.name
+  address_prefixes     = ["10.10.1.0/24"]
+}
+
+resource "azurerm_network_interface" "backend_nic" {
+  count               = 2
+  name                = "nic-backend-${count.index + 1}"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "ipconfig-backend-${count.index + 1}"
+    subnet_id                     = azurerm_subnet.backend_subnet.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_network_security_group" "backend_nsg" {
+  name                = "nsg-backend"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  security_rule {
+    name                       = "RDP"
+    priority                   = 300
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "3389"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_network_interface_security_group_association" "vm_backend_nsg_association" {
+  count                     = 2
+  network_interface_id      = azurerm_network_interface.backend_nic[count.index].id
+  network_security_group_id = azurerm_network_security_group.backend_nsg.id
+}
+
+resource "azurerm_windows_virtual_machine" "vm_backend" {
+  count                 = 2
+  name                  = "vm-backend-${count.index + 1}"
+  resource_group_name   = azurerm_resource_group.rg.name
+  location              = azurerm_resource_group.rg.location
+  size                  = var.virtual_machine_size
+  admin_username        = var.admin_username
+  admin_password        = random_password.password[count.index].result
+  network_interface_ids = [azurerm_network_interface.backend_nic[count.index].id]
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2019-Datacenter"
+    version   = "latest"
+  }
+}
+
+resource "azurerm_firewall_policy" "azfw_policy" {
+  name                     = "azfw-policy"
+  resource_group_name      = azurerm_resource_group.rg.name
+  location                 = azurerm_resource_group.rg.location
+  sku                      = var.firewall_sku_tier
+  threat_intelligence_mode = "Alert"
+}
+
+resource "azurerm_firewall_policy_rule_collection_group" "policy_rule_collection_group" {
+  name               = "RuleCollectionGroup"
+  firewall_policy_id = azurerm_firewall_policy.azfw_policy.id
+  priority           = 300
+  application_rule_collection {
+    name     = "web"
+    priority = 100
+    action   = "Allow"
+    rule {
+      name = "wan-address"
+      protocols {
+        type = "Http"
+        port = 80
+      }
+      protocols {
+        type = "Https"
+        port = 443
+      }
+      destination_fqdns = ["getmywanip.com"]
+      source_addresses  = ["*"]
+    }
+    rule {
+      name = "google"
+      protocols {
+        type = "Http"
+        port = 80
+      }
+      protocols {
+        type = "Https"
+        port = 443
+      }
+      destination_fqdns = ["www.google.com"]
+      source_addresses  = ["10.10.1.0/24"]
+    }
+    rule {
+      name = "wupdate"
+      protocols {
+        type = "Http"
+        port = 80
+      }
+      protocols {
+        type = "Https"
+        port = 443
+      }
+      destination_fqdn_tags = ["WindowsUpdate"]
+      source_addresses      = ["*"]
+    }
+  }
+  nat_rule_collection {
+    name     = "Coll-01"
+    action   = "Dnat"
+    priority = 200
+    rule {
+      name                = "rdp-01"
+      protocols           = ["TCP"]
+      translated_address  = "10.10.1.4"
+      translated_port     = "3389"
+      source_addresses    = ["*"]
+      destination_address = azurerm_public_ip.pip_azfw.ip_address
+      destination_ports   = ["3389"]
+    }
+    rule {
+      name                = "rdp-02"
+      protocols           = ["TCP"]
+      translated_address  = "10.10.1.5"
+      translated_port     = "3389"
+      source_addresses    = ["*"]
+      destination_address = azurerm_public_ip.pip_azfw.ip_address
+      destination_ports   = ["3389"]
+    }
+  }
+}
+
+resource "azurerm_firewall" "fw" {
+  name                = "azfw"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku_name            = "AZFW_VNet"
+  sku_tier            = var.firewall_sku_tier
+  ip_configuration {
+    name                 = "azfw-ipconfig"
+    subnet_id            = azurerm_subnet.azfw_subnet.id
+    public_ip_address_id = azurerm_public_ip.pip_azfw.id
+  }
+  ip_configuration {
+    name                 = "azfw-ipconfig-2"
+    public_ip_address_id = azurerm_public_ip.pip_azfw_2.id
+  }
+  firewall_policy_id = azurerm_firewall_policy.azfw_policy.id
+}
+
+resource "azurerm_route_table" "rt" {
+  name                          = "rt-azfw-eus"
+  location                      = azurerm_resource_group.rg.location
+  resource_group_name           = azurerm_resource_group.rg.name
+  disable_bgp_route_propagation = false
+  route {
+    name                   = "azfw"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = "10.10.0.4"
+  }
+}
+
+resource "azurerm_subnet_route_table_association" "jump_subnet_rt_association" {
+  subnet_id      = azurerm_subnet.backend_subnet.id
+  route_table_id = azurerm_route_table.rt.id
+}
+Create a file namedmain.tfand insert the following code:
+main.tf
+resource "random_pet" "rg_name" {
+  prefix = var.resource_group_name_prefix
+}
+
+resource "random_password" "password" {
+  count       = 2
+  length      = 20
+  min_lower   = 1
+  min_upper   = 1
+  min_numeric = 1
+  min_special = 1
+  special     = true
+}
+
+resource "azurerm_resource_group" "rg" {
+  name     = random_pet.rg_name.id
+  location = var.resource_group_location
+}
+
+resource "azurerm_public_ip_prefix" "pip_prefix" {
+  name                = "pip-prefix"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+  prefix_length       = 31
+}
+
+resource "azurerm_public_ip" "pip_azfw" {
+  name                = "pip-azfw"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+  allocation_method   = "Static"
+  public_ip_prefix_id = azurerm_public_ip_prefix.pip_prefix.id
+}
+
+resource "azurerm_public_ip" "pip_azfw_2" {
+  name                = "pip-azfw-1"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+  allocation_method   = "Static"
+  public_ip_prefix_id = azurerm_public_ip_prefix.pip_prefix.id
+}
+
+resource "azurerm_virtual_network" "azfw_vnet" {
+  name                = "azfw-vnet"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  address_space       = ["10.10.0.0/16"]
+}
+
+resource "azurerm_subnet" "azfw_subnet" {
+  name                 = "AzureFirewallSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.azfw_vnet.name
+  address_prefixes     = ["10.10.0.0/26"]
+}
+
+resource "azurerm_subnet" "backend_subnet" {
+  name                 = "subnet-backend"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.azfw_vnet.name
+  address_prefixes     = ["10.10.1.0/24"]
+}
+
+resource "azurerm_network_interface" "backend_nic" {
+  count               = 2
+  name                = "nic-backend-${count.index + 1}"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "ipconfig-backend-${count.index + 1}"
+    subnet_id                     = azurerm_subnet.backend_subnet.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_network_security_group" "backend_nsg" {
+  name                = "nsg-backend"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  security_rule {
+    name                       = "RDP"
+    priority                   = 300
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "3389"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_network_interface_security_group_association" "vm_backend_nsg_association" {
+  count                     = 2
+  network_interface_id      = azurerm_network_interface.backend_nic[count.index].id
+  network_security_group_id = azurerm_network_security_group.backend_nsg.id
+}
+
+resource "azurerm_windows_virtual_machine" "vm_backend" {
+  count                 = 2
+  name                  = "vm-backend-${count.index + 1}"
+  resource_group_name   = azurerm_resource_group.rg.name
+  location              = azurerm_resource_group.rg.location
+  size                  = var.virtual_machine_size
+  admin_username        = var.admin_username
+  admin_password        = random_password.password[count.index].result
+  network_interface_ids = [azurerm_network_interface.backend_nic[count.index].id]
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2019-Datacenter"
+    version   = "latest"
+  }
+}
+
+resource "azurerm_firewall_policy" "azfw_policy" {
+  name                     = "azfw-policy"
+  resource_group_name      = azurerm_resource_group.rg.name
+  location                 = azurerm_resource_group.rg.location
+  sku                      = var.firewall_sku_tier
+  threat_intelligence_mode = "Alert"
+}
+
+resource "azurerm_firewall_policy_rule_collection_group" "policy_rule_collection_group" {
+  name               = "RuleCollectionGroup"
+  firewall_policy_id = azurerm_firewall_policy.azfw_policy.id
+  priority           = 300
+  application_rule_collection {
+    name     = "web"
+    priority = 100
+    action   = "Allow"
+    rule {
+      name = "wan-address"
+      protocols {
+        type = "Http"
+        port = 80
+      }
+      protocols {
+        type = "Https"
+        port = 443
+      }
+      destination_fqdns = ["getmywanip.com"]
+      source_addresses  = ["*"]
+    }
+    rule {
+      name = "google"
+      protocols {
+        type = "Http"
+        port = 80
+      }
+      protocols {
+        type = "Https"
+        port = 443
+      }
+      destination_fqdns = ["www.google.com"]
+      source_addresses  = ["10.10.1.0/24"]
+    }
+    rule {
+      name = "wupdate"
+      protocols {
+        type = "Http"
+        port = 80
+      }
+      protocols {
+        type = "Https"
+        port = 443
+      }
+      destination_fqdn_tags = ["WindowsUpdate"]
+      source_addresses      = ["*"]
+    }
+  }
+  nat_rule_collection {
+    name     = "Coll-01"
+    action   = "Dnat"
+    priority = 200
+    rule {
+      name                = "rdp-01"
+      protocols           = ["TCP"]
+      translated_address  = "10.10.1.4"
+      translated_port     = "3389"
+      source_addresses    = ["*"]
+      destination_address = azurerm_public_ip.pip_azfw.ip_address
+      destination_ports   = ["3389"]
+    }
+    rule {
+      name                = "rdp-02"
+      protocols           = ["TCP"]
+      translated_address  = "10.10.1.5"
+      translated_port     = "3389"
+      source_addresses    = ["*"]
+      destination_address = azurerm_public_ip.pip_azfw.ip_address
+      destination_ports   = ["3389"]
+    }
+  }
+}
+
+resource "azurerm_firewall" "fw" {
+  name                = "azfw"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku_name            = "AZFW_VNet"
+  sku_tier            = var.firewall_sku_tier
+  ip_configuration {
+    name                 = "azfw-ipconfig"
+    subnet_id            = azurerm_subnet.azfw_subnet.id
+    public_ip_address_id = azurerm_public_ip.pip_azfw.id
+  }
+  ip_configuration {
+    name                 = "azfw-ipconfig-2"
+    public_ip_address_id = azurerm_public_ip.pip_azfw_2.id
+  }
+  firewall_policy_id = azurerm_firewall_policy.azfw_policy.id
+}
+
+resource "azurerm_route_table" "rt" {
+  name                          = "rt-azfw-eus"
+  location                      = azurerm_resource_group.rg.location
+  resource_group_name           = azurerm_resource_group.rg.name
+  disable_bgp_route_propagation = false
+  route {
+    name                   = "azfw"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = "10.10.0.4"
+  }
+}
+
+resource "azurerm_subnet_route_table_association" "jump_subnet_rt_association" {
+  subnet_id      = azurerm_subnet.backend_subnet.id
+  route_table_id = azurerm_route_table.rt.id
+}
+resource "random_pet" "rg_name" {
+  prefix = var.resource_group_name_prefix
+}
+
+resource "random_password" "password" {
+  count       = 2
+  length      = 20
+  min_lower   = 1
+  min_upper   = 1
+  min_numeric = 1
+  min_special = 1
+  special     = true
+}
+
+resource "azurerm_resource_group" "rg" {
+  name     = random_pet.rg_name.id
+  location = var.resource_group_location
+}
+
+resource "azurerm_public_ip_prefix" "pip_prefix" {
+  name                = "pip-prefix"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+  prefix_length       = 31
+}
+
+resource "azurerm_public_ip" "pip_azfw" {
+  name                = "pip-azfw"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+  allocation_method   = "Static"
+  public_ip_prefix_id = azurerm_public_ip_prefix.pip_prefix.id
+}
+
+resource "azurerm_public_ip" "pip_azfw_2" {
+  name                = "pip-azfw-1"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+  allocation_method   = "Static"
+  public_ip_prefix_id = azurerm_public_ip_prefix.pip_prefix.id
+}
+
+resource "azurerm_virtual_network" "azfw_vnet" {
+  name                = "azfw-vnet"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  address_space       = ["10.10.0.0/16"]
+}
+
+resource "azurerm_subnet" "azfw_subnet" {
+  name                 = "AzureFirewallSubnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.azfw_vnet.name
+  address_prefixes     = ["10.10.0.0/26"]
+}
+
+resource "azurerm_subnet" "backend_subnet" {
+  name                 = "subnet-backend"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.azfw_vnet.name
+  address_prefixes     = ["10.10.1.0/24"]
+}
+
+resource "azurerm_network_interface" "backend_nic" {
+  count               = 2
+  name                = "nic-backend-${count.index + 1}"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "ipconfig-backend-${count.index + 1}"
+    subnet_id                     = azurerm_subnet.backend_subnet.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_network_security_group" "backend_nsg" {
+  name                = "nsg-backend"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  security_rule {
+    name                       = "RDP"
+    priority                   = 300
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "3389"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_network_interface_security_group_association" "vm_backend_nsg_association" {
+  count                     = 2
+  network_interface_id      = azurerm_network_interface.backend_nic[count.index].id
+  network_security_group_id = azurerm_network_security_group.backend_nsg.id
+}
+
+resource "azurerm_windows_virtual_machine" "vm_backend" {
+  count                 = 2
+  name                  = "vm-backend-${count.index + 1}"
+  resource_group_name   = azurerm_resource_group.rg.name
+  location              = azurerm_resource_group.rg.location
+  size                  = var.virtual_machine_size
+  admin_username        = var.admin_username
+  admin_password        = random_password.password[count.index].result
+  network_interface_ids = [azurerm_network_interface.backend_nic[count.index].id]
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2019-Datacenter"
+    version   = "latest"
+  }
+}
+
+resource "azurerm_firewall_policy" "azfw_policy" {
+  name                     = "azfw-policy"
+  resource_group_name      = azurerm_resource_group.rg.name
+  location                 = azurerm_resource_group.rg.location
+  sku                      = var.firewall_sku_tier
+  threat_intelligence_mode = "Alert"
+}
+
+resource "azurerm_firewall_policy_rule_collection_group" "policy_rule_collection_group" {
+  name               = "RuleCollectionGroup"
+  firewall_policy_id = azurerm_firewall_policy.azfw_policy.id
+  priority           = 300
+  application_rule_collection {
+    name     = "web"
+    priority = 100
+    action   = "Allow"
+    rule {
+      name = "wan-address"
+      protocols {
+        type = "Http"
+        port = 80
+      }
+      protocols {
+        type = "Https"
+        port = 443
+      }
+      destination_fqdns = ["getmywanip.com"]
+      source_addresses  = ["*"]
+    }
+    rule {
+      name = "google"
+      protocols {
+        type = "Http"
+        port = 80
+      }
+      protocols {
+        type = "Https"
+        port = 443
+      }
+      destination_fqdns = ["www.google.com"]
+      source_addresses  = ["10.10.1.0/24"]
+    }
+    rule {
+      name = "wupdate"
+      protocols {
+        type = "Http"
+        port = 80
+      }
+      protocols {
+        type = "Https"
+        port = 443
+      }
+      destination_fqdn_tags = ["WindowsUpdate"]
+      source_addresses      = ["*"]
+    }
+  }
+  nat_rule_collection {
+    name     = "Coll-01"
+    action   = "Dnat"
+    priority = 200
+    rule {
+      name                = "rdp-01"
+      protocols           = ["TCP"]
+      translated_address  = "10.10.1.4"
+      translated_port     = "3389"
+      source_addresses    = ["*"]
+      destination_address = azurerm_public_ip.pip_azfw.ip_address
+      destination_ports   = ["3389"]
+    }
+    rule {
+      name                = "rdp-02"
+      protocols           = ["TCP"]
+      translated_address  = "10.10.1.5"
+      translated_port     = "3389"
+      source_addresses    = ["*"]
+      destination_address = azurerm_public_ip.pip_azfw.ip_address
+      destination_ports   = ["3389"]
+    }
+  }
+}
+
+resource "azurerm_firewall" "fw" {
+  name                = "azfw"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  sku_name            = "AZFW_VNet"
+  sku_tier            = var.firewall_sku_tier
+  ip_configuration {
+    name                 = "azfw-ipconfig"
+    subnet_id            = azurerm_subnet.azfw_subnet.id
+    public_ip_address_id = azurerm_public_ip.pip_azfw.id
+  }
+  ip_configuration {
+    name                 = "azfw-ipconfig-2"
+    public_ip_address_id = azurerm_public_ip.pip_azfw_2.id
+  }
+  firewall_policy_id = azurerm_firewall_policy.azfw_policy.id
+}
+
+resource "azurerm_route_table" "rt" {
+  name                          = "rt-azfw-eus"
+  location                      = azurerm_resource_group.rg.location
+  resource_group_name           = azurerm_resource_group.rg.name
+  disable_bgp_route_propagation = false
+  route {
+    name                   = "azfw"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = "10.10.0.4"
+  }
+}
+
+resource "azurerm_subnet_route_table_association" "jump_subnet_rt_association" {
+  subnet_id      = azurerm_subnet.backend_subnet.id
+  route_table_id = azurerm_route_table.rt.id
+}
+Create a file namedvariables.tfand insert the following code:variable "resource_group_location" {
+  type        = string
+  description = "Location for all resources."
+  default     = "eastus"
+}
+
+variable "resource_group_name_prefix" {
+  type        = string
+  description = "Prefix for the Resource Group Name that's combined with a random id so name is unique in your Azure subcription."
+  default     = "rg"
+}
+
+variable "firewall_sku_tier" {
+  type        = string
+  description = "Firewall SKU."
+  default     = "Premium" # Valid values are Standard and Premium
+  validation {
+    condition     = contains(["Standard", "Premium"], var.firewall_sku_tier)
+    error_message = "The SKU must be one of the following: Standard, Premium"
+  }
+}
+
+variable "virtual_machine_size" {
+  type        = string
+  description = "Size of the virtual machine."
+  default     = "Standard_D2_v3"
+}
+
+variable "admin_username" {
+  type        = string
+  description = "Value of the admin username."
+  default     = "azureuser"
+}
+Create a file namedvariables.tfand insert the following code:
+variables.tf
+variable "resource_group_location" {
+  type        = string
+  description = "Location for all resources."
+  default     = "eastus"
+}
+
+variable "resource_group_name_prefix" {
+  type        = string
+  description = "Prefix for the Resource Group Name that's combined with a random id so name is unique in your Azure subcription."
+  default     = "rg"
+}
+
+variable "firewall_sku_tier" {
+  type        = string
+  description = "Firewall SKU."
+  default     = "Premium" # Valid values are Standard and Premium
+  validation {
+    condition     = contains(["Standard", "Premium"], var.firewall_sku_tier)
+    error_message = "The SKU must be one of the following: Standard, Premium"
+  }
+}
+
+variable "virtual_machine_size" {
+  type        = string
+  description = "Size of the virtual machine."
+  default     = "Standard_D2_v3"
+}
+
+variable "admin_username" {
+  type        = string
+  description = "Value of the admin username."
+  default     = "azureuser"
+}
+variable "resource_group_location" {
+  type        = string
+  description = "Location for all resources."
+  default     = "eastus"
+}
+
+variable "resource_group_name_prefix" {
+  type        = string
+  description = "Prefix for the Resource Group Name that's combined with a random id so name is unique in your Azure subcription."
+  default     = "rg"
+}
+
+variable "firewall_sku_tier" {
+  type        = string
+  description = "Firewall SKU."
+  default     = "Premium" # Valid values are Standard and Premium
+  validation {
+    condition     = contains(["Standard", "Premium"], var.firewall_sku_tier)
+    error_message = "The SKU must be one of the following: Standard, Premium"
+  }
+}
+
+variable "virtual_machine_size" {
+  type        = string
+  description = "Size of the virtual machine."
+  default     = "Standard_D2_v3"
+}
+
+variable "admin_username" {
+  type        = string
+  description = "Value of the admin username."
+  default     = "azureuser"
+}
+Create a file namedoutputs.tfand insert the following code:output "resource_group_name" {
+  value = azurerm_resource_group.rg.name
+}
+output "backend_admin_password" {
+  sensitive = true
+  value     = azurerm_windows_virtual_machine.vm_backend[*].admin_password
+}
+Create a file namedoutputs.tfand insert the following code:
+outputs.tf
+output "resource_group_name" {
+  value = azurerm_resource_group.rg.name
+}
+output "backend_admin_password" {
+  sensitive = true
+  value     = azurerm_windows_virtual_machine.vm_backend[*].admin_password
+}
+output "resource_group_name" {
+  value = azurerm_resource_group.rg.name
+}
+output "backend_admin_password" {
+  sensitive = true
+  value     = azurerm_windows_virtual_machine.vm_backend[*].admin_password
+}
+Initialize Terraform
+Runterraform initto initialize the Terraform deployment. This command downloads the Azure provider required to manage your Azure resources.
+terraform init -upgrade
+terraform init -upgrade
+Key points:
+The-upgradeparameter upgrades the necessary provider plugins to the newest version that complies with the configuration's version constraints.
+-upgrade
+Create a Terraform execution plan
+Runterraform planto create an execution plan.
+terraform plan -out main.tfplan
+terraform plan -out main.tfplan
+Key points:
+Theterraform plancommand creates an execution plan, but doesn't execute it. Instead, it determines what actions are necessary to create the configuration specified in your configuration files. This pattern allows you to verify whether the execution plan matches your expectations before making any changes to actual resources.
+terraform plan
+The optional-outparameter allows you to specify an output file for the plan. Using the-outparameter ensures that the plan you reviewed is exactly what is applied.
+-out
+-out
+Apply a Terraform execution plan
+Runterraform applyto apply the execution plan to your cloud infrastructure.
+terraform apply main.tfplan
+terraform apply main.tfplan
+Key points:
+The exampleterraform applycommand assumes you previously ranterraform plan -out main.tfplan.
+terraform apply
+terraform plan -out main.tfplan
+If you specified a different filename for the-outparameter, use that same filename in the call toterraform apply.
+-out
+terraform apply
+If you didn't use the-outparameter, callterraform applywithout any parameters.
+-out
+terraform apply
+Verify the results
+Azure CLI
+Get the Azure resource group name.resource_group_name=$(terraform output -raw resource_group_name)
+Get the Azure resource group name.
+resource_group_name=$(terraform output -raw resource_group_name)
+resource_group_name=$(terraform output -raw resource_group_name)
+Runaz network ip-group listto display the two new IP Groups.az network ip-group list --resource-group $resource_group_name
+Runaz network ip-group listto display the two new IP Groups.
+az network ip-group list --resource-group $resource_group_name
+az network ip-group list --resource-group $resource_group_name
+Clean up resources
+When you no longer need the resources created via Terraform, do the following steps:
+Runterraform planand specify thedestroyflag.terraform plan -destroy -out main.destroy.tfplanKey points:Theterraform plancommand creates an execution plan, but doesn't execute it. Instead, it determines what actions are necessary to create the configuration specified in your configuration files. This pattern allows you to verify whether the execution plan matches your expectations before making any changes to actual resources.The optional-outparameter allows you to specify an output file for the plan. Using the-outparameter ensures that the plan you reviewed is exactly what is applied.
+Runterraform planand specify thedestroyflag.
+destroy
+terraform plan -destroy -out main.destroy.tfplan
+terraform plan -destroy -out main.destroy.tfplan
+Key points:
+Theterraform plancommand creates an execution plan, but doesn't execute it. Instead, it determines what actions are necessary to create the configuration specified in your configuration files. This pattern allows you to verify whether the execution plan matches your expectations before making any changes to actual resources.
+terraform plan
+The optional-outparameter allows you to specify an output file for the plan. Using the-outparameter ensures that the plan you reviewed is exactly what is applied.
+-out
+-out
+Runterraform applyto apply the execution plan.terraform apply main.destroy.tfplan
+Runterraform applyto apply the execution plan.
+terraform apply main.destroy.tfplan
+terraform apply main.destroy.tfplan
+Troubleshoot Terraform on Azure
+Troubleshoot common problems when using Terraform on Azure
+Next steps
+Tutorial: Deploy and configure Azure Firewall in a hybrid network using the Azure portal
+Feedback
+Was this page helpful?
+Additional resources

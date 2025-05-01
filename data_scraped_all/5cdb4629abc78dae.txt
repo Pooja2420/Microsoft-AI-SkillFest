@@ -1,0 +1,475 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Security container access to resources using built-in Linux security features
+Article
+2024-11-10
+2 contributors
+In this article
+In this article, you learn how to secure container access to resources for your Azure Kubernetes Service (AKS) workloads.
+Overview
+In the same way that you should grant users or groups the minimum privileges required, you should also limit containers to only necessary actions and processes. To minimize the risk of attack, avoid configuring applications and containers that require escalated privileges or root access.
+You can use built-in Kubernetespod security contextsto define more permissions, such as the user or group to run as, the Linux capabilities to expose, or settingallowPrivilegeEscalation: falsein the pod manifest. For more best practices, seeSecure pod access to resources.
+allowPrivilegeEscalation: false
+For even more granular control of container actions, you can use built-in Linux security features such asAppArmorandseccomp.
+Define Linux security features at the node level.
+Implement features through a pod manifest.
+Built-in Linux security features are only available on Linux nodes and pods.
+Note
+Currently, Kubernetes environments aren't completely safe for hostile multitenant usage. Additional security features, likeMicrosoft Defender for Containers,AppArmor,seccomp,Pod Security Admission, orKubernetes RBAC for nodes, efficiently block exploits.
+For true security when running hostile multitenant workloads, only trust a hypervisor. The security domain for Kubernetes becomes the entire cluster, not an individual node.
+For these types of hostile multitenant workloads, you should use physically isolated clusters.
+App Armor
+To limit container actions, you can use theAppArmorLinux kernel security module. AppArmor is available as part of the underlying AKS node OS and is enabled by default. You create AppArmor profiles that restrict read, write, or execute actions, or system functions like mounting filesystems. Default AppArmor profiles restrict access to various/procand/syslocations and provide a means to logically isolate containers from the underlying node. AppArmor works for any application that runs on Linux, not just Kubernetes pods.
+/proc
+/sys
+
+To see AppArmor in action, the following example creates a profile that prevents writing to files.
+SSHto an AKS node.
+SSHto an AKS node.
+Create a file nameddeny-write.profile.
+Create a file nameddeny-write.profile.
+Copy and paste the following content:#include <tunables/global>
+profile k8s-apparmor-example-deny-write flags=(attach_disconnected) {
+  #include <abstractions/base>
+
+  file,
+  # Deny all file writes.
+  deny /** w,
+}
+Copy and paste the following content:
+#include <tunables/global>
+profile k8s-apparmor-example-deny-write flags=(attach_disconnected) {
+  #include <abstractions/base>
+
+  file,
+  # Deny all file writes.
+  deny /** w,
+}
+#include <tunables/global>
+profile k8s-apparmor-example-deny-write flags=(attach_disconnected) {
+  #include <abstractions/base>
+
+  file,
+  # Deny all file writes.
+  deny /** w,
+}
+AppArmor profiles are added using theapparmor_parsercommand.
+apparmor_parser
+Add the profile to AppArmor.
+Add the profile to AppArmor.
+Specify the name of the profile created in the previous step:sudo apparmor_parser deny-write.profileIf the profile is correctly parsed and applied to AppArmor, you won't see any output and you'll return to the command prompt.
+Specify the name of the profile created in the previous step:
+sudo apparmor_parser deny-write.profile
+sudo apparmor_parser deny-write.profile
+If the profile is correctly parsed and applied to AppArmor, you won't see any output and you'll return to the command prompt.
+From your local machine, create a pod manifest namedaks-apparmor.yaml. This manifest:Defines an annotation forcontainer.apparmor.security.beta.kubernetes.References thedeny-writeprofile created in the previous steps.apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-apparmor
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/hello: localhost/k8s-apparmor-example-deny-write
+spec:
+  containers:
+  - name: hello
+    image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+    command: [ "sh", "-c", "echo 'Hello AppArmor!' && sleep 1h" ]
+From your local machine, create a pod manifest namedaks-apparmor.yaml. This manifest:
+Defines an annotation forcontainer.apparmor.security.beta.kubernetes.
+container.apparmor.security.beta.kubernetes
+References thedeny-writeprofile created in the previous steps.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-apparmor
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/hello: localhost/k8s-apparmor-example-deny-write
+spec:
+  containers:
+  - name: hello
+    image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+    command: [ "sh", "-c", "echo 'Hello AppArmor!' && sleep 1h" ]
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-apparmor
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/hello: localhost/k8s-apparmor-example-deny-write
+spec:
+  containers:
+  - name: hello
+    image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+    command: [ "sh", "-c", "echo 'Hello AppArmor!' && sleep 1h" ]
+With the pod deployed, run the following command and verify thehello-apparmorpod shows aRunningstatus:kubectl get pods
+
+NAME             READY   STATUS    RESTARTS   AGE
+aks-ssh          1/1     Running   0          4m2s
+hello-apparmor   0/1     Running   0          50s
+With the pod deployed, run the following command and verify thehello-apparmorpod shows aRunningstatus:
+kubectl get pods
+
+NAME             READY   STATUS    RESTARTS   AGE
+aks-ssh          1/1     Running   0          4m2s
+hello-apparmor   0/1     Running   0          50s
+kubectl get pods
+
+NAME             READY   STATUS    RESTARTS   AGE
+aks-ssh          1/1     Running   0          4m2s
+hello-apparmor   0/1     Running   0          50s
+For more information about AppArmor, seeAppArmor profiles in Kubernetes.
+Secure computing (seccomp)
+While AppArmor works for any Linux application,seccomp (securecomputing)works at the process level. Seccomp is also a Linux kernel security module and is natively supported by thecontainerdruntime used by AKS nodes. With seccomp, you can limit a container's system calls. Seccomp establishes an extra layer of protection against common system call vulnerabilities exploited by malicious actors and allows you to specify a default profile for all workloads in the node.
+containerd
+Configure a default seccomp profile (preview)
+You can apply default seccomp profiles usingcustom node configurationswhen creating a new Linux node pool. There are two values supported on AKS:RuntimeDefaultandUnconfined. Some workloads might require a lower number of syscall restrictions than others. This means that they can fail during runtime with the 'RuntimeDefault' profile. To mitigate such a failure, you can specify theUnconfinedprofile. If your workload requires a custom profile, seeConfigure a custom seccomp profile.
+RuntimeDefault
+Unconfined
+Unconfined
+SeccompDefault is not a supported parameter for windows node pools.
+SeccompDefault is available starting in 2024-09-02-preview API.
+Important
+AKS preview features are available on a self-service, opt-in basis. Previews are provided "as is" and "as available," and they're excluded from the service-level agreements and limited warranty. AKS previews are partially covered by customer support on a best-effort basis. As such, these features aren't meant for production use. For more information, see the following support articles:
+AKS support policies
+Azure support FAQ
+KubeletDefaultSeccompProfilePreview
+Register theKubeletDefaultSeccompProfilePreviewfeature flag using theaz feature registercommand.az feature register --namespace "Microsoft.ContainerService" --name "KubeletDefaultSeccompProfilePreview"It takes a few minutes for the status to showRegistered.
+Register theKubeletDefaultSeccompProfilePreviewfeature flag using theaz feature registercommand.
+KubeletDefaultSeccompProfilePreview
+az feature register
+az feature register --namespace "Microsoft.ContainerService" --name "KubeletDefaultSeccompProfilePreview"
+az feature register --namespace "Microsoft.ContainerService" --name "KubeletDefaultSeccompProfilePreview"
+It takes a few minutes for the status to showRegistered.
+Verify the registration status using theaz feature showcommand.az feature show --namespace "Microsoft.ContainerService" --name "KubeletDefaultSeccompProfilePreview"
+Verify the registration status using theaz feature showcommand.
+az feature show
+az feature show --namespace "Microsoft.ContainerService" --name "KubeletDefaultSeccompProfilePreview"
+az feature show --namespace "Microsoft.ContainerService" --name "KubeletDefaultSeccompProfilePreview"
+When the status reflectsRegistered, refresh the registration of theMicrosoft.ContainerServiceresource provider using theaz provider registercommand.az provider register --namespace Microsoft.ContainerService
+When the status reflectsRegistered, refresh the registration of theMicrosoft.ContainerServiceresource provider using theaz provider registercommand.
+az provider register
+az provider register --namespace Microsoft.ContainerService
+az provider register --namespace Microsoft.ContainerService
+1.Follow steps to apply a seccomp profile in your kubelet configurationby specifying"seccompDefault": "RuntimeDefault".
+"seccompDefault": "RuntimeDefault"
+RuntimeDefaultuses containerd's default seccomp profile, restricting certain system calls to enhance security. Restricted syscalls will fail. For more information, see thecontainerD default seccomp profile.
+RuntimeDefault
+2. Check that the configuration was applied.
+You can confirm the settings are applied to the nodes byconnecting to the hostand verifying configuration changes have been made on the filesystem.
+3. Troubleshoot workload failures.
+When SeccompDefault is enabled, the container runtime default seccomp profile is used by default for all workloads scheduled on the node. This might cause workloads to fail due to blocked syscalls. If a workload failure has occurred, you might see errors such as:
+Workload is existing unexpectedly after the feature is enabled, with "permission denied" error.
+Seccomp error messages can also be seen in auditd or syslog by replacing SCMP_ACT_ERRNO with SCMP_ACT_LOG in the default profile.
+If you experience the above errors, we recommend that you change your seccomp profile toUnconfined.Unconfinedplaces no restrictions on syscalls, allowing all system calls, which reduces security.
+Unconfined
+Unconfined
+Configure a custom seccomp profile
+With a custom seccomp profile, you can have more granular control over restricted syscalls. Align to the best practice of granting the container minimal permission only to run by:
+Defining with filters what actions to allow or deny.
+Annotating within a pod YAML manifest to associate with the seccomp filter.
+To see seccomp in action, create a filter that prevents changing permissions on a file.
+SSHto an AKS node.
+SSHto an AKS node.
+Create a seccomp filter named/var/lib/kubelet/seccomp/prevent-chmod.
+Create a seccomp filter named/var/lib/kubelet/seccomp/prevent-chmod.
+Copy and paste the following content:{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": [
+    {
+      "name": "chmod",
+      "action": "SCMP_ACT_ERRNO"
+    },
+    {
+      "name": "fchmodat",
+      "action": "SCMP_ACT_ERRNO"
+    },
+    {
+      "name": "chmodat",
+      "action": "SCMP_ACT_ERRNO"
+    }
+  ]
+}In version 1.19 and later, you need to configure:{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": [
+    {
+      "names": ["chmod","fchmodat","chmodat"],
+      "action": "SCMP_ACT_ERRNO"
+    }
+  ]
+}
+Copy and paste the following content:
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": [
+    {
+      "name": "chmod",
+      "action": "SCMP_ACT_ERRNO"
+    },
+    {
+      "name": "fchmodat",
+      "action": "SCMP_ACT_ERRNO"
+    },
+    {
+      "name": "chmodat",
+      "action": "SCMP_ACT_ERRNO"
+    }
+  ]
+}
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": [
+    {
+      "name": "chmod",
+      "action": "SCMP_ACT_ERRNO"
+    },
+    {
+      "name": "fchmodat",
+      "action": "SCMP_ACT_ERRNO"
+    },
+    {
+      "name": "chmodat",
+      "action": "SCMP_ACT_ERRNO"
+    }
+  ]
+}
+In version 1.19 and later, you need to configure:
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": [
+    {
+      "names": ["chmod","fchmodat","chmodat"],
+      "action": "SCMP_ACT_ERRNO"
+    }
+  ]
+}
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": [
+    {
+      "names": ["chmod","fchmodat","chmodat"],
+      "action": "SCMP_ACT_ERRNO"
+    }
+  ]
+}
+From your local machine, create a pod manifest namedaks-seccomp.yamland paste the following content. This manifest:Defines an annotation forseccomp.security.alpha.kubernetes.io.References theprevent-chmodfilter created in the previous step.apiVersion: v1
+kind: Pod
+metadata:
+  name: chmod-prevented
+  annotations:
+    seccomp.security.alpha.kubernetes.io/pod: localhost/prevent-chmod
+spec:
+  containers:
+  - name: chmod
+    image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+    command:
+      - "chmod"
+    args:
+     - "777"
+     - /etc/hostname
+  restartPolicy: NeverIn version 1.19 and later, you need to configure:apiVersion: v1
+kind: Pod
+metadata:
+  name: chmod-prevented
+spec:
+  securityContext:
+    seccompProfile:
+      type: Localhost
+      localhostProfile: prevent-chmod
+  containers:
+  - name: chmod
+    image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+    command:
+      - "chmod"
+    args:
+     - "777"
+     - /etc/hostname
+  restartPolicy: Never
+From your local machine, create a pod manifest namedaks-seccomp.yamland paste the following content. This manifest:
+Defines an annotation forseccomp.security.alpha.kubernetes.io.
+seccomp.security.alpha.kubernetes.io
+References theprevent-chmodfilter created in the previous step.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: chmod-prevented
+  annotations:
+    seccomp.security.alpha.kubernetes.io/pod: localhost/prevent-chmod
+spec:
+  containers:
+  - name: chmod
+    image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+    command:
+      - "chmod"
+    args:
+     - "777"
+     - /etc/hostname
+  restartPolicy: Never
+apiVersion: v1
+kind: Pod
+metadata:
+  name: chmod-prevented
+  annotations:
+    seccomp.security.alpha.kubernetes.io/pod: localhost/prevent-chmod
+spec:
+  containers:
+  - name: chmod
+    image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+    command:
+      - "chmod"
+    args:
+     - "777"
+     - /etc/hostname
+  restartPolicy: Never
+In version 1.19 and later, you need to configure:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: chmod-prevented
+spec:
+  securityContext:
+    seccompProfile:
+      type: Localhost
+      localhostProfile: prevent-chmod
+  containers:
+  - name: chmod
+    image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+    command:
+      - "chmod"
+    args:
+     - "777"
+     - /etc/hostname
+  restartPolicy: Never
+apiVersion: v1
+kind: Pod
+metadata:
+  name: chmod-prevented
+spec:
+  securityContext:
+    seccompProfile:
+      type: Localhost
+      localhostProfile: prevent-chmod
+  containers:
+  - name: chmod
+    image: mcr.microsoft.com/dotnet/runtime-deps:6.0
+    command:
+      - "chmod"
+    args:
+     - "777"
+     - /etc/hostname
+  restartPolicy: Never
+Deploy the sample pod using thekubectl applycommand:kubectl apply -f ./aks-seccomp.yaml
+Deploy the sample pod using thekubectl applycommand:
+kubectl apply -f ./aks-seccomp.yaml
+kubectl apply -f ./aks-seccomp.yaml
+View pod status using thekubectl get podscommand.The pod reports an error.Thechmodcommand is prevented from running by the seccomp filter, as shown in the example output:kubectl get pods
+
+NAME                      READY     STATUS    RESTARTS   AGE
+chmod-prevented           0/1       Error     0          7s
+View pod status using thekubectl get podscommand.
+The pod reports an error.
+Thechmodcommand is prevented from running by the seccomp filter, as shown in the example output:
+chmod
+kubectl get pods
+
+NAME                      READY     STATUS    RESTARTS   AGE
+chmod-prevented           0/1       Error     0          7s
+kubectl get pods
+
+NAME                      READY     STATUS    RESTARTS   AGE
+chmod-prevented           0/1       Error     0          7s
+Seccomp security profile options
+Seccomp security profiles are a set of defined syscalls that are allowed or restricted. Most container runtimes have a default seccomp profile that is similar if not the same as the one Docker uses. For more information about available profiles, seeDockerorcontainerDdefault seccomp profiles.
+AKS uses thecontainerDdefault seccomp profile for our RuntimeDefault when you configure seccomp usingcustom node configuration.
+Significant syscalls blocked by default profile
+BothDockerandcontainerDmaintain allowlists of safe syscalls. This table lists the significant (but not all) syscalls that are effectively blocked because they aren't on the allowlist. If any of the blocked syscalls are required by your workload, don't use theRuntimeDefaultseccomp profile.
+RuntimeDefault
+When changes are made toDockerandcontainerD, AKS updates their default configuration to match. Updates to this list may cause workload failure. For release updates, seeAKS release notes.
+acct
+CAP_SYS_PACCT
+add_key
+bpf
+CAP_SYS_ADMIN
+clock_adjtime
+CAP_SYS_TIME
+clock_settime
+CAP_SYS_TIME
+clone
+CAP_SYS_ADMIN for CLONE_*
+CLONE_NEWUSER
+create_module
+CAP_SYS_MODULE
+delete_module
+CAP_SYS_MODULE
+finit_module
+CAP_SYS_MODULE
+get_kernel_syms
+get_mempolicy
+CAP_SYS_NICE
+init_module
+CAP_SYS_MODULE
+ioperm
+CAP_SYS_RAWIO
+iopl
+CAP_SYS_RAWIO
+kcmp
+CAP_SYS_PTRACE
+kexec_file_load
+CAP_SYS_BOOT
+kexec_load
+CAP_SYS_BOOT
+keyctl
+lookup_dcookie
+CAP_SYS_ADMIN
+mbind
+CAP_SYS_NICE
+mount
+CAP_SYS_ADMIN
+move_pages
+nfsservctl
+open_by_handle_at
+CAP_DAC_READ_SEARCH
+perf_event_open
+personality
+pivot_root
+process_vm_readv
+CAP_SYS_PTRACE
+process_vm_writev
+CAP_SYS_PTRACE
+ptrace
+query_module
+quotactl
+CAP_SYS_ADMIN
+reboot
+CAP_SYS_BOOT
+request_key
+set_mempolicy
+CAP_SYS_NICE
+setns
+CAP_SYS_ADMIN
+settimeofday
+CAP_SYS_TIME
+stime
+CAP_SYS_TIME
+swapon
+CAP_SYS_ADMIN
+swapoff
+CAP_SYS_ADMIN
+sysfs
+_sysctl
+umount
+CAP_SYS_ADMIN
+umount2
+CAP_SYS_ADMIN
+unshare
+CAP_SYS_ADMIN
+uselib
+userfaultfd
+ustat
+vm86
+CAP_SYS_ADMIN
+vm86old
+CAP_SYS_ADMIN
+Next steps
+For associated best practices, seeBest practices for cluster security and upgrades in AKSandBest practices for pod security in AKS.
+Azure Kubernetes Service
+
+Additional resources

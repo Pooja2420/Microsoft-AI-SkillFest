@@ -1,0 +1,272 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Bulk import data to Azure Cosmos DB for NoSQL account by using the .NET SDK
+Article
+2024-08-14
+2 contributors
+In this article
+APPLIES TO:NoSQL
+This tutorial shows how to build a .NET console application that optimizes provisioned throughput (RU/s) required to import data to Azure Cosmos DB.
+In this article, you'll read data from a sample data source and import it into an Azure Cosmos DB container.
+This tutorial usesVersion 3.0+of the Azure Cosmos DB .NET SDK, which can be targeted to .NET Framework or .NET Core.
+This tutorial covers:
+Creating an Azure Cosmos DB account
+Configuring your project
+Connecting to an Azure Cosmos DB account with bulk support enabled
+Perform a data import through concurrent create operations
+Prerequisites
+Before following the instructions in this article, make sure that you have the following resources:
+An active Azure account. If you don't have an Azure subscription, create afree accountbefore you begin.You cantry Azure Cosmos DB for free, without an Azure subscription, and with no commitment required. Alternatively, you can create anAzure Cosmos DB free tier account, with the first 1000 RU/s and 25 GB of storage for free. You can also use theAzure Cosmos DB emulatorwith a URI ofhttps://localhost:8081. For the key to use with the emulator, seeAuthenticating requests.
+An active Azure account. If you don't have an Azure subscription, create afree accountbefore you begin.
+You cantry Azure Cosmos DB for free, without an Azure subscription, and with no commitment required. Alternatively, you can create anAzure Cosmos DB free tier account, with the first 1000 RU/s and 25 GB of storage for free. You can also use theAzure Cosmos DB emulatorwith a URI ofhttps://localhost:8081. For the key to use with the emulator, seeAuthenticating requests.
+https://localhost:8081
+NET Core 3 SDK. You can verify which version is available in your environment by runningdotnet --version.
+NET Core 3 SDK. You can verify which version is available in your environment by runningdotnet --version.
+dotnet --version
+Step 1: Create an Azure Cosmos DB account
+Create an Azure Cosmos DB for NoSQL accountfrom the Azure portal or you can create the account by using theAzure Cosmos DB Emulator.
+Step 2: Set up your .NET project
+Open the Windows command prompt or a Terminal window from your local computer. You'll run all the commands in the next sections from the command prompt or terminal. Run the following dotnet new command to create a new app with the namebulk-import-demo.
+dotnet new console -n bulk-import-demo
+dotnet new console -n bulk-import-demo
+Change your directory to the newly created app folder. You can build the application with:
+cd bulk-import-demo
+dotnet build
+cd bulk-import-demo
+dotnet build
+The expected output from the build should look something like this:
+Restore completed in 100.37 ms for C:\Users\user1\Downloads\CosmosDB_Samples\bulk-import-demo\bulk-import-demo.csproj.
+  bulk -> C:\Users\user1\Downloads\CosmosDB_Samples\bulk-import-demo \bin\Debug\netcoreapp2.2\bulk-import-demo.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:34.17
+Restore completed in 100.37 ms for C:\Users\user1\Downloads\CosmosDB_Samples\bulk-import-demo\bulk-import-demo.csproj.
+  bulk -> C:\Users\user1\Downloads\CosmosDB_Samples\bulk-import-demo \bin\Debug\netcoreapp2.2\bulk-import-demo.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:34.17
+Step 3: Add the Azure Cosmos DB package
+While still in the application directory, install the Azure Cosmos DB client library for .NET Core by using the dotnet add package command.
+dotnet add package Microsoft.Azure.Cosmos
+dotnet add package Microsoft.Azure.Cosmos
+Step 4: Get your Azure Cosmos DB account credentials
+The sample application needs to authenticate to your Azure Cosmos DB account. To authenticate, you should pass the Azure Cosmos DB account credentials to the application. Get your Azure Cosmos DB account credentials by following these steps:
+Sign in to theAzure portal.
+Navigate to your Azure Cosmos DB account.
+Open theKeyspane and copy theURIandPRIMARY KEYof your account.
+If you're using the Azure Cosmos DB Emulator, obtain theemulator credentials from this article.
+Step 5: Initialize the CosmosClient object with bulk execution support
+Open the generatedProgram.csfile in a code editor. You'll create a new instance of CosmosClient with bulk execution enabled and use it to do operations against Azure Cosmos DB.
+Program.cs
+Let's start by overwriting the defaultMainmethod and defining the global variables. These global variables will include the endpoint and authorization keys, the name of the database, container that you'll create, and the number of items that you'll be inserting in bulk. Make sure to replace the endpointURL and authorization key values according to your environment.
+Main
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Microsoft.Azure.Cosmos;
+
+public class Program
+{
+     private const string EndpointUrl = "https://<your-account>.documents.azure.com:443/";
+     private const string AuthorizationKey = "<your-account-key>";
+     private const string DatabaseName = "bulk-tutorial";
+     private const string ContainerName = "items";
+     private const int AmountToInsert = 300000;
+
+     static async Task Main(string[] args)
+     {
+
+     }
+}
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Microsoft.Azure.Cosmos;
+
+public class Program
+{
+     private const string EndpointUrl = "https://<your-account>.documents.azure.com:443/";
+     private const string AuthorizationKey = "<your-account-key>";
+     private const string DatabaseName = "bulk-tutorial";
+     private const string ContainerName = "items";
+     private const int AmountToInsert = 300000;
+
+     static async Task Main(string[] args)
+     {
+
+     }
+}
+Inside theMainmethod, add the following code to initialize the CosmosClient object:
+Main
+CosmosClient cosmosClient = new CosmosClient(EndpointUrl, AuthorizationKey, new CosmosClientOptions() { AllowBulkExecution = true });
+CosmosClient cosmosClient = new CosmosClient(EndpointUrl, AuthorizationKey, new CosmosClientOptions() { AllowBulkExecution = true });
+Note
+Once bulk execution is specified in theCosmosClientOptions, they are effectively immutable for the lifetime of the CosmosClient. Changing the values will have no effect.
+After the bulk execution is enabled, the CosmosClient internally groups concurrent operations into single service calls. This way it optimizes the throughput utilization by distributing service calls across partitions, and finally assigning individual results to the original callers.
+You can then create a container to store all our items.  Define/pkas the partition key, 50000 RU/s as provisioned throughput, and a custom indexing policy that will exclude all fields to optimize the write throughput. Add the following code after the CosmosClient initialization statement:
+/pk
+Database database = await cosmosClient.CreateDatabaseIfNotExistsAsync(Program.DatabaseName);
+
+await database.DefineContainer(Program.ContainerName, "/pk")
+        .WithIndexingPolicy()
+            .WithIndexingMode(IndexingMode.Consistent)
+            .WithIncludedPaths()
+                .Attach()
+            .WithExcludedPaths()
+                .Path("/*")
+                .Attach()
+        .Attach()
+    .CreateAsync(50000);
+Database database = await cosmosClient.CreateDatabaseIfNotExistsAsync(Program.DatabaseName);
+
+await database.DefineContainer(Program.ContainerName, "/pk")
+        .WithIndexingPolicy()
+            .WithIndexingMode(IndexingMode.Consistent)
+            .WithIncludedPaths()
+                .Attach()
+            .WithExcludedPaths()
+                .Path("/*")
+                .Attach()
+        .Attach()
+    .CreateAsync(50000);
+Step 6: Populate a list of concurrent tasks
+To take advantage of the bulk execution support, create a list of asynchronous tasks based on the source of data and the operations you want to perform, and useTask.WhenAllto execute them concurrently.
+Let's start by using "Bogus" data to generate a list of items from our data model. In a real-world application, the items would come from your desired data source.
+Task.WhenAll
+First, add the Bogus package to the solution by using the dotnet add package command.
+dotnet add package Bogus
+dotnet add package Bogus
+Define the definition of the items that you want to save. You need to define theItemclass within theProgram.csfile:
+Item
+Program.cs
+public class Item
+{
+    public string id {get;set;}
+    public string pk {get;set;}
+
+    public string username{get;set;}
+}
+public class Item
+{
+    public string id {get;set;}
+    public string pk {get;set;}
+
+    public string username{get;set;}
+}
+Next, create a helper function inside theProgramclass. This helper function will get the number of items you defined to insert and generates random data:
+Program
+private static IReadOnlyCollection<Item> GetItemsToInsert()
+{
+    return new Bogus.Faker<Item>()
+    .StrictMode(true)
+    //Generate item
+    .RuleFor(o => o.id, f => Guid.NewGuid().ToString()) //id
+    .RuleFor(o => o.username, f => f.Internet.UserName())
+    .RuleFor(o => o.pk, (f, o) => o.id) //partitionkey
+    .Generate(AmountToInsert);
+}
+private static IReadOnlyCollection<Item> GetItemsToInsert()
+{
+    return new Bogus.Faker<Item>()
+    .StrictMode(true)
+    //Generate item
+    .RuleFor(o => o.id, f => Guid.NewGuid().ToString()) //id
+    .RuleFor(o => o.username, f => f.Internet.UserName())
+    .RuleFor(o => o.pk, (f, o) => o.id) //partitionkey
+    .Generate(AmountToInsert);
+}
+Use the helper function to initialize a list of documents to work with:
+IReadOnlyCollection<Item> itemsToInsert = Program.GetItemsToInsert();
+IReadOnlyCollection<Item> itemsToInsert = Program.GetItemsToInsert();
+Next use the list of documents to create concurrent tasks and populate the task list to insert the items into the container. To perform this operation, add the following code to theProgramclass:
+Program
+Container container = database.GetContainer(ContainerName);
+List<Task> tasks = new List<Task>(AmountToInsert);
+foreach (Item item in itemsToInsert)
+{
+    tasks.Add(container.CreateItemAsync(item, new PartitionKey(item.pk))
+        .ContinueWith(itemResponse =>
+        {
+            if (!itemResponse.IsCompletedSuccessfully)
+            {
+                AggregateException innerExceptions = itemResponse.Exception.Flatten();
+                if (innerExceptions.InnerExceptions.FirstOrDefault(innerEx => innerEx is CosmosException) is CosmosException cosmosException)
+                {
+                    Console.WriteLine($"Received {cosmosException.StatusCode} ({cosmosException.Message}).");
+                }
+                else
+                {
+                    Console.WriteLine($"Exception {innerExceptions.InnerExceptions.FirstOrDefault()}.");
+                }
+            }
+        }));
+}
+
+// Wait until all are done
+await Task.WhenAll(tasks);
+Container container = database.GetContainer(ContainerName);
+List<Task> tasks = new List<Task>(AmountToInsert);
+foreach (Item item in itemsToInsert)
+{
+    tasks.Add(container.CreateItemAsync(item, new PartitionKey(item.pk))
+        .ContinueWith(itemResponse =>
+        {
+            if (!itemResponse.IsCompletedSuccessfully)
+            {
+                AggregateException innerExceptions = itemResponse.Exception.Flatten();
+                if (innerExceptions.InnerExceptions.FirstOrDefault(innerEx => innerEx is CosmosException) is CosmosException cosmosException)
+                {
+                    Console.WriteLine($"Received {cosmosException.StatusCode} ({cosmosException.Message}).");
+                }
+                else
+                {
+                    Console.WriteLine($"Exception {innerExceptions.InnerExceptions.FirstOrDefault()}.");
+                }
+            }
+        }));
+}
+
+// Wait until all are done
+await Task.WhenAll(tasks);
+All these concurrent point operations will be executed together (that is in bulk) as described in the introduction section.
+Step 7: Run the sample
+In order to run the sample, you can do it simply by thedotnetcommand:
+dotnet
+dotnet run
+dotnet run
+Get the complete sample
+If you didn't have time to complete the steps in this tutorial, or just want to download the code samples, you can get it fromGitHub.
+After cloning the project, make sure to update the desired credentials insideProgram.cs.
+The sample can be run by changing to the repository directory and usingdotnet:
+dotnet
+cd cosmos-dotnet-bulk-import-throughput-optimizer
+dotnet run
+cd cosmos-dotnet-bulk-import-throughput-optimizer
+dotnet run
+Next steps
+In this tutorial, you've done the following steps:
+Creating an Azure Cosmos DB account
+Configuring your project
+Connecting to an Azure Cosmos DB account with bulk support enabled
+Perform a data import through concurrent create operations
+You can now proceed to the next tutorial:
+Query Azure Cosmos DB by using the API for NoSQL
+Trying to do capacity planning for a migration to Azure Cosmos DB? You can use information about your existing database cluster for capacity planning.
+If all you know is the number of vCores and servers in your existing database cluster, read aboutestimating request units using vCores or vCPUs
+If you know typical request rates for your current database workload, read aboutestimating request units using Azure Cosmos DB capacity planner
+Feedback
+Was this page helpful?
+Additional resources

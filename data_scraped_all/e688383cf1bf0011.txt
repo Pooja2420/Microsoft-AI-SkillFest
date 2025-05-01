@@ -1,0 +1,586 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Quickstart: Create a private endpoint using Bicep
+Article
+2025-03-25
+6 contributors
+In this article
+In this quickstart, you'll use Bicep to create a private endpoint.
+Bicepis a domain-specific language (DSL) that uses declarative syntax to deploy Azure resources. It provides concise syntax, reliable type safety, and support for code reuse. Bicep offers the best authoring experience for your infrastructure-as-code solutions in Azure.
+You can also create a private endpoint by using theAzure portal,Azure PowerShell, theAzure CLI, or anAzure Resource Manager Template.
+
+Prerequisites
+You need an Azure account with an active subscription. If you don't already have an Azure account,create an account for free.
+Review the Bicep file
+This Bicep file creates a private endpoint for an instance of Azure SQL Database.
+The Bicep file that this quickstart uses is fromAzure Quickstart Templates.
+@description('The administrator username of the SQL logical server')
+param sqlAdministratorLogin string
+
+@description('The administrator password of the SQL logical server.')
+@secure()
+param sqlAdministratorLoginPassword string
+
+@description('Username for the Virtual Machine.')
+param vmAdminUsername string
+
+@description('Password for the Virtual Machine. The password must be at least 12 characters long and have lower case, upper characters, digit and a special character (Regex match)')
+@secure()
+param vmAdminPassword string
+
+@description('The size of the VM')
+param VmSize string = 'Standard_D2_v3'
+
+@description('Location for all resources.')
+param location string = resourceGroup().location
+
+var vnetName = 'myVirtualNetwork'
+var vnetAddressPrefix = '10.0.0.0/16'
+var subnet1Prefix = '10.0.0.0/24'
+var subnet1Name = 'mySubnet'
+var sqlServerName = 'sqlserver${uniqueString(resourceGroup().id)}'
+var databaseName = '${sqlServerName}/sample-db'
+var privateEndpointName = 'myPrivateEndpoint'
+var privateDnsZoneName = 'privatelink${environment().suffixes.sqlServerHostname}'
+var pvtEndpointDnsGroupName = '${privateEndpointName}/mydnsgroupname'
+var vmName = take('myVm${uniqueString(resourceGroup().id)}', 15)
+var publicIpAddressName = '${vmName}PublicIP'
+var networkInterfaceName = '${vmName}NetInt'
+var osDiskType = 'StandardSSD_LRS'
+
+resource sqlServer 'Microsoft.Sql/servers@2021-11-01-preview' = {
+  name: sqlServerName
+  location: location
+  tags: {
+    displayName: sqlServerName
+  }
+  properties: {
+    administratorLogin: sqlAdministratorLogin
+    administratorLoginPassword: sqlAdministratorLoginPassword
+    version: '12.0'
+    publicNetworkAccess: 'Disabled'
+  }
+}
+
+resource database 'Microsoft.Sql/servers/databases@2021-11-01-preview' = {
+  name: databaseName
+  location: location
+  sku: {
+    name: 'Basic'
+    tier: 'Basic'
+    capacity: 5
+  }
+  tags: {
+    displayName: databaseName
+  }
+  properties: {
+    collation: 'SQL_Latin1_General_CP1_CI_AS'
+    maxSizeBytes: 104857600
+    sampleName: 'AdventureWorksLT'
+  }
+  dependsOn: [
+    sqlServer
+  ]
+}
+
+resource vnet 'Microsoft.Network/virtualNetworks@2021-05-01' = {
+  name: vnetName
+  location: location
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        vnetAddressPrefix
+      ]
+    }
+  }
+}
+
+resource subnet 'Microsoft.Network/virtualNetworks/subnets@2021-05-01' = {
+  parent: vnet
+  name: subnet1Name
+  properties: {
+    addressPrefix: subnet1Prefix
+    privateEndpointNetworkPolicies: 'Disabled'
+  }
+}
+
+resource privateEndpoint 'Microsoft.Network/privateEndpoints@2021-05-01' = {
+  name: privateEndpointName
+  location: location
+  properties: {
+    subnet: {
+      id: subnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: privateEndpointName
+        properties: {
+          privateLinkServiceId: sqlServer.id
+          groupIds: [
+            'sqlServer'
+          ]
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    vnet
+  ]
+}
+
+resource privateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: privateDnsZoneName
+  location: 'global'
+  properties: {}
+  dependsOn: [
+    vnet
+  ]
+}
+
+resource privateDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: privateDnsZone
+  name: '${privateDnsZoneName}-link'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource pvtEndpointDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2021-05-01' = {
+  name: pvtEndpointDnsGroupName
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'config1'
+        properties: {
+          privateDnsZoneId: privateDnsZone.id
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    privateEndpoint
+  ]
+}
+
+resource publicIpAddress 'Microsoft.Network/publicIPAddresses@2021-05-01' = {
+  name: publicIpAddressName
+  location: location
+  tags: {
+    displayName: publicIpAddressName
+  }
+  properties: {
+    publicIPAllocationMethod: 'Dynamic'
+  }
+}
+
+resource networkInterface 'Microsoft.Network/networkInterfaces@2021-05-01' = {
+  name: networkInterfaceName
+  location: location
+  tags: {
+    displayName: networkInterfaceName
+  }
+  properties: {
+    ipConfigurations: [
+      {
+        name: 'ipConfig1'
+        properties: {
+          privateIPAllocationMethod: 'Dynamic'
+          publicIPAddress: {
+            id: publicIpAddress.id
+          }
+          subnet: {
+            id: subnet.id
+          }
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    vnet
+  ]
+}
+
+resource vm 'Microsoft.Compute/virtualMachines@2021-11-01' = {
+  name: vmName
+  location: location
+  tags: {
+    displayName: vmName
+  }
+  properties: {
+    hardwareProfile: {
+      vmSize: VmSize
+    }
+    osProfile: {
+      computerName: vmName
+      adminUsername: vmAdminUsername
+      adminPassword: vmAdminPassword
+    }
+    storageProfile: {
+      imageReference: {
+        publisher: 'MicrosoftWindowsServer'
+        offer: 'WindowsServer'
+        sku: '2019-Datacenter'
+        version: 'latest'
+      }
+      osDisk: {
+        name: '${vmName}OsDisk'
+        caching: 'ReadWrite'
+        createOption: 'FromImage'
+        managedDisk: {
+          storageAccountType: osDiskType
+        }
+        diskSizeGB: 128
+      }
+    }
+    networkProfile: {
+      networkInterfaces: [
+        {
+          id: networkInterface.id
+        }
+      ]
+    }
+  }
+}
+@description('The administrator username of the SQL logical server')
+param sqlAdministratorLogin string
+
+@description('The administrator password of the SQL logical server.')
+@secure()
+param sqlAdministratorLoginPassword string
+
+@description('Username for the Virtual Machine.')
+param vmAdminUsername string
+
+@description('Password for the Virtual Machine. The password must be at least 12 characters long and have lower case, upper characters, digit and a special character (Regex match)')
+@secure()
+param vmAdminPassword string
+
+@description('The size of the VM')
+param VmSize string = 'Standard_D2_v3'
+
+@description('Location for all resources.')
+param location string = resourceGroup().location
+
+var vnetName = 'myVirtualNetwork'
+var vnetAddressPrefix = '10.0.0.0/16'
+var subnet1Prefix = '10.0.0.0/24'
+var subnet1Name = 'mySubnet'
+var sqlServerName = 'sqlserver${uniqueString(resourceGroup().id)}'
+var databaseName = '${sqlServerName}/sample-db'
+var privateEndpointName = 'myPrivateEndpoint'
+var privateDnsZoneName = 'privatelink${environment().suffixes.sqlServerHostname}'
+var pvtEndpointDnsGroupName = '${privateEndpointName}/mydnsgroupname'
+var vmName = take('myVm${uniqueString(resourceGroup().id)}', 15)
+var publicIpAddressName = '${vmName}PublicIP'
+var networkInterfaceName = '${vmName}NetInt'
+var osDiskType = 'StandardSSD_LRS'
+
+resource sqlServer 'Microsoft.Sql/servers@2021-11-01-preview' = {
+  name: sqlServerName
+  location: location
+  tags: {
+    displayName: sqlServerName
+  }
+  properties: {
+    administratorLogin: sqlAdministratorLogin
+    administratorLoginPassword: sqlAdministratorLoginPassword
+    version: '12.0'
+    publicNetworkAccess: 'Disabled'
+  }
+}
+
+resource database 'Microsoft.Sql/servers/databases@2021-11-01-preview' = {
+  name: databaseName
+  location: location
+  sku: {
+    name: 'Basic'
+    tier: 'Basic'
+    capacity: 5
+  }
+  tags: {
+    displayName: databaseName
+  }
+  properties: {
+    collation: 'SQL_Latin1_General_CP1_CI_AS'
+    maxSizeBytes: 104857600
+    sampleName: 'AdventureWorksLT'
+  }
+  dependsOn: [
+    sqlServer
+  ]
+}
+
+resource vnet 'Microsoft.Network/virtualNetworks@2021-05-01' = {
+  name: vnetName
+  location: location
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        vnetAddressPrefix
+      ]
+    }
+  }
+}
+
+resource subnet 'Microsoft.Network/virtualNetworks/subnets@2021-05-01' = {
+  parent: vnet
+  name: subnet1Name
+  properties: {
+    addressPrefix: subnet1Prefix
+    privateEndpointNetworkPolicies: 'Disabled'
+  }
+}
+
+resource privateEndpoint 'Microsoft.Network/privateEndpoints@2021-05-01' = {
+  name: privateEndpointName
+  location: location
+  properties: {
+    subnet: {
+      id: subnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: privateEndpointName
+        properties: {
+          privateLinkServiceId: sqlServer.id
+          groupIds: [
+            'sqlServer'
+          ]
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    vnet
+  ]
+}
+
+resource privateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: privateDnsZoneName
+  location: 'global'
+  properties: {}
+  dependsOn: [
+    vnet
+  ]
+}
+
+resource privateDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: privateDnsZone
+  name: '${privateDnsZoneName}-link'
+  location: 'global'
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource pvtEndpointDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2021-05-01' = {
+  name: pvtEndpointDnsGroupName
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'config1'
+        properties: {
+          privateDnsZoneId: privateDnsZone.id
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    privateEndpoint
+  ]
+}
+
+resource publicIpAddress 'Microsoft.Network/publicIPAddresses@2021-05-01' = {
+  name: publicIpAddressName
+  location: location
+  tags: {
+    displayName: publicIpAddressName
+  }
+  properties: {
+    publicIPAllocationMethod: 'Dynamic'
+  }
+}
+
+resource networkInterface 'Microsoft.Network/networkInterfaces@2021-05-01' = {
+  name: networkInterfaceName
+  location: location
+  tags: {
+    displayName: networkInterfaceName
+  }
+  properties: {
+    ipConfigurations: [
+      {
+        name: 'ipConfig1'
+        properties: {
+          privateIPAllocationMethod: 'Dynamic'
+          publicIPAddress: {
+            id: publicIpAddress.id
+          }
+          subnet: {
+            id: subnet.id
+          }
+        }
+      }
+    ]
+  }
+  dependsOn: [
+    vnet
+  ]
+}
+
+resource vm 'Microsoft.Compute/virtualMachines@2021-11-01' = {
+  name: vmName
+  location: location
+  tags: {
+    displayName: vmName
+  }
+  properties: {
+    hardwareProfile: {
+      vmSize: VmSize
+    }
+    osProfile: {
+      computerName: vmName
+      adminUsername: vmAdminUsername
+      adminPassword: vmAdminPassword
+    }
+    storageProfile: {
+      imageReference: {
+        publisher: 'MicrosoftWindowsServer'
+        offer: 'WindowsServer'
+        sku: '2019-Datacenter'
+        version: 'latest'
+      }
+      osDisk: {
+        name: '${vmName}OsDisk'
+        caching: 'ReadWrite'
+        createOption: 'FromImage'
+        managedDisk: {
+          storageAccountType: osDiskType
+        }
+        diskSizeGB: 128
+      }
+    }
+    networkProfile: {
+      networkInterfaces: [
+        {
+          id: networkInterface.id
+        }
+      ]
+    }
+  }
+}
+The Bicep file defines multiple Azure resources:
+Microsoft.Sql/servers: The instance of SQL Database with the sample database.
+Microsoft.Sql/servers/databases: The sample database.
+Microsoft.Network/virtualNetworks: The virtual network where the private endpoint is deployed.
+Microsoft.Network/privateEndpoints: The private endpoint that you use to access the instance of SQL Database.
+Microsoft.Network/privateDnsZones: The zone that you use to resolve the private endpoint IP address.
+Microsoft.Network/privateDnsZones/virtualNetworkLinks
+Microsoft.Network/privateEndpoints/privateDnsZoneGroups: The zone group that you use to associate the private endpoint with a private DNS zone.
+Microsoft.Network/publicIpAddresses: The public IP address that you use to access the virtual machine.
+Microsoft.Network/networkInterfaces: The network interface for the virtual machine.
+Microsoft.Compute/virtualMachines: The virtual machine that you use to test the connection of the private endpoint to the instance of SQL Database.
+Deploy the Bicep file
+Save the Bicep file asmain.bicepto your local computer.
+Save the Bicep file asmain.bicepto your local computer.
+Deploy the Bicep file using either Azure CLI or Azure PowerShell.CLIPowerShellaz group create --name exampleRG --location eastus
+az deployment group create --resource-group exampleRG --template-file main.bicep --parameters sqlAdministratorLogin=<admin-login> vmAdminUsername=<vm-login>New-AzResourceGroup -Name exampleRG -Location eastus
+New-AzResourceGroupDeployment -ResourceGroupName exampleRG -TemplateFile ./main.bicep -sqlAdministratorLogin "<admin-login>" -vmAdminUsername "<vm-login>"NoteReplace<admin-login>with the username for the SQL logical server. Replace<vm-login>with the username for the virtual machine. You'll be prompted to entersqlAdministratorLoginPassword. You'll also be prompted to entervmAdminPassword, which must be at least 12 characters long and contain at least one lowercase and uppercase character and one special character.When the deployment finishes, you should see a message indicating the deployment succeeded.
+Deploy the Bicep file using either Azure CLI or Azure PowerShell.
+CLI
+PowerShell
+az group create --name exampleRG --location eastus
+az deployment group create --resource-group exampleRG --template-file main.bicep --parameters sqlAdministratorLogin=<admin-login> vmAdminUsername=<vm-login>
+az group create --name exampleRG --location eastus
+az deployment group create --resource-group exampleRG --template-file main.bicep --parameters sqlAdministratorLogin=<admin-login> vmAdminUsername=<vm-login>
+New-AzResourceGroup -Name exampleRG -Location eastus
+New-AzResourceGroupDeployment -ResourceGroupName exampleRG -TemplateFile ./main.bicep -sqlAdministratorLogin "<admin-login>" -vmAdminUsername "<vm-login>"
+New-AzResourceGroup -Name exampleRG -Location eastus
+New-AzResourceGroupDeployment -ResourceGroupName exampleRG -TemplateFile ./main.bicep -sqlAdministratorLogin "<admin-login>" -vmAdminUsername "<vm-login>"
+Note
+Replace<admin-login>with the username for the SQL logical server. Replace<vm-login>with the username for the virtual machine. You'll be prompted to entersqlAdministratorLoginPassword. You'll also be prompted to entervmAdminPassword, which must be at least 12 characters long and contain at least one lowercase and uppercase character and one special character.
+When the deployment finishes, you should see a message indicating the deployment succeeded.
+Validate the deployment
+Note
+The Bicep file generates a unique name for the virtual machine myVm{uniqueid}resource, and for the SQL Database sqlserver{uniqueid}resource. Substitute your generated value for{uniqueid}.
+Connect to a VM from the internet
+Connect to the VMmyVm{uniqueid}from the internet by doing the following:
+In the Azure portal search bar, entermyVm{uniqueid}.
+In the Azure portal search bar, entermyVm{uniqueid}.
+SelectConnect.Connect to virtual machineopens.
+SelectConnect.Connect to virtual machineopens.
+SelectDownload RDP File. Azure creates a Remote Desktop Protocol (RDP) file and downloads it to your computer.
+SelectDownload RDP File. Azure creates a Remote Desktop Protocol (RDP) file and downloads it to your computer.
+Open the downloaded RDP file.a. If you're prompted, selectConnect.b. Enter the username and password that you specified when you created the VM.NoteYou might need to selectMore choices>Use a different accountto specify the credentials you entered when you created the VM.
+Open the downloaded RDP file.
+a. If you're prompted, selectConnect.b. Enter the username and password that you specified when you created the VM.
+Note
+You might need to selectMore choices>Use a different accountto specify the credentials you entered when you created the VM.
+SelectOK.You might receive a certificate warning during the sign-in process. If you do, selectYesorContinue.
+SelectOK.
+You might receive a certificate warning during the sign-in process. If you do, selectYesorContinue.
+After the VM desktop appears, minimize it to go back to your local desktop.
+After the VM desktop appears, minimize it to go back to your local desktop.
+Access the SQL Database server privately from the VM
+To connect to the SQL Database server from the VM by using the private endpoint, do the following:
+On the Remote Desktop ofmyVM{uniqueid}, open PowerShell.
+On the Remote Desktop ofmyVM{uniqueid}, open PowerShell.
+Run the following command:nslookup sqlserver{uniqueid}.database.windows.netâ¯You'll receive a message that's similar to this one:Server:  UnKnown
+  Address:  168.63.129.16
+  Non-authoritative answer:
+  Name:    sqlserver.privatelink.database.windows.net
+  Address:  10.0.0.5
+  Aliases:  sqlserver.database.windows.net
+Run the following command:
+nslookup sqlserver{uniqueid}.database.windows.netâ¯
+nslookup sqlserver{uniqueid}.database.windows.net
+You'll receive a message that's similar to this one:
+Server:  UnKnown
+  Address:  168.63.129.16
+  Non-authoritative answer:
+  Name:    sqlserver.privatelink.database.windows.net
+  Address:  10.0.0.5
+  Aliases:  sqlserver.database.windows.net
+Server:  UnKnown
+  Address:  168.63.129.16
+  Non-authoritative answer:
+  Name:    sqlserver.privatelink.database.windows.net
+  Address:  10.0.0.5
+  Aliases:  sqlserver.database.windows.net
+Install SQL Server Management Studio.
+Install SQL Server Management Studio.
+Onâ¯theConnect to serverpane, do the following:ForServer type, selectDatabase Engine.ForServer name, selectsqlserver{uniqueid}.database.windows.net.ForUsername, enter the username that was provided earlier.ForPassword, enter the password that was provided earlier.ForRemember password, selectâ¯Yes.
+Onâ¯theConnect to serverpane, do the following:
+ForServer type, selectDatabase Engine.
+ForServer name, selectsqlserver{uniqueid}.database.windows.net.
+ForUsername, enter the username that was provided earlier.
+ForPassword, enter the password that was provided earlier.
+ForRemember password, selectâ¯Yes.
+SelectConnect.
+SelectConnect.
+On the left pane, selectDatabases. Optionally, you can create or query information fromsample-db.
+On the left pane, selectDatabases. Optionally, you can create or query information fromsample-db.
+Close the Remote Desktop connection tomyVm{uniqueid}.
+Close the Remote Desktop connection tomyVm{uniqueid}.
+Clean up resources
+When you no longer need the resources that you created with the private link service, delete the resource group. This removes the private link service and all the related resources.
+CLI
+PowerShell
+az group delete --name exampleRG
+az group delete --name exampleRG
+Remove-AzResourceGroup -Name exampleRG
+Remove-AzResourceGroup -Name exampleRG
+Next steps
+For more information about the services that support private endpoints, see:
+What is Azure Private Link?
+Feedback
+Was this page helpful?
+Additional resources

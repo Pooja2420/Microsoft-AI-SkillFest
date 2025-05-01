@@ -1,0 +1,2277 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Manage Azure Cosmos DB for NoSQL resources with Azure Resource Manager templates
+Article
+2024-08-14
+4 contributors
+In this article
+APPLIES TO:NoSQL
+In this article, you learn how to use Azure Resource Manager templates to help deploy and manage your Azure Cosmos DB accounts, databases, and containers.
+This article only shows Azure Resource Manager template examples for API for NoSQL accounts. You can also find template examples forCassandra,Gremlin,MongoDB, andTableAPIs.
+Important
+Account names are limited to 44 characters, all lowercase.
+To change the throughput values, redeploy the template with updated RU/s.
+When you add or remove locations to an Azure Cosmos DB account, you can't simultaneously modify other properties. These operations must be done separately.
+To provision throughput at the database level and share across all containers, apply the throughput values to the database options property.
+To create any of the Azure Cosmos DB resources below, copy the following example template into a new json file. You can optionally create a parameters json file to use when deploying multiple instances of the same resource with different names and values. There are many ways to deploy Azure Resource Manager templates including,Azure portal,Azure CLI,Azure PowerShellandGitHub.
+
+Azure Cosmos DB account with autoscale throughput
+This template creates an Azure Cosmos DB account in two regions with options for consistency and failover, with database and container configured for autoscale throughput that has most policy options enabled. This template is also available for one-click deploy from Azure Quickstart Templates Gallery.
+Note
+You can use Azure Resource Manager templates update the autoscale max RU/s setting on an database and container resources already configured with autoscale. Migrating between manual and autoscale throughput is a POST operation and not supported with Azure Resource Manager templates. To migrate throughput useAzure CLIorPowerShell.
+
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.9.1.41621",
+      "templateHash": "5060734554184834462"
+    }
+  },
+  "parameters": {
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[format('sql-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Cosmos DB account name, max length 44 characters, lowercase"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the Cosmos DB account."
+      }
+    },
+    "primaryRegion": {
+      "type": "string",
+      "metadata": {
+        "description": "The primary region for the Cosmos DB account."
+      }
+    },
+    "secondaryRegion": {
+      "type": "string",
+      "metadata": {
+        "description": "The secondary region for the Cosmos DB account."
+      }
+    },
+    "defaultConsistencyLevel": {
+      "type": "string",
+      "defaultValue": "Session",
+      "allowedValues": [
+        "Eventual",
+        "ConsistentPrefix",
+        "Session",
+        "BoundedStaleness",
+        "Strong"
+      ],
+      "metadata": {
+        "description": "The default consistency level of the Cosmos DB account."
+      }
+    },
+    "maxStalenessPrefix": {
+      "type": "int",
+      "defaultValue": 100000,
+      "maxValue": 2147483647,
+      "minValue": 10,
+      "metadata": {
+        "description": "Max stale requests. Required for BoundedStaleness. Valid ranges, Single Region: 10 to 2147483647. Multi Region: 100000 to 2147483647."
+      }
+    },
+    "maxIntervalInSeconds": {
+      "type": "int",
+      "defaultValue": 300,
+      "maxValue": 86400,
+      "minValue": 5,
+      "metadata": {
+        "description": "Max lag time (minutes). Required for BoundedStaleness. Valid ranges, Single Region: 5 to 84600. Multi Region: 300 to 86400."
+      }
+    },
+    "systemManagedFailover": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable system managed failover for regions"
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name for the database"
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name for the container"
+      }
+    },
+    "autoscaleMaxThroughput": {
+      "type": "int",
+      "defaultValue": 1000,
+      "maxValue": 1000000,
+      "minValue": 1000,
+      "metadata": {
+        "description": "Maximum autoscale throughput for the container"
+      }
+    }
+  },
+  "variables": {
+    "consistencyPolicy": {
+      "Eventual": {
+        "defaultConsistencyLevel": "Eventual"
+      },
+      "ConsistentPrefix": {
+        "defaultConsistencyLevel": "ConsistentPrefix"
+      },
+      "Session": {
+        "defaultConsistencyLevel": "Session"
+      },
+      "BoundedStaleness": {
+        "defaultConsistencyLevel": "BoundedStaleness",
+        "maxStalenessPrefix": "[parameters('maxStalenessPrefix')]",
+        "maxIntervalInSeconds": "[parameters('maxIntervalInSeconds')]"
+      },
+      "Strong": {
+        "defaultConsistencyLevel": "Strong"
+      }
+    },
+    "locations": [
+      {
+        "locationName": "[parameters('primaryRegion')]",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      },
+      {
+        "locationName": "[parameters('secondaryRegion')]",
+        "failoverPriority": 1,
+        "isZoneRedundant": false
+      }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2022-05-15",
+      "name": "[toLower(parameters('accountName'))]",
+      "kind": "GlobalDocumentDB",
+      "location": "[parameters('location')]",
+      "properties": {
+        "consistencyPolicy": "[variables('consistencyPolicy')[parameters('defaultConsistencyLevel')]]",
+        "locations": "[variables('locations')]",
+        "databaseAccountOfferType": "Standard",
+        "enableAutomaticFailover": "[parameters('systemManagedFailover')]"
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}', toLower(parameters('accountName')), parameters('databaseName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('databaseName')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', toLower(parameters('accountName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('containerName')]",
+          "partitionKey": {
+            "paths": [
+              "/myPartitionKey"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/myPathToNotIndex/*"
+              },
+              {
+                "path": "/_etag/?"
+              }
+            ],
+            "compositeIndexes": [
+              [
+                {
+                  "path": "/name",
+                  "order": "ascending"
+                },
+                {
+                  "path": "/age",
+                  "order": "descending"
+                }
+              ]
+            ],
+            "spatialIndexes": [
+              {
+                "path": "/path/to/geojson/property/?",
+                "types": [
+                  "Point",
+                  "Polygon",
+                  "MultiPolygon",
+                  "LineString"
+                ]
+              }
+            ]
+          },
+          "defaultTtl": 86400,
+          "uniqueKeyPolicy": {
+            "uniqueKeys": [
+              {
+                "paths": [
+                  "/phoneNumber"
+                ]
+              }
+            ]
+          }
+        },
+        "options": {
+          "autoscaleSettings": {
+            "maxThroughput": "[parameters('autoscaleMaxThroughput')]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+      ]
+    }
+  ]
+}
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.9.1.41621",
+      "templateHash": "5060734554184834462"
+    }
+  },
+  "parameters": {
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[format('sql-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Cosmos DB account name, max length 44 characters, lowercase"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the Cosmos DB account."
+      }
+    },
+    "primaryRegion": {
+      "type": "string",
+      "metadata": {
+        "description": "The primary region for the Cosmos DB account."
+      }
+    },
+    "secondaryRegion": {
+      "type": "string",
+      "metadata": {
+        "description": "The secondary region for the Cosmos DB account."
+      }
+    },
+    "defaultConsistencyLevel": {
+      "type": "string",
+      "defaultValue": "Session",
+      "allowedValues": [
+        "Eventual",
+        "ConsistentPrefix",
+        "Session",
+        "BoundedStaleness",
+        "Strong"
+      ],
+      "metadata": {
+        "description": "The default consistency level of the Cosmos DB account."
+      }
+    },
+    "maxStalenessPrefix": {
+      "type": "int",
+      "defaultValue": 100000,
+      "maxValue": 2147483647,
+      "minValue": 10,
+      "metadata": {
+        "description": "Max stale requests. Required for BoundedStaleness. Valid ranges, Single Region: 10 to 2147483647. Multi Region: 100000 to 2147483647."
+      }
+    },
+    "maxIntervalInSeconds": {
+      "type": "int",
+      "defaultValue": 300,
+      "maxValue": 86400,
+      "minValue": 5,
+      "metadata": {
+        "description": "Max lag time (minutes). Required for BoundedStaleness. Valid ranges, Single Region: 5 to 84600. Multi Region: 300 to 86400."
+      }
+    },
+    "systemManagedFailover": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable system managed failover for regions"
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name for the database"
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name for the container"
+      }
+    },
+    "autoscaleMaxThroughput": {
+      "type": "int",
+      "defaultValue": 1000,
+      "maxValue": 1000000,
+      "minValue": 1000,
+      "metadata": {
+        "description": "Maximum autoscale throughput for the container"
+      }
+    }
+  },
+  "variables": {
+    "consistencyPolicy": {
+      "Eventual": {
+        "defaultConsistencyLevel": "Eventual"
+      },
+      "ConsistentPrefix": {
+        "defaultConsistencyLevel": "ConsistentPrefix"
+      },
+      "Session": {
+        "defaultConsistencyLevel": "Session"
+      },
+      "BoundedStaleness": {
+        "defaultConsistencyLevel": "BoundedStaleness",
+        "maxStalenessPrefix": "[parameters('maxStalenessPrefix')]",
+        "maxIntervalInSeconds": "[parameters('maxIntervalInSeconds')]"
+      },
+      "Strong": {
+        "defaultConsistencyLevel": "Strong"
+      }
+    },
+    "locations": [
+      {
+        "locationName": "[parameters('primaryRegion')]",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      },
+      {
+        "locationName": "[parameters('secondaryRegion')]",
+        "failoverPriority": 1,
+        "isZoneRedundant": false
+      }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2022-05-15",
+      "name": "[toLower(parameters('accountName'))]",
+      "kind": "GlobalDocumentDB",
+      "location": "[parameters('location')]",
+      "properties": {
+        "consistencyPolicy": "[variables('consistencyPolicy')[parameters('defaultConsistencyLevel')]]",
+        "locations": "[variables('locations')]",
+        "databaseAccountOfferType": "Standard",
+        "enableAutomaticFailover": "[parameters('systemManagedFailover')]"
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}', toLower(parameters('accountName')), parameters('databaseName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('databaseName')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', toLower(parameters('accountName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('containerName')]",
+          "partitionKey": {
+            "paths": [
+              "/myPartitionKey"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/myPathToNotIndex/*"
+              },
+              {
+                "path": "/_etag/?"
+              }
+            ],
+            "compositeIndexes": [
+              [
+                {
+                  "path": "/name",
+                  "order": "ascending"
+                },
+                {
+                  "path": "/age",
+                  "order": "descending"
+                }
+              ]
+            ],
+            "spatialIndexes": [
+              {
+                "path": "/path/to/geojson/property/?",
+                "types": [
+                  "Point",
+                  "Polygon",
+                  "MultiPolygon",
+                  "LineString"
+                ]
+              }
+            ]
+          },
+          "defaultTtl": 86400,
+          "uniqueKeyPolicy": {
+            "uniqueKeys": [
+              {
+                "paths": [
+                  "/phoneNumber"
+                ]
+              }
+            ]
+          }
+        },
+        "options": {
+          "autoscaleSettings": {
+            "maxThroughput": "[parameters('autoscaleMaxThroughput')]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+      ]
+    }
+  ]
+}
+
+Azure Cosmos DB account with analytical store
+This template creates an Azure Cosmos DB account in one region with a container with Analytical TTL enabled and options for manual or autoscale throughput. This template is also available for one-click deploy from Azure Quickstart Templates Gallery.
+
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.9.1.41621",
+      "templateHash": "4534243826746859694"
+    }
+  },
+  "parameters": {
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[format('sql-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Azure Cosmos DB account name"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the Azure Cosmos DB account."
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "defaultValue": "database1",
+      "metadata": {
+        "description": "The name for the database"
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "defaultValue": "container1",
+      "metadata": {
+        "description": "The name for the container"
+      }
+    },
+    "partitionKeyPath": {
+      "type": "string",
+      "defaultValue": "/partitionKey",
+      "metadata": {
+        "description": "The partition key for the container"
+      }
+    },
+    "throughputPolicy": {
+      "type": "string",
+      "defaultValue": "Autoscale",
+      "allowedValues": [
+        "Manual",
+        "Autoscale"
+      ],
+      "metadata": {
+        "description": "The throughput policy for the container"
+      }
+    },
+    "manualProvisionedThroughput": {
+      "type": "int",
+      "defaultValue": 400,
+      "maxValue": 1000000,
+      "minValue": 400,
+      "metadata": {
+        "description": "Throughput value when using Manual Throughput Policy for the container"
+      }
+    },
+    "autoscaleMaxThroughput": {
+      "type": "int",
+      "defaultValue": 1000,
+      "maxValue": 1000000,
+      "minValue": 1000,
+      "metadata": {
+        "description": "Maximum throughput when using Autoscale Throughput Policy for the container"
+      }
+    },
+    "analyticalStoreTTL": {
+      "type": "int",
+      "defaultValue": -1,
+      "maxValue": 2147483647,
+      "minValue": -1,
+      "metadata": {
+        "description": "Time to Live for data in analytical store. (-1 no expiry)"
+      }
+    }
+  },
+  "variables": {
+    "locations": [
+      {
+        "locationName": "[parameters('location')]",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      }
+    ],
+    "throughput_Policy": {
+      "Manual": {
+        "throughput": "[parameters('manualProvisionedThroughput')]"
+      },
+      "Autoscale": {
+        "autoscaleSettings": {
+          "maxThroughput": "[parameters('autoscaleMaxThroughput')]"
+        }
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2022-05-15",
+      "name": "[toLower(parameters('accountName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "Session"
+        },
+        "databaseAccountOfferType": "Standard",
+        "locations": "[variables('locations')]",
+        "enableAnalyticalStorage": true
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}', toLower(parameters('accountName')), parameters('databaseName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('databaseName')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', toLower(parameters('accountName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('containerName')]",
+          "partitionKey": {
+            "paths": [
+              "[parameters('partitionKeyPath')]"
+            ],
+            "kind": "Hash"
+          },
+          "analyticalStorageTtl": "[parameters('analyticalStoreTTL')]"
+        },
+        "options": "[variables('throughput_Policy')[parameters('throughputPolicy')]]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+      ]
+    }
+  ]
+}
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.9.1.41621",
+      "templateHash": "4534243826746859694"
+    }
+  },
+  "parameters": {
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[format('sql-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Azure Cosmos DB account name"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the Azure Cosmos DB account."
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "defaultValue": "database1",
+      "metadata": {
+        "description": "The name for the database"
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "defaultValue": "container1",
+      "metadata": {
+        "description": "The name for the container"
+      }
+    },
+    "partitionKeyPath": {
+      "type": "string",
+      "defaultValue": "/partitionKey",
+      "metadata": {
+        "description": "The partition key for the container"
+      }
+    },
+    "throughputPolicy": {
+      "type": "string",
+      "defaultValue": "Autoscale",
+      "allowedValues": [
+        "Manual",
+        "Autoscale"
+      ],
+      "metadata": {
+        "description": "The throughput policy for the container"
+      }
+    },
+    "manualProvisionedThroughput": {
+      "type": "int",
+      "defaultValue": 400,
+      "maxValue": 1000000,
+      "minValue": 400,
+      "metadata": {
+        "description": "Throughput value when using Manual Throughput Policy for the container"
+      }
+    },
+    "autoscaleMaxThroughput": {
+      "type": "int",
+      "defaultValue": 1000,
+      "maxValue": 1000000,
+      "minValue": 1000,
+      "metadata": {
+        "description": "Maximum throughput when using Autoscale Throughput Policy for the container"
+      }
+    },
+    "analyticalStoreTTL": {
+      "type": "int",
+      "defaultValue": -1,
+      "maxValue": 2147483647,
+      "minValue": -1,
+      "metadata": {
+        "description": "Time to Live for data in analytical store. (-1 no expiry)"
+      }
+    }
+  },
+  "variables": {
+    "locations": [
+      {
+        "locationName": "[parameters('location')]",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      }
+    ],
+    "throughput_Policy": {
+      "Manual": {
+        "throughput": "[parameters('manualProvisionedThroughput')]"
+      },
+      "Autoscale": {
+        "autoscaleSettings": {
+          "maxThroughput": "[parameters('autoscaleMaxThroughput')]"
+        }
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2022-05-15",
+      "name": "[toLower(parameters('accountName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "Session"
+        },
+        "databaseAccountOfferType": "Standard",
+        "locations": "[variables('locations')]",
+        "enableAnalyticalStorage": true
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}', toLower(parameters('accountName')), parameters('databaseName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('databaseName')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', toLower(parameters('accountName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('containerName')]",
+          "partitionKey": {
+            "paths": [
+              "[parameters('partitionKeyPath')]"
+            ],
+            "kind": "Hash"
+          },
+          "analyticalStorageTtl": "[parameters('analyticalStoreTTL')]"
+        },
+        "options": "[variables('throughput_Policy')[parameters('throughputPolicy')]]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+      ]
+    }
+  ]
+}
+
+Azure Cosmos DB account with standard provisioned throughput
+This template creates an Azure Cosmos DB account in two regions with options for consistency and failover, with database and container configured for standard throughput with many indexing policy options configured. This template is also available for one-click deploy from Azure Quickstart Templates Gallery.
+
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.26.54.24096",
+      "templateHash": "7578513359154607542"
+    }
+  },
+  "parameters": {
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[format('sql-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Azure Cosmos DB account name, max length 44 characters"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the Azure Cosmos DB account."
+      }
+    },
+    "primaryRegion": {
+      "type": "string",
+      "metadata": {
+        "description": "The primary region for the Azure Cosmos DB account."
+      }
+    },
+    "secondaryRegion": {
+      "type": "string",
+      "metadata": {
+        "description": "The secondary region for the Azure Cosmos DB account."
+      }
+    },
+    "defaultConsistencyLevel": {
+      "type": "string",
+      "defaultValue": "Session",
+      "allowedValues": [
+        "Eventual",
+        "ConsistentPrefix",
+        "Session",
+        "BoundedStaleness",
+        "Strong"
+      ],
+      "metadata": {
+        "description": "The default consistency level of the Cosmos DB account."
+      }
+    },
+    "maxStalenessPrefix": {
+      "type": "int",
+      "defaultValue": 100000,
+      "minValue": 10,
+      "maxValue": 2147483647,
+      "metadata": {
+        "description": "Max stale requests. Required for BoundedStaleness. Valid ranges, Single Region: 10 to 2147483647. Multi Region: 100000 to 2147483647."
+      }
+    },
+    "maxIntervalInSeconds": {
+      "type": "int",
+      "defaultValue": 300,
+      "minValue": 5,
+      "maxValue": 86400,
+      "metadata": {
+        "description": "Max lag time (minutes). Required for BoundedStaleness. Valid ranges, Single Region: 5 to 84600. Multi Region: 300 to 86400."
+      }
+    },
+    "systemManagedFailover": {
+      "type": "bool",
+      "defaultValue": true,
+      "allowedValues": [
+        true,
+        false
+      ],
+      "metadata": {
+        "description": "Enable system managed failover for regions"
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "defaultValue": "myDatabase",
+      "metadata": {
+        "description": "The name for the database"
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "defaultValue": "myContainer",
+      "metadata": {
+        "description": "The name for the container"
+      }
+    },
+    "throughput": {
+      "type": "int",
+      "defaultValue": 400,
+      "minValue": 400,
+      "maxValue": 1000000,
+      "metadata": {
+        "description": "The throughput for the container"
+      }
+    }
+  },
+  "variables": {
+    "consistencyPolicy": {
+      "Eventual": {
+        "defaultConsistencyLevel": "Eventual"
+      },
+      "ConsistentPrefix": {
+        "defaultConsistencyLevel": "ConsistentPrefix"
+      },
+      "Session": {
+        "defaultConsistencyLevel": "Session"
+      },
+      "BoundedStaleness": {
+        "defaultConsistencyLevel": "BoundedStaleness",
+        "maxStalenessPrefix": "[parameters('maxStalenessPrefix')]",
+        "maxIntervalInSeconds": "[parameters('maxIntervalInSeconds')]"
+      },
+      "Strong": {
+        "defaultConsistencyLevel": "Strong"
+      }
+    },
+    "locations": [
+      {
+        "locationName": "[parameters('primaryRegion')]",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      },
+      {
+        "locationName": "[parameters('secondaryRegion')]",
+        "failoverPriority": 1,
+        "isZoneRedundant": false
+      }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2024-02-15-preview",
+      "name": "[toLower(parameters('accountName'))]",
+      "location": "[parameters('location')]",
+      "kind": "GlobalDocumentDB",
+      "properties": {
+        "consistencyPolicy": "[variables('consistencyPolicy')[parameters('defaultConsistencyLevel')]]",
+        "locations": "[variables('locations')]",
+        "databaseAccountOfferType": "Standard",
+        "enableAutomaticFailover": "[parameters('systemManagedFailover')]",
+        "disableKeyBasedMetadataWriteAccess": true
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2024-02-15-preview",
+      "name": "[format('{0}/{1}', toLower(parameters('accountName')), parameters('databaseName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('databaseName')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', toLower(parameters('accountName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2024-02-15-preview",
+      "name": "[format('{0}/{1}/{2}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('containerName')]",
+          "partitionKey": {
+            "paths": [
+              "/myPartitionKey"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/myPathToNotIndex/*"
+              },
+              {
+                "path": "/_etag/?"
+              }
+            ],
+            "compositeIndexes": [
+              [
+                {
+                  "path": "/name",
+                  "order": "ascending"
+                },
+                {
+                  "path": "/age",
+                  "order": "descending"
+                }
+              ]
+            ],
+            "spatialIndexes": [
+              {
+                "path": "/location/*",
+                "types": [
+                  "Point",
+                  "Polygon",
+                  "MultiPolygon",
+                  "LineString"
+                ]
+              }
+            ]
+          },
+          "defaultTtl": 86400,
+          "uniqueKeyPolicy": {
+            "uniqueKeys": [
+              {
+                "paths": [
+                  "/phoneNumber"
+                ]
+              }
+            ]
+          }
+        },
+        "options": {
+          "throughput": "[parameters('throughput')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "location": {
+      "type": "string",
+      "value": "[parameters('location')]"
+    },
+    "name": {
+      "type": "string",
+      "value": "[parameters('databaseName')]"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[resourceGroup().name]"
+    },
+    "resourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+    }
+  }
+}
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.26.54.24096",
+      "templateHash": "7578513359154607542"
+    }
+  },
+  "parameters": {
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[format('sql-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Azure Cosmos DB account name, max length 44 characters"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the Azure Cosmos DB account."
+      }
+    },
+    "primaryRegion": {
+      "type": "string",
+      "metadata": {
+        "description": "The primary region for the Azure Cosmos DB account."
+      }
+    },
+    "secondaryRegion": {
+      "type": "string",
+      "metadata": {
+        "description": "The secondary region for the Azure Cosmos DB account."
+      }
+    },
+    "defaultConsistencyLevel": {
+      "type": "string",
+      "defaultValue": "Session",
+      "allowedValues": [
+        "Eventual",
+        "ConsistentPrefix",
+        "Session",
+        "BoundedStaleness",
+        "Strong"
+      ],
+      "metadata": {
+        "description": "The default consistency level of the Cosmos DB account."
+      }
+    },
+    "maxStalenessPrefix": {
+      "type": "int",
+      "defaultValue": 100000,
+      "minValue": 10,
+      "maxValue": 2147483647,
+      "metadata": {
+        "description": "Max stale requests. Required for BoundedStaleness. Valid ranges, Single Region: 10 to 2147483647. Multi Region: 100000 to 2147483647."
+      }
+    },
+    "maxIntervalInSeconds": {
+      "type": "int",
+      "defaultValue": 300,
+      "minValue": 5,
+      "maxValue": 86400,
+      "metadata": {
+        "description": "Max lag time (minutes). Required for BoundedStaleness. Valid ranges, Single Region: 5 to 84600. Multi Region: 300 to 86400."
+      }
+    },
+    "systemManagedFailover": {
+      "type": "bool",
+      "defaultValue": true,
+      "allowedValues": [
+        true,
+        false
+      ],
+      "metadata": {
+        "description": "Enable system managed failover for regions"
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "defaultValue": "myDatabase",
+      "metadata": {
+        "description": "The name for the database"
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "defaultValue": "myContainer",
+      "metadata": {
+        "description": "The name for the container"
+      }
+    },
+    "throughput": {
+      "type": "int",
+      "defaultValue": 400,
+      "minValue": 400,
+      "maxValue": 1000000,
+      "metadata": {
+        "description": "The throughput for the container"
+      }
+    }
+  },
+  "variables": {
+    "consistencyPolicy": {
+      "Eventual": {
+        "defaultConsistencyLevel": "Eventual"
+      },
+      "ConsistentPrefix": {
+        "defaultConsistencyLevel": "ConsistentPrefix"
+      },
+      "Session": {
+        "defaultConsistencyLevel": "Session"
+      },
+      "BoundedStaleness": {
+        "defaultConsistencyLevel": "BoundedStaleness",
+        "maxStalenessPrefix": "[parameters('maxStalenessPrefix')]",
+        "maxIntervalInSeconds": "[parameters('maxIntervalInSeconds')]"
+      },
+      "Strong": {
+        "defaultConsistencyLevel": "Strong"
+      }
+    },
+    "locations": [
+      {
+        "locationName": "[parameters('primaryRegion')]",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      },
+      {
+        "locationName": "[parameters('secondaryRegion')]",
+        "failoverPriority": 1,
+        "isZoneRedundant": false
+      }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2024-02-15-preview",
+      "name": "[toLower(parameters('accountName'))]",
+      "location": "[parameters('location')]",
+      "kind": "GlobalDocumentDB",
+      "properties": {
+        "consistencyPolicy": "[variables('consistencyPolicy')[parameters('defaultConsistencyLevel')]]",
+        "locations": "[variables('locations')]",
+        "databaseAccountOfferType": "Standard",
+        "enableAutomaticFailover": "[parameters('systemManagedFailover')]",
+        "disableKeyBasedMetadataWriteAccess": true
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2024-02-15-preview",
+      "name": "[format('{0}/{1}', toLower(parameters('accountName')), parameters('databaseName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('databaseName')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', toLower(parameters('accountName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2024-02-15-preview",
+      "name": "[format('{0}/{1}/{2}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('containerName')]",
+          "partitionKey": {
+            "paths": [
+              "/myPartitionKey"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/myPathToNotIndex/*"
+              },
+              {
+                "path": "/_etag/?"
+              }
+            ],
+            "compositeIndexes": [
+              [
+                {
+                  "path": "/name",
+                  "order": "ascending"
+                },
+                {
+                  "path": "/age",
+                  "order": "descending"
+                }
+              ]
+            ],
+            "spatialIndexes": [
+              {
+                "path": "/location/*",
+                "types": [
+                  "Point",
+                  "Polygon",
+                  "MultiPolygon",
+                  "LineString"
+                ]
+              }
+            ]
+          },
+          "defaultTtl": 86400,
+          "uniqueKeyPolicy": {
+            "uniqueKeys": [
+              {
+                "paths": [
+                  "/phoneNumber"
+                ]
+              }
+            ]
+          }
+        },
+        "options": {
+          "throughput": "[parameters('throughput')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "location": {
+      "type": "string",
+      "value": "[parameters('location')]"
+    },
+    "name": {
+      "type": "string",
+      "value": "[parameters('databaseName')]"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[resourceGroup().name]"
+    },
+    "resourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+    }
+  }
+}
+
+Azure Cosmos DB container with server-side functionality
+This template creates an Azure Cosmos DB account, database and container with a stored procedure, trigger, and user-defined function. This template is also available for one-click deploy from Azure Quickstart Templates Gallery.
+
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.9.1.41621",
+      "templateHash": "7290964700982978222"
+    }
+  },
+  "parameters": {
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[format('sql-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Cosmos DB account name"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the Cosmos DB account."
+      }
+    },
+    "primaryRegion": {
+      "type": "string",
+      "metadata": {
+        "description": "The primary region for the Cosmos DB account."
+      }
+    },
+    "defaultConsistencyLevel": {
+      "type": "string",
+      "defaultValue": "Session",
+      "allowedValues": [
+        "Eventual",
+        "ConsistentPrefix",
+        "Session",
+        "BoundedStaleness",
+        "Strong"
+      ],
+      "metadata": {
+        "description": "The default consistency level of the Cosmos DB account."
+      }
+    },
+    "maxStalenessPrefix": {
+      "type": "int",
+      "defaultValue": 100000,
+      "maxValue": 2147483647,
+      "minValue": 10,
+      "metadata": {
+        "description": "Max stale requests. Required for BoundedStaleness. Valid ranges, Single Region: 10 to 2147483647. Multi Region: 100000 to 2147483647."
+      }
+    },
+    "maxIntervalInSeconds": {
+      "type": "int",
+      "defaultValue": 300,
+      "maxValue": 86400,
+      "minValue": 5,
+      "metadata": {
+        "description": "Max lag time (seconds). Required for BoundedStaleness. Valid ranges, Single Region: 5 to 84600. Multi Region: 300 to 86400."
+      }
+    },
+    "systemManagedFailover": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable system managed failover for regions"
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "defaultValue": "database1",
+      "metadata": {
+        "description": "The name for the database"
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "defaultValue": "container1",
+      "metadata": {
+        "description": "The name for the container"
+      }
+    },
+    "throughput": {
+      "type": "int",
+      "defaultValue": 400,
+      "maxValue": 1000000,
+      "minValue": 400,
+      "metadata": {
+        "description": "The throughput for the container"
+      }
+    }
+  },
+  "variables": {
+    "consistencyPolicy": {
+      "Eventual": {
+        "defaultConsistencyLevel": "Eventual"
+      },
+      "ConsistentPrefix": {
+        "defaultConsistencyLevel": "ConsistentPrefix"
+      },
+      "Session": {
+        "defaultConsistencyLevel": "Session"
+      },
+      "BoundedStaleness": {
+        "defaultConsistencyLevel": "BoundedStaleness",
+        "maxStalenessPrefix": "[parameters('maxStalenessPrefix')]",
+        "maxIntervalInSeconds": "[parameters('maxIntervalInSeconds')]"
+      },
+      "Strong": {
+        "defaultConsistencyLevel": "Strong"
+      }
+    },
+    "locations": [
+      {
+        "locationName": "[parameters('primaryRegion')]",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2022-05-15",
+      "name": "[toLower(parameters('accountName'))]",
+      "location": "[parameters('location')]",
+      "kind": "GlobalDocumentDB",
+      "properties": {
+        "consistencyPolicy": "[variables('consistencyPolicy')[parameters('defaultConsistencyLevel')]]",
+        "locations": "[variables('locations')]",
+        "databaseAccountOfferType": "Standard",
+        "enableAutomaticFailover": "[parameters('systemManagedFailover')]"
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}', toLower(parameters('accountName')), parameters('databaseName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('databaseName')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', toLower(parameters('accountName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('containerName')]",
+          "partitionKey": {
+            "paths": [
+              "/myPartitionKey"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/_etag/?"
+              }
+            ]
+          }
+        },
+        "options": {
+          "throughput": "[parameters('throughput')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/storedProcedures",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}/{3}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'), 'myStoredProcedure')]",
+      "properties": {
+        "resource": {
+          "id": "myStoredProcedure",
+          "body": "function () { var context = getContext(); var response = context.getResponse(); response.setBody('Hello, World'); }"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/triggers",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}/{3}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'), 'myPreTrigger')]",
+      "properties": {
+        "resource": {
+          "id": "myPreTrigger",
+          "triggerType": "Pre",
+          "triggerOperation": "Create",
+          "body": "function validateToDoItemTimestamp(){var context=getContext();var request=context.getRequest();var itemToCreate=request.getBody();if(!('timestamp'in itemToCreate)){var ts=new Date();itemToCreate['timestamp']=ts.getTime();}request.setBody(itemToCreate);}"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/userDefinedFunctions",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}/{3}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'), 'myUserDefinedFunction')]",
+      "properties": {
+        "resource": {
+          "id": "myUserDefinedFunction",
+          "body": "function tax(income){if(income==undefined)throw'no input';if(income<1000)return income*0.1;else if(income<10000)return income*0.2;else return income*0.4;}"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]"
+      ]
+    }
+  ]
+}
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.9.1.41621",
+      "templateHash": "7290964700982978222"
+    }
+  },
+  "parameters": {
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[format('sql-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Cosmos DB account name"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the Cosmos DB account."
+      }
+    },
+    "primaryRegion": {
+      "type": "string",
+      "metadata": {
+        "description": "The primary region for the Cosmos DB account."
+      }
+    },
+    "defaultConsistencyLevel": {
+      "type": "string",
+      "defaultValue": "Session",
+      "allowedValues": [
+        "Eventual",
+        "ConsistentPrefix",
+        "Session",
+        "BoundedStaleness",
+        "Strong"
+      ],
+      "metadata": {
+        "description": "The default consistency level of the Cosmos DB account."
+      }
+    },
+    "maxStalenessPrefix": {
+      "type": "int",
+      "defaultValue": 100000,
+      "maxValue": 2147483647,
+      "minValue": 10,
+      "metadata": {
+        "description": "Max stale requests. Required for BoundedStaleness. Valid ranges, Single Region: 10 to 2147483647. Multi Region: 100000 to 2147483647."
+      }
+    },
+    "maxIntervalInSeconds": {
+      "type": "int",
+      "defaultValue": 300,
+      "maxValue": 86400,
+      "minValue": 5,
+      "metadata": {
+        "description": "Max lag time (seconds). Required for BoundedStaleness. Valid ranges, Single Region: 5 to 84600. Multi Region: 300 to 86400."
+      }
+    },
+    "systemManagedFailover": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable system managed failover for regions"
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "defaultValue": "database1",
+      "metadata": {
+        "description": "The name for the database"
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "defaultValue": "container1",
+      "metadata": {
+        "description": "The name for the container"
+      }
+    },
+    "throughput": {
+      "type": "int",
+      "defaultValue": 400,
+      "maxValue": 1000000,
+      "minValue": 400,
+      "metadata": {
+        "description": "The throughput for the container"
+      }
+    }
+  },
+  "variables": {
+    "consistencyPolicy": {
+      "Eventual": {
+        "defaultConsistencyLevel": "Eventual"
+      },
+      "ConsistentPrefix": {
+        "defaultConsistencyLevel": "ConsistentPrefix"
+      },
+      "Session": {
+        "defaultConsistencyLevel": "Session"
+      },
+      "BoundedStaleness": {
+        "defaultConsistencyLevel": "BoundedStaleness",
+        "maxStalenessPrefix": "[parameters('maxStalenessPrefix')]",
+        "maxIntervalInSeconds": "[parameters('maxIntervalInSeconds')]"
+      },
+      "Strong": {
+        "defaultConsistencyLevel": "Strong"
+      }
+    },
+    "locations": [
+      {
+        "locationName": "[parameters('primaryRegion')]",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2022-05-15",
+      "name": "[toLower(parameters('accountName'))]",
+      "location": "[parameters('location')]",
+      "kind": "GlobalDocumentDB",
+      "properties": {
+        "consistencyPolicy": "[variables('consistencyPolicy')[parameters('defaultConsistencyLevel')]]",
+        "locations": "[variables('locations')]",
+        "databaseAccountOfferType": "Standard",
+        "enableAutomaticFailover": "[parameters('systemManagedFailover')]"
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}', toLower(parameters('accountName')), parameters('databaseName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('databaseName')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', toLower(parameters('accountName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('containerName')]",
+          "partitionKey": {
+            "paths": [
+              "/myPartitionKey"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/_etag/?"
+              }
+            ]
+          }
+        },
+        "options": {
+          "throughput": "[parameters('throughput')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/storedProcedures",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}/{3}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'), 'myStoredProcedure')]",
+      "properties": {
+        "resource": {
+          "id": "myStoredProcedure",
+          "body": "function () { var context = getContext(); var response = context.getResponse(); response.setBody('Hello, World'); }"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/triggers",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}/{3}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'), 'myPreTrigger')]",
+      "properties": {
+        "resource": {
+          "id": "myPreTrigger",
+          "triggerType": "Pre",
+          "triggerOperation": "Create",
+          "body": "function validateToDoItemTimestamp(){var context=getContext();var request=context.getRequest();var itemToCreate=request.getBody();if(!('timestamp'in itemToCreate)){var ts=new Date();itemToCreate['timestamp']=ts.getTime();}request.setBody(itemToCreate);}"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/userDefinedFunctions",
+      "apiVersion": "2022-05-15",
+      "name": "[format('{0}/{1}/{2}/{3}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'), 'myUserDefinedFunction')]",
+      "properties": {
+        "resource": {
+          "id": "myUserDefinedFunction",
+          "body": "function tax(income){if(income==undefined)throw'no input';if(income<1000)return income*0.1;else if(income<10000)return income*0.2;else return income*0.4;}"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]"
+      ]
+    }
+  ]
+}
+
+
+Azure Cosmos DB account with Microsoft Entra ID and RBAC
+This template will create a SQL Azure Cosmos DB account, a natively maintained Role Definition, and a natively maintained Role Assignment for a Microsoft Entra identity. This template is also available for one-click deploy from Azure Quickstart Templates Gallery.
+
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.33.93.31351",
+      "templateHash": "8599351742985299104"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[toLower(format('sql-rbac-{0}', uniqueString(resourceGroup().id)))]",
+      "metadata": {
+        "description": "Cosmos DB account name, max length 44 characters"
+      }
+    },
+    "roleDefinitionName": {
+      "type": "string",
+      "defaultValue": "My Read Write Role",
+      "metadata": {
+        "description": "Friendly name for the SQL Role Definition"
+      }
+    },
+    "dataActions": {
+      "type": "array",
+      "defaultValue": [
+        "Microsoft.DocumentDB/databaseAccounts/readMetadata",
+        "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/*"
+      ],
+      "metadata": {
+        "description": "Data actions permitted by the Role Definition"
+      }
+    },
+    "principalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object ID of the AAD identity. Must be a GUID."
+      }
+    }
+  },
+  "variables": {
+    "locations": [
+      {
+        "locationName": "[parameters('location')]",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      }
+    ],
+    "roleDefinitionId": "[guid('sql-role-definition-', parameters('principalId'), resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')))]",
+    "roleAssignmentId": "[guid(variables('roleDefinitionId'), parameters('principalId'), resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2024-11-15",
+      "name": "[parameters('accountName')]",
+      "kind": "GlobalDocumentDB",
+      "location": "[parameters('location')]",
+      "properties": {
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "Session"
+        },
+        "locations": "[variables('locations')]",
+        "databaseAccountOfferType": "Standard",
+        "enableAutomaticFailover": false,
+        "enableMultipleWriteLocations": false
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions",
+      "apiVersion": "2024-11-15",
+      "name": "[format('{0}/{1}', parameters('accountName'), variables('roleDefinitionId'))]",
+      "properties": {
+        "roleName": "[parameters('roleDefinitionName')]",
+        "type": "CustomRole",
+        "assignableScopes": [
+          "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+        ],
+        "permissions": [
+          {
+            "dataActions": "[parameters('dataActions')]"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+      "apiVersion": "2024-11-15",
+      "name": "[format('{0}/{1}', parameters('accountName'), variables('roleAssignmentId'))]",
+      "properties": {
+        "roleDefinitionId": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('accountName'), variables('roleDefinitionId'))]",
+        "principalId": "[parameters('principalId')]",
+        "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('accountName'), variables('roleDefinitionId'))]"
+      ]
+    }
+  ]
+}
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.33.93.31351",
+      "templateHash": "8599351742985299104"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[toLower(format('sql-rbac-{0}', uniqueString(resourceGroup().id)))]",
+      "metadata": {
+        "description": "Cosmos DB account name, max length 44 characters"
+      }
+    },
+    "roleDefinitionName": {
+      "type": "string",
+      "defaultValue": "My Read Write Role",
+      "metadata": {
+        "description": "Friendly name for the SQL Role Definition"
+      }
+    },
+    "dataActions": {
+      "type": "array",
+      "defaultValue": [
+        "Microsoft.DocumentDB/databaseAccounts/readMetadata",
+        "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/*"
+      ],
+      "metadata": {
+        "description": "Data actions permitted by the Role Definition"
+      }
+    },
+    "principalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object ID of the AAD identity. Must be a GUID."
+      }
+    }
+  },
+  "variables": {
+    "locations": [
+      {
+        "locationName": "[parameters('location')]",
+        "failoverPriority": 0,
+        "isZoneRedundant": false
+      }
+    ],
+    "roleDefinitionId": "[guid('sql-role-definition-', parameters('principalId'), resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')))]",
+    "roleAssignmentId": "[guid(variables('roleDefinitionId'), parameters('principalId'), resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName')))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2024-11-15",
+      "name": "[parameters('accountName')]",
+      "kind": "GlobalDocumentDB",
+      "location": "[parameters('location')]",
+      "properties": {
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "Session"
+        },
+        "locations": "[variables('locations')]",
+        "databaseAccountOfferType": "Standard",
+        "enableAutomaticFailover": false,
+        "enableMultipleWriteLocations": false
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions",
+      "apiVersion": "2024-11-15",
+      "name": "[format('{0}/{1}', parameters('accountName'), variables('roleDefinitionId'))]",
+      "properties": {
+        "roleName": "[parameters('roleDefinitionName')]",
+        "type": "CustomRole",
+        "assignableScopes": [
+          "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+        ],
+        "permissions": [
+          {
+            "dataActions": "[parameters('dataActions')]"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+      "apiVersion": "2024-11-15",
+      "name": "[format('{0}/{1}', parameters('accountName'), variables('roleAssignmentId'))]",
+      "properties": {
+        "roleDefinitionId": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('accountName'), variables('roleDefinitionId'))]",
+        "principalId": "[parameters('principalId')]",
+        "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('accountName'))]",
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions', parameters('accountName'), variables('roleDefinitionId'))]"
+      ]
+    }
+  ]
+}
+
+Free tier Azure Cosmos DB account
+This template creates a free-tier Azure Cosmos DB account and a database with shared throughput that can be shared with up to 25 containers. This template is also available for one-click deploy from Azure Quickstart Templates Gallery.
+
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.25.53.49325",
+      "templateHash": "4212411783236078703"
+    }
+  },
+  "parameters": {
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[format('cosmos-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Cosmos DB account name"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the Cosmos DB account."
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name for the SQL API database"
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name for the SQL API container"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2023-11-15",
+      "name": "[toLower(parameters('accountName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "enableFreeTier": true,
+        "databaseAccountOfferType": "Standard",
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "Session"
+        },
+        "locations": [
+          {
+            "locationName": "[parameters('location')]"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2023-11-15",
+      "name": "[format('{0}/{1}', toLower(parameters('accountName')), parameters('databaseName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('databaseName')]"
+        },
+        "options": {
+          "throughput": 1000
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', toLower(parameters('accountName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2023-11-15",
+      "name": "[format('{0}/{1}/{2}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('containerName')]",
+          "partitionKey": {
+            "paths": [
+              "/myPartitionKey"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/_etag/?"
+              }
+            ]
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "location": {
+      "type": "string",
+      "value": "[parameters('location')]"
+    },
+    "name": {
+      "type": "string",
+      "value": "[parameters('containerName')]"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[resourceGroup().name]"
+    },
+    "resourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]"
+    }
+  }
+}
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.25.53.49325",
+      "templateHash": "4212411783236078703"
+    }
+  },
+  "parameters": {
+    "accountName": {
+      "type": "string",
+      "defaultValue": "[format('cosmos-{0}', uniqueString(resourceGroup().id))]",
+      "metadata": {
+        "description": "Cosmos DB account name"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the Cosmos DB account."
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name for the SQL API database"
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name for the SQL API container"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2023-11-15",
+      "name": "[toLower(parameters('accountName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "enableFreeTier": true,
+        "databaseAccountOfferType": "Standard",
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "Session"
+        },
+        "locations": [
+          {
+            "locationName": "[parameters('location')]"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases",
+      "apiVersion": "2023-11-15",
+      "name": "[format('{0}/{1}', toLower(parameters('accountName')), parameters('databaseName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('databaseName')]"
+        },
+        "options": {
+          "throughput": 1000
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts', toLower(parameters('accountName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers",
+      "apiVersion": "2023-11-15",
+      "name": "[format('{0}/{1}/{2}', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]",
+      "properties": {
+        "resource": {
+          "id": "[parameters('containerName')]",
+          "partitionKey": {
+            "paths": [
+              "/myPartitionKey"
+            ],
+            "kind": "Hash"
+          },
+          "indexingPolicy": {
+            "indexingMode": "consistent",
+            "includedPaths": [
+              {
+                "path": "/*"
+              }
+            ],
+            "excludedPaths": [
+              {
+                "path": "/_etag/?"
+              }
+            ]
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases', toLower(parameters('accountName')), parameters('databaseName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "location": {
+      "type": "string",
+      "value": "[parameters('location')]"
+    },
+    "name": {
+      "type": "string",
+      "value": "[parameters('containerName')]"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[resourceGroup().name]"
+    },
+    "resourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers', toLower(parameters('accountName')), parameters('databaseName'), parameters('containerName'))]"
+    }
+  }
+}
+Next steps
+Here are some additional resources:
+Azure Resource Manager documentation
+Azure Cosmos DB resource provider schema
+Azure Cosmos DB Quickstart templates
+Troubleshoot common Azure Resource Manager deployment errors
+Feedback
+Was this page helpful?
+Additional resources

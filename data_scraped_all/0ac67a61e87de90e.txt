@@ -1,0 +1,436 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Configure one or more Always On availability group listeners
+Article
+2024-06-18
+12 contributors
+In this article
+Applies to:SQL Server on Azure VM
+Tip
+There are manymethods to deploy an availability group. Simplify your deployment and eliminate the need for an Azure Load Balancer or distributed network name (DNN) for your Always On availability group by creating your SQL Server virtual machines (VMs) inmultiple subnetswithin the same Azure virtual network. If you've already created your availability group in a single subnet, you canmigrate it to a multi-subnet environment.
+This document shows you how to use PowerShell to do one of the following tasks:
+create a load balancer
+add IP addresses to an existing load balancer for SQL Server availability groups.
+An availability group listener is a virtual network name that clients connect to for database access. On Azure Virtual Machines in a single subnet, a load balancer holds the IP address for the listener. The load balancer routes traffic to the instance of SQL Server that is listening on the probe port. Usually, an availability group uses an internal load balancer. An Azure internal load balancer can host one or many IP addresses. Each IP address uses a specific probe port.
+The ability to assign multiple IP addresses to an internal load balancer is new to Azure and is only available in the Resource Manager model. To complete this task, you need to have a SQL Server availability group deployed on Azure Virtual Machines in the Resource Manager model. Both SQL Server virtual machines must belong to the same availability set. You can use theMicrosoft templateto automatically create the availability group in Azure Resource Manager. This template automatically creates the availability group, including the internal load balancer for you. If you prefer, you canmanually configure an Always On availability group.
+To complete the steps in this article, your availability groups need to be already configured.
+Related topics include:
+Configure Always On Availability Groups in Azure VM (GUI)
+Configure a VNet-to-VNet connection by using Azure Resource Manager and PowerShell
+Note
+This article uses the Azure Az PowerShell module, which is the recommended PowerShell module for interacting with Azure. To get started with the Az PowerShell module, seeInstall Azure PowerShell. To learn how to migrate to the Az PowerShell module, seeMigrate Azure PowerShell from AzureRM to Az.
+Start your PowerShell session
+Run theConnect-Az Accountcmdlet and you will be presented with a sign-in screen to enter your credentials. Use the same credentials that you use to sign in to the Azure portal.
+Connect-AzAccount
+Connect-AzAccount
+If you have multiple subscriptions use theSet-AzContextcmdlet to select which subscription your PowerShell session should use. To see what subscription the current PowerShell session is using, runGet-AzContext. To see all your subscriptions, runGet-AzSubscription.
+Set-AzContext -SubscriptionId 'aaaa0a0a-bb1b-cc2c-dd3d-eeeeee4e4e4e'
+Set-AzContext -SubscriptionId 'aaaa0a0a-bb1b-cc2c-dd3d-eeeeee4e4e4e'
+Verify PowerShell version
+The examples in this article are tested using Azure PowerShell module version 5.4.1.
+Verify that your PowerShell module is 5.4.1 or later.
+SeeInstall the Azure PowerShell module.
+Configure the Windows Firewall
+Configure the Windows Firewall to allow SQL Server access. The firewall rules allow TCP connections to the ports use by the SQL Server instance, and the listener probe. For detailed instructions, seeConfigure a Windows Firewall for Database Engine Access. Create an inbound rule for the SQL Server port and for the probe port.
+If you are restricting access with an Azure Network Security Group, ensure that the allow rules include the backend SQL Server VM IP addresses, and the load balancer floating IP addresses for the AG listener and the cluster core IP address, if applicable.
+Determine the load balancer SKU required
+Azure load balanceris available in two SKUs: Basic & Standard. The standard load balancer is recommended as the  Basic SKU is scheduled to beretired on September 30, 2025. The standard load balancer is required for virtual machines in an availability zone.  Standard load balancer requires that all VM IP addresses use standard IP addresses.
+The currentMicrosoft templatefor an availability group uses a basic load balancer with basic IP addresses.
+Note
+You will need to configure aservice endpointif you use a standard load balancer and Azure Storage for the cloud witness.
+The examples in this article specify a standard load balancer. In the examples, the script includes-sku Standard.
+-sku Standard
+$ILB= New-AzLoadBalancer -Location $Location -Name $ILBName -ResourceGroupName $ResourceGroupName -FrontendIpConfiguration $FEConfig -BackendAddressPool $BEConfig -LoadBalancingRule $ILBRule -Probe $SQLHealthProbe -sku Standard
+$ILB= New-AzLoadBalancer -Location $Location -Name $ILBName -ResourceGroupName $ResourceGroupName -FrontendIpConfiguration $FEConfig -BackendAddressPool $BEConfig -LoadBalancingRule $ILBRule -Probe $SQLHealthProbe -sku Standard
+To create a basic load balancer, remove-sku Standardfrom the line that creates the load balancer. For example:
+-sku Standard
+$ILB= New-AzLoadBalancer -Location $Location -Name $ILBName -ResourceGroupName $ResourceGroupName -FrontendIpConfiguration $FEConfig -BackendAddressPool $BEConfig -LoadBalancingRule $ILBRule -Probe $SQLHealthProbe
+$ILB= New-AzLoadBalancer -Location $Location -Name $ILBName -ResourceGroupName $ResourceGroupName -FrontendIpConfiguration $FEConfig -BackendAddressPool $BEConfig -LoadBalancingRule $ILBRule -Probe $SQLHealthProbe
+Example Script: Create an internal load balancer with PowerShell
+Note
+If you created your availability group with theMicrosoft template, the internal load balancer was already created.
+The following PowerShell script creates an internal load balancer, configures the load-balancing rules, and sets an IP address for the load balancer. To run the script, open Windows PowerShell ISE, and then paste the script in the Script pane. UseConnect-AzAccountto log in to PowerShell. If you have multiple Azure subscriptions, useSelect-AzSubscriptionto set the subscription.
+Connect-AzAccount
+Select-AzSubscription
+# Connect-AzAccount
+# Select-AzSubscription -SubscriptionId <xxxxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx>
+
+$ResourceGroupName = "<Resource Group Name>" # Resource group name
+$VNetName = "<Virtual Network Name>"         # Virtual network name
+$SubnetName = "<Subnet Name>"                # Subnet name
+$ILBName = "<Load Balancer Name>"            # ILB name
+$Location = "<Azure Region>"                 # Azure location
+$VMNames = "<VM1>","<VM2>"                   # Virtual machine names
+
+$ILBIP = "<n.n.n.n>"                         # IP address
+[int]$ListenerPort = "<nnnn>"                # AG listener port
+[int]$ProbePort = "<nnnn>"                   # Probe port
+
+$LBProbeName ="ILBPROBE_$ListenerPort"       # The Load balancer Probe Object Name              
+$LBConfigRuleName = "ILBCR_$ListenerPort"    # The Load Balancer Rule Object Name
+
+$FrontEndConfigurationName = "FE_SQLAGILB_1" # Object name for the front-end configuration 
+$BackEndConfigurationName ="BE_SQLAGILB_1"   # Object name for the back-end configuration
+
+$VNet = Get-AzVirtualNetwork -Name $VNetName -ResourceGroupName $ResourceGroupName 
+
+$Subnet = Get-AzVirtualNetworkSubnetConfig -VirtualNetwork $VNet -Name $SubnetName 
+
+$FEConfig = New-AzLoadBalancerFrontendIpConfig -Name $FrontEndConfigurationName -PrivateIpAddress $ILBIP -SubnetId $Subnet.id
+
+$BEConfig = New-AzLoadBalancerBackendAddressPoolConfig -Name $BackEndConfigurationName 
+
+$SQLHealthProbe = New-AzLoadBalancerProbeConfig -Name $LBProbeName -Protocol tcp -Port $ProbePort -IntervalInSeconds 15 -ProbeCount 2
+
+$ILBRule = New-AzLoadBalancerRuleConfig -Name $LBConfigRuleName -FrontendIpConfiguration $FEConfig -BackendAddressPool $BEConfig -Probe $SQLHealthProbe -Protocol tcp -FrontendPort $ListenerPort -BackendPort $ListenerPort -LoadDistribution Default -EnableFloatingIP 
+
+$ILB= New-AzLoadBalancer -Location $Location -Name $ILBName -ResourceGroupName $ResourceGroupName -FrontendIpConfiguration $FEConfig -BackendAddressPool $BEConfig -LoadBalancingRule $ILBRule -Probe $SQLHealthProbe 
+
+$bepool = Get-AzLoadBalancerBackendAddressPoolConfig -Name $BackEndConfigurationName -LoadBalancer $ILB 
+
+foreach($VMName in $VMNames)
+    {
+        $VM = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName 
+        $NICName = ($vm.NetworkProfile.NetworkInterfaces.Id.split('/') | select -last 1)
+        $NIC = Get-AzNetworkInterface -name $NICName -ResourceGroupName $ResourceGroupName
+        $NIC.IpConfigurations[0].LoadBalancerBackendAddressPools = $BEPool
+        Set-AzNetworkInterface -NetworkInterface $NIC
+        start-AzVM -ResourceGroupName $ResourceGroupName -Name $VM.Name 
+    }
+# Connect-AzAccount
+# Select-AzSubscription -SubscriptionId <xxxxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx>
+
+$ResourceGroupName = "<Resource Group Name>" # Resource group name
+$VNetName = "<Virtual Network Name>"         # Virtual network name
+$SubnetName = "<Subnet Name>"                # Subnet name
+$ILBName = "<Load Balancer Name>"            # ILB name
+$Location = "<Azure Region>"                 # Azure location
+$VMNames = "<VM1>","<VM2>"                   # Virtual machine names
+
+$ILBIP = "<n.n.n.n>"                         # IP address
+[int]$ListenerPort = "<nnnn>"                # AG listener port
+[int]$ProbePort = "<nnnn>"                   # Probe port
+
+$LBProbeName ="ILBPROBE_$ListenerPort"       # The Load balancer Probe Object Name              
+$LBConfigRuleName = "ILBCR_$ListenerPort"    # The Load Balancer Rule Object Name
+
+$FrontEndConfigurationName = "FE_SQLAGILB_1" # Object name for the front-end configuration 
+$BackEndConfigurationName ="BE_SQLAGILB_1"   # Object name for the back-end configuration
+
+$VNet = Get-AzVirtualNetwork -Name $VNetName -ResourceGroupName $ResourceGroupName 
+
+$Subnet = Get-AzVirtualNetworkSubnetConfig -VirtualNetwork $VNet -Name $SubnetName 
+
+$FEConfig = New-AzLoadBalancerFrontendIpConfig -Name $FrontEndConfigurationName -PrivateIpAddress $ILBIP -SubnetId $Subnet.id
+
+$BEConfig = New-AzLoadBalancerBackendAddressPoolConfig -Name $BackEndConfigurationName 
+
+$SQLHealthProbe = New-AzLoadBalancerProbeConfig -Name $LBProbeName -Protocol tcp -Port $ProbePort -IntervalInSeconds 15 -ProbeCount 2
+
+$ILBRule = New-AzLoadBalancerRuleConfig -Name $LBConfigRuleName -FrontendIpConfiguration $FEConfig -BackendAddressPool $BEConfig -Probe $SQLHealthProbe -Protocol tcp -FrontendPort $ListenerPort -BackendPort $ListenerPort -LoadDistribution Default -EnableFloatingIP 
+
+$ILB= New-AzLoadBalancer -Location $Location -Name $ILBName -ResourceGroupName $ResourceGroupName -FrontendIpConfiguration $FEConfig -BackendAddressPool $BEConfig -LoadBalancingRule $ILBRule -Probe $SQLHealthProbe 
+
+$bepool = Get-AzLoadBalancerBackendAddressPoolConfig -Name $BackEndConfigurationName -LoadBalancer $ILB 
+
+foreach($VMName in $VMNames)
+    {
+        $VM = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VMName 
+        $NICName = ($vm.NetworkProfile.NetworkInterfaces.Id.split('/') | select -last 1)
+        $NIC = Get-AzNetworkInterface -name $NICName -ResourceGroupName $ResourceGroupName
+        $NIC.IpConfigurations[0].LoadBalancerBackendAddressPools = $BEPool
+        Set-AzNetworkInterface -NetworkInterface $NIC
+        start-AzVM -ResourceGroupName $ResourceGroupName -Name $VM.Name 
+    }
+Example script: Add an IP address to an existing load balancer with PowerShell
+To use more than one availability group, add an additional IP address to the load balancer. Each IP address requires its own load-balancing rule, probe port, and front port.
+Add only the primary IP address of the VM to the back-end pool of the load balancer as thesecondary VM IP address does not support floating IP.
+The front-end port is the port that applications use to connect to the SQL Server instance. IP addresses for different availability groups can use the same front-end port.
+Note
+For SQL Server availability groups, each IP address requires a specific probe port. For example, if one IP address on a load balancer uses probe port 59999, no other IP addresses on that load balancer can use probe port 59999.
+For information about load balancer limits, seePrivate front end IP per load balancerunderNetworking Limits - Azure Resource Manager.
+For information about availability group limits, seeRestrictions (Availability Groups).
+The following script adds a new IP address to an existing load balancer. The ILB uses the listener port for the load-balancing front-end port. This port can be the port that SQL Server is listening on. For default instances of SQL Server, the port is 1433. The load-balancing rule for an availability group requires a floating IP (direct server return) so the back-end port is the same as the front-end port. Update the variables for your environment.
+# Connect-AzAccount
+# Select-AzSubscription -SubscriptionId <xxxxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx>
+
+$ResourceGroupName = "<ResourceGroup>"          # Resource group name
+$VNetName = "<VirtualNetwork>"                  # Virtual network name
+$SubnetName = "<Subnet>"                        # Subnet name
+$ILBName = "<ILBName>"                          # ILB name                      
+
+$ILBIP = "<n.n.n.n>"                            # IP address
+[int]$ListenerPort = "<nnnn>"                   # AG listener port
+[int]$ProbePort = "<nnnnn>"                     # Probe port 
+
+$ILB = Get-AzLoadBalancer -Name $ILBName -ResourceGroupName $ResourceGroupName 
+
+$count = $ILB.FrontendIpConfigurations.Count+1
+$FrontEndConfigurationName ="FE_SQLAGILB_$count"  
+
+$LBProbeName = "ILBPROBE_$count"
+$LBConfigrulename = "ILBCR_$count"
+
+$VNet = Get-AzVirtualNetwork -Name $VNetName -ResourceGroupName $ResourceGroupName 
+$Subnet = Get-AzVirtualNetworkSubnetConfig -VirtualNetwork $VNet -Name $SubnetName
+
+$ILB | Add-AzLoadBalancerFrontendIpConfig -Name $FrontEndConfigurationName -PrivateIpAddress $ILBIP -SubnetId $Subnet.Id 
+
+$ILB | Add-AzLoadBalancerProbeConfig -Name $LBProbeName  -Protocol Tcp -Port $Probeport -ProbeCount 2 -IntervalInSeconds 15  | Set-AzLoadBalancer 
+
+$ILB = Get-AzLoadBalancer -Name $ILBname -ResourceGroupName $ResourceGroupName
+
+$FEConfig = get-AzLoadBalancerFrontendIpConfig -Name $FrontEndConfigurationName -LoadBalancer $ILB
+
+$SQLHealthProbe  = Get-AzLoadBalancerProbeConfig -Name $LBProbeName -LoadBalancer $ILB
+
+$BEConfig = Get-AzLoadBalancerBackendAddressPoolConfig -Name $ILB.BackendAddressPools[0].Name -LoadBalancer $ILB 
+
+$ILB | Add-AzLoadBalancerRuleConfig -Name $LBConfigRuleName -FrontendIpConfiguration $FEConfig  -BackendAddressPool $BEConfig -Probe $SQLHealthProbe -Protocol tcp -FrontendPort  $ListenerPort -BackendPort $ListenerPort -LoadDistribution Default -EnableFloatingIP | Set-AzLoadBalancer
+# Connect-AzAccount
+# Select-AzSubscription -SubscriptionId <xxxxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx>
+
+$ResourceGroupName = "<ResourceGroup>"          # Resource group name
+$VNetName = "<VirtualNetwork>"                  # Virtual network name
+$SubnetName = "<Subnet>"                        # Subnet name
+$ILBName = "<ILBName>"                          # ILB name                      
+
+$ILBIP = "<n.n.n.n>"                            # IP address
+[int]$ListenerPort = "<nnnn>"                   # AG listener port
+[int]$ProbePort = "<nnnnn>"                     # Probe port 
+
+$ILB = Get-AzLoadBalancer -Name $ILBName -ResourceGroupName $ResourceGroupName 
+
+$count = $ILB.FrontendIpConfigurations.Count+1
+$FrontEndConfigurationName ="FE_SQLAGILB_$count"  
+
+$LBProbeName = "ILBPROBE_$count"
+$LBConfigrulename = "ILBCR_$count"
+
+$VNet = Get-AzVirtualNetwork -Name $VNetName -ResourceGroupName $ResourceGroupName 
+$Subnet = Get-AzVirtualNetworkSubnetConfig -VirtualNetwork $VNet -Name $SubnetName
+
+$ILB | Add-AzLoadBalancerFrontendIpConfig -Name $FrontEndConfigurationName -PrivateIpAddress $ILBIP -SubnetId $Subnet.Id 
+
+$ILB | Add-AzLoadBalancerProbeConfig -Name $LBProbeName  -Protocol Tcp -Port $Probeport -ProbeCount 2 -IntervalInSeconds 15  | Set-AzLoadBalancer 
+
+$ILB = Get-AzLoadBalancer -Name $ILBname -ResourceGroupName $ResourceGroupName
+
+$FEConfig = get-AzLoadBalancerFrontendIpConfig -Name $FrontEndConfigurationName -LoadBalancer $ILB
+
+$SQLHealthProbe  = Get-AzLoadBalancerProbeConfig -Name $LBProbeName -LoadBalancer $ILB
+
+$BEConfig = Get-AzLoadBalancerBackendAddressPoolConfig -Name $ILB.BackendAddressPools[0].Name -LoadBalancer $ILB 
+
+$ILB | Add-AzLoadBalancerRuleConfig -Name $LBConfigRuleName -FrontendIpConfiguration $FEConfig  -BackendAddressPool $BEConfig -Probe $SQLHealthProbe -Protocol tcp -FrontendPort  $ListenerPort -BackendPort $ListenerPort -LoadDistribution Default -EnableFloatingIP | Set-AzLoadBalancer
+Configure the listener
+The availability group listener is an IP address and network name that the SQL Server availability group listens on. To create the availability group listener:
+Get the name of the cluster network resource:a. Use RDP to connect to the Azure virtual machine that hosts the primary replica.b. OpenFailover Cluster Manager.c. Select theNetworksnode, and note the cluster network name. Use this name in the$ClusterNetworkNamevariable in the PowerShell script. In the following image, the cluster network name isCluster Network 1:
+Get the name of the cluster network resource:
+a. Use RDP to connect to the Azure virtual machine that hosts the primary replica.
+b. OpenFailover Cluster Manager.
+c. Select theNetworksnode, and note the cluster network name. Use this name in the$ClusterNetworkNamevariable in the PowerShell script. In the following image, the cluster network name isCluster Network 1:
+$ClusterNetworkName
+
+Add the client access point. The client access point is the network name that applications use to connect to the databases in an availability group.a. InFailover Cluster Manager, expand the cluster name, and then selectRoles.b. On theRolespane, right-click the availability group name, and then selectAdd Resource>Client Access Point.c. In theNamebox, create a name for this new listener.
+The name for the new listener is the network name that applications use to connect to databases in the SQL Server availability group.d. To finish creating the listener, selectNexttwice, and then selectFinish. Don't bring the listener or resource online at this point.
+Add the client access point. The client access point is the network name that applications use to connect to the databases in an availability group.
+a. InFailover Cluster Manager, expand the cluster name, and then selectRoles.
+b. On theRolespane, right-click the availability group name, and then selectAdd Resource>Client Access Point.
+
+c. In theNamebox, create a name for this new listener.
+The name for the new listener is the network name that applications use to connect to databases in the SQL Server availability group.
+d. To finish creating the listener, selectNexttwice, and then selectFinish. Don't bring the listener or resource online at this point.
+Take the cluster role for the availability group offline. InFailover Cluster Manager, underRoles, right-click the role, and then selectStop Role.
+Take the cluster role for the availability group offline. InFailover Cluster Manager, underRoles, right-click the role, and then selectStop Role.
+Configure the IP resource for the availability group:a. Select theResourcestab, and then expand the client access point that you created. The client access point is offline.b. Right-click the IP resource, and then selectProperties. Note the name of the IP address, and use it in the$IPResourceNamevariable in the PowerShell script.c. UnderIP Address, selectStatic IP Address. Set the IP address as the same address that you used when you set the load balancer address on the Azure portal.
+Configure the IP resource for the availability group:
+a. Select theResourcestab, and then expand the client access point that you created. The client access point is offline.
+
+b. Right-click the IP resource, and then selectProperties. Note the name of the IP address, and use it in the$IPResourceNamevariable in the PowerShell script.
+$IPResourceName
+c. UnderIP Address, selectStatic IP Address. Set the IP address as the same address that you used when you set the load balancer address on the Azure portal.
+
+Make the SQL Server availability group dependent on the client access point:a. InFailover Cluster Manager, selectRoles, and then select your availability group.b. On theResourcestab, underOther Resources, right-click the availability group resource, and then selectProperties.c. On theDependenciestab, add the name of the client access point (the listener).d. SelectOK.
+Make the SQL Server availability group dependent on the client access point:
+a. InFailover Cluster Manager, selectRoles, and then select your availability group.
+b. On theResourcestab, underOther Resources, right-click the availability group resource, and then selectProperties.
+c. On theDependenciestab, add the name of the client access point (the listener).
+
+d. SelectOK.
+Make the client access point dependent on the IP address:a. InFailover Cluster Manager, selectRoles, and then select your availability group.b. On theResourcestab, right-click the client access point underServer Name, and then selectProperties.c. Select theDependenciestab. Verify that the IP address is a dependency. If it isn't, set a dependency on the IP address. If multiple resources are listed, verify that the IP addresses haveOR, notAND, dependencies. Then selectOK.TipYou can validate that the dependencies are correctly configured. InFailover Cluster Manager, go toRoles, right-click the availability group, selectMore Actions, and then selectShow Dependency Report. When the dependencies are correctly configured, the availability group is dependent on the network name, and the network name is dependent on the IP address.
+Make the client access point dependent on the IP address:
+a. InFailover Cluster Manager, selectRoles, and then select your availability group.
+b. On theResourcestab, right-click the client access point underServer Name, and then selectProperties.
+
+c. Select theDependenciestab. Verify that the IP address is a dependency. If it isn't, set a dependency on the IP address. If multiple resources are listed, verify that the IP addresses haveOR, notAND, dependencies. Then selectOK.
+
+Tip
+You can validate that the dependencies are correctly configured. InFailover Cluster Manager, go toRoles, right-click the availability group, selectMore Actions, and then selectShow Dependency Report. When the dependencies are correctly configured, the availability group is dependent on the network name, and the network name is dependent on the IP address.
+Set the cluster parameters in PowerShell:a. Copy the following PowerShell script to one of your SQL Server instances. Update the variables for your environment.$ClusterNetworkNamefind the name in theFailover Cluster Managerby selectingNetworks, right-click the network and selectProperties. The$ClusterNetworkNameis underNameon the General tab.$IPResourceNameis the name given to the IP Address resource in theFailover Cluster Manager. This is found in theFailover Cluster Managerby selectingRoles, select theSQL Server AG or FCI name, select theResourcestab underServer Name, right-click the IP address resource and selectProperties. The correct value is underNameon the General tab.$ListenerILBIPis the IP address that you created on the Azure load balancer for the availability group listener. Find the$ListenerILBIPin theFailover Cluster Manageron the same properties page as the SQL Server AG/FCI Listener Resource Name.$ListenerProbePortis the port that you configured on the Azure load balancer for the availability group listener, such as 59999. Any unused TCP port is valid.$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<IPResourceName>" # The IP address resource name.
+$ListenerILBIP = "<n.n.n.n>" # The IP address of the internal load balancer. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ListenerProbePort = <nnnnn>
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ListenerILBIP";"ProbePort"=$ListenerProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}b. Set the cluster parameters by running the PowerShell script on one of the cluster nodes.NoteIf your SQL Server instances are in separate regions, you need to run the PowerShell script twice. The first time, use the$ListenerILBIPand$ListenerProbePortvalues from the first region. The second time, use the$ListenerILBIPand$ListenerProbePortvalues from the second region. The cluster network name and the cluster IP resource name are also different for each region.
+Set the cluster parameters in PowerShell:
+a. Copy the following PowerShell script to one of your SQL Server instances. Update the variables for your environment.
+$ClusterNetworkNamefind the name in theFailover Cluster Managerby selectingNetworks, right-click the network and selectProperties. The$ClusterNetworkNameis underNameon the General tab.
+$ClusterNetworkNamefind the name in theFailover Cluster Managerby selectingNetworks, right-click the network and selectProperties. The$ClusterNetworkNameis underNameon the General tab.
+$ClusterNetworkName
+$IPResourceNameis the name given to the IP Address resource in theFailover Cluster Manager. This is found in theFailover Cluster Managerby selectingRoles, select theSQL Server AG or FCI name, select theResourcestab underServer Name, right-click the IP address resource and selectProperties. The correct value is underNameon the General tab.
+$IPResourceNameis the name given to the IP Address resource in theFailover Cluster Manager. This is found in theFailover Cluster Managerby selectingRoles, select theSQL Server AG or FCI name, select theResourcestab underServer Name, right-click the IP address resource and selectProperties. The correct value is underNameon the General tab.
+$IPResourceName
+$ListenerILBIPis the IP address that you created on the Azure load balancer for the availability group listener. Find the$ListenerILBIPin theFailover Cluster Manageron the same properties page as the SQL Server AG/FCI Listener Resource Name.
+$ListenerILBIPis the IP address that you created on the Azure load balancer for the availability group listener. Find the$ListenerILBIPin theFailover Cluster Manageron the same properties page as the SQL Server AG/FCI Listener Resource Name.
+$ListenerILBIP
+$ListenerProbePortis the port that you configured on the Azure load balancer for the availability group listener, such as 59999. Any unused TCP port is valid.
+$ListenerProbePortis the port that you configured on the Azure load balancer for the availability group listener, such as 59999. Any unused TCP port is valid.
+$ListenerProbePort
+$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<IPResourceName>" # The IP address resource name.
+$ListenerILBIP = "<n.n.n.n>" # The IP address of the internal load balancer. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ListenerProbePort = <nnnnn>
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ListenerILBIP";"ProbePort"=$ListenerProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<IPResourceName>" # The IP address resource name.
+$ListenerILBIP = "<n.n.n.n>" # The IP address of the internal load balancer. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ListenerProbePort = <nnnnn>
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ListenerILBIP";"ProbePort"=$ListenerProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+b. Set the cluster parameters by running the PowerShell script on one of the cluster nodes.
+Note
+If your SQL Server instances are in separate regions, you need to run the PowerShell script twice. The first time, use the$ListenerILBIPand$ListenerProbePortvalues from the first region. The second time, use the$ListenerILBIPand$ListenerProbePortvalues from the second region. The cluster network name and the cluster IP resource name are also different for each region.
+$ListenerILBIP
+$ListenerProbePort
+$ListenerILBIP
+$ListenerProbePort
+Bring the cluster role for the availability group online. InFailover Cluster Manager, underRoles, right-click the role, and then selectStart Role.
+Bring the cluster role for the availability group online. InFailover Cluster Manager, underRoles, right-click the role, and then selectStart Role.
+If necessary, repeat the preceding steps to set the cluster parameters for the IP address of the Windows Server failover cluster:
+Get the IP address name of the Windows Server failover cluster. InFailover Cluster Manager, underCluster Core Resources, locateServer Name.
+Get the IP address name of the Windows Server failover cluster. InFailover Cluster Manager, underCluster Core Resources, locateServer Name.
+Right-clickIP Address, and then selectProperties.
+Right-clickIP Address, and then selectProperties.
+Copy the name of the IP address fromName. It might beCluster IP Address.
+Copy the name of the IP address fromName. It might beCluster IP Address.
+Set the cluster parameters in PowerShell:a. Copy the following PowerShell script to one of your SQL Server instances. Update the variables for your environment.$ClusterCoreIPis the IP address that you created on the Azure load balancer for the Windows Server failover cluster's core cluster resource. It's different from the IP address for the availability group listener.$ClusterProbePortis the port that you configured on the Azure load balancer for the Windows Server failover cluster's health probe. It's different from the probe for the availability group listener.$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<ClusterIPResourceName>" # The IP address resource name.
+$ClusterCoreIP = "<n.n.n.n>" # The IP address of the cluster IP resource. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ClusterProbePort = <nnnnn> # The probe port from WSFCEndPointprobe in the Azure portal. This port must be different from the probe port for the availability group listener.
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ClusterCoreIP";"ProbePort"=$ClusterProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}b. Set the cluster parameters by running the PowerShell script on one of the cluster nodes.
+Set the cluster parameters in PowerShell:
+a. Copy the following PowerShell script to one of your SQL Server instances. Update the variables for your environment.
+$ClusterCoreIPis the IP address that you created on the Azure load balancer for the Windows Server failover cluster's core cluster resource. It's different from the IP address for the availability group listener.
+$ClusterCoreIPis the IP address that you created on the Azure load balancer for the Windows Server failover cluster's core cluster resource. It's different from the IP address for the availability group listener.
+$ClusterCoreIP
+$ClusterProbePortis the port that you configured on the Azure load balancer for the Windows Server failover cluster's health probe. It's different from the probe for the availability group listener.
+$ClusterProbePortis the port that you configured on the Azure load balancer for the Windows Server failover cluster's health probe. It's different from the probe for the availability group listener.
+$ClusterProbePort
+$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<ClusterIPResourceName>" # The IP address resource name.
+$ClusterCoreIP = "<n.n.n.n>" # The IP address of the cluster IP resource. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ClusterProbePort = <nnnnn> # The probe port from WSFCEndPointprobe in the Azure portal. This port must be different from the probe port for the availability group listener.
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ClusterCoreIP";"ProbePort"=$ClusterProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<ClusterIPResourceName>" # The IP address resource name.
+$ClusterCoreIP = "<n.n.n.n>" # The IP address of the cluster IP resource. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ClusterProbePort = <nnnnn> # The probe port from WSFCEndPointprobe in the Azure portal. This port must be different from the probe port for the availability group listener.
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ClusterCoreIP";"ProbePort"=$ClusterProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+b. Set the cluster parameters by running the PowerShell script on one of the cluster nodes.
+If any SQL resource is configured to use a port between 49152 and 65536 (thedefault dynamic port range for TCP/IP), add an exclusion for each port. Such resources might include:
+SQL Server database engine
+Always On availability group listener
+Health probe for the failover cluster instance
+Database mirroring endpoint
+Cluster core IP resource
+Adding an exclusion will prevent other system processes from being dynamically assigned to the same port. For this scenario, configure the following exclusions on all cluster nodes:
+netsh int ipv4 add excludedportrange tcp startport=58888 numberofports=1 store=persistent
+netsh int ipv4 add excludedportrange tcp startport=58888 numberofports=1 store=persistent
+netsh int ipv4 add excludedportrange tcp startport=59999 numberofports=1 store=persistent
+netsh int ipv4 add excludedportrange tcp startport=59999 numberofports=1 store=persistent
+It's important to configure the port exclusion when the port is not in use. Otherwise, the command will fail with a message like "The process cannot access the file because it is being used by another process."
+To confirm that the exclusions are configured correctly, use the following command:netsh int ipv4 show excludedportrange tcp.
+netsh int ipv4 show excludedportrange tcp
+Warning
+The port for the availability group listener's health probe has to be different from the port for the cluster core IP address's health probe. In these examples, the listener port is 59999 and the cluster core IP address's health probe port is 58888. Both ports require an "allow inbound" firewall rule.
+Set the listener port in SQL Server Management Studio
+Launch SQL Server Management Studio and connect to the primary replica.
+Launch SQL Server Management Studio and connect to the primary replica.
+Navigate toAlways On High Availability>Availability Groups>Availability Group Listeners.
+Navigate toAlways On High Availability>Availability Groups>Availability Group Listeners.
+You should now see the listener name that you created in Failover Cluster Manager. Right-click the listener name and selectProperties.
+You should now see the listener name that you created in Failover Cluster Manager. Right-click the listener name and selectProperties.
+In thePortbox, specify the port number for the availability group listener by using the $EndpointPort you used earlier (1433 was the default), then selectOK.
+In thePortbox, specify the port number for the availability group listener by using the $EndpointPort you used earlier (1433 was the default), then selectOK.
+Test the connection to the listener
+To test the connection:
+UseBastionto connect to a SQL Server that is in the same virtual network, but does not own the replica. It might be the other SQL Server in the cluster.
+UseBastionto connect to a SQL Server that is in the same virtual network, but does not own the replica. It might be the other SQL Server in the cluster.
+Usesqlcmdutility to test the connection. For example, the following script establishes asqlcmdconnection to the primary replica through the listener with Windows authentication:sqlcmd -S <listenerName> -EIf the listener is using a port other than the default port (1433), specify the port in the connection string. For example, the following sqlcmd command connects to a listener at port 1435:sqlcmd -S <listenerName>,1435 -E
+Usesqlcmdutility to test the connection. For example, the following script establishes asqlcmdconnection to the primary replica through the listener with Windows authentication:
+sqlcmd -S <listenerName> -E
+sqlcmd -S <listenerName> -E
+If the listener is using a port other than the default port (1433), specify the port in the connection string. For example, the following sqlcmd command connects to a listener at port 1435:
+sqlcmd -S <listenerName>,1435 -E
+sqlcmd -S <listenerName>,1435 -E
+The SQLCMD connection automatically connects to whichever instance of SQL Server hosts the primary replica.
+Note
+Make sure that the port you specify is open on the firewall of both SQL Servers. Both servers require an inbound rule for the TCP port that you use. For more information, seeAdd or Edit Firewall Rule.
+If you're on the secondary replica VM, and you're unable to connect to the listener, it's possible the probe port was not configured correctly.
+You can use the following script to validate the probe port is correctly configured for the availability group:
+Clear-Host
+Get-ClusterResource `
+| Where-Object {$_.ResourceType.Name -like "IP Address"} `
+| Get-ClusterParameter `
+| Where-Object {($_.Name -like "Network") -or ($_.Name -like "Address") -or ($_.Name -like "ProbePort") -or ($_.Name -like "SubnetMask")}
+Clear-Host
+Get-ClusterResource `
+| Where-Object {$_.ResourceType.Name -like "IP Address"} `
+| Get-ClusterParameter `
+| Where-Object {($_.Name -like "Network") -or ($_.Name -like "Address") -or ($_.Name -like "ProbePort") -or ($_.Name -like "SubnetMask")}
+Guidelines and limitations
+Note the following guidelines on availability group listener in Azure using internal load balancer:
+With an internal load balancer, you only access the listener from within the same virtual network.
+With an internal load balancer, you only access the listener from within the same virtual network.
+If you're restricting access with an Azure Network Security Group, ensure that the allow rules include:The backend SQL Server VM IP addressesThe load balancer floating IP addresses for the AG listenerThe cluster core IP address, if applicable.
+If you're restricting access with an Azure Network Security Group, ensure that the allow rules include:
+The backend SQL Server VM IP addresses
+The load balancer floating IP addresses for the AG listener
+The cluster core IP address, if applicable.
+Create a service endpoint when using a standard load balancer with Azure Storage for the cloud witness. For more information, seeGrant access from a virtual network.
+Create a service endpoint when using a standard load balancer with Azure Storage for the cloud witness. For more information, seeGrant access from a virtual network.
+PowerShell cmdlets
+Use the following PowerShell cmdlets to create an internal load balancer for Azure Virtual Machines.
+New-AzLoadBalancercreates a load balancer.
+New-AzLoadBalancerFrontendIpConfigcreates a front-end IP configuration for a load balancer.
+New-AzLoadBalancerRuleConfigcreates a rule configuration for a load balancer.
+New-AzLoadBalancerBackendAddressPoolConfigcreates a backend address pool configuration for a load balancer.
+New-AzLoadBalancerProbeConfigcreates a probe configuration for a load balancer.
+Remove-AzLoadBalancerremoves a load balancer from an Azure resource group.
+Next steps
+To learn more, see:
+Windows Server Failover Cluster with SQL Server on Azure VMs
+Always On availability groups with SQL Server on Azure VMs
+Always On availability groups overview
+HADR settings for SQL Server on Azure VMs
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,297 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Azure Policy definitions modify effect
+Article
+2025-03-04
+3 contributors
+In this article
+Themodifyeffect is used to add, update, or remove properties or tags on a subscription or resource during creation or update. Existing non-compliant resources can also be remediated with aremediation task. Policy assignments with effect set as Modify require amanaged identityto do remediation. A common example usingmodifyeffect is updating tags on resources such as 'costCenter'.
+modify
+modify
+There are some nuances in modification behavior for resource properties. Learn more about scenarios when modification isskipped.
+A singlemodifyrule can have any number of operations. Supported operations are:
+modify
+Add,replace, orremoveresource tags. Only tags can be removed. For tags, a Modify policy should havemodeset toindexedunless the target resource is a resource group.
+indexed
+Addorreplacethe value of managed identity type (identity.type) of virtual machines and Virtual Machine Scale Sets. You can only modify theidentity.typefor virtual machines or Virtual Machine Scale Sets.
+identity.type
+identity.type
+Addorreplacethe values of certain aliases.UseGet-AzPolicyAlias | Select-Object -ExpandProperty 'Aliases' | Where-Object { $_.DefaultMetadata.Attributes -eq 'Modifiable' }in Azure PowerShell4.6.0or higher to get a list of aliases that can be used withmodify.
+UseGet-AzPolicyAlias | Select-Object -ExpandProperty 'Aliases' | Where-Object { $_.DefaultMetadata.Attributes -eq 'Modifiable' }in Azure PowerShell4.6.0or higher to get a list of aliases that can be used withmodify.
+Get-AzPolicyAlias | Select-Object -ExpandProperty 'Aliases' | Where-Object { $_.DefaultMetadata.Attributes -eq 'Modifiable' }
+modify
+Important
+If you're managing tags, it's recommended to use Modify instead of Append as Modify provides
+more operation types and the ability to remediate existing resources. However, Append is
+recommended if you aren't able to create a managed identity or Modify doesn't yet support the
+alias for the resource property.
+Modify evaluation
+Modify evaluates before the request gets processed by a Resource Provider during the creation or updating of a resource. Themodifyoperations are applied to the request content when theifcondition of the policy rule is met. Eachmodifyoperation can specify a condition that determines when it's applied.
+modify
+if
+modify
+When an alias is specified, more checks are performed to ensure that themodifyoperation doesn't change the request content in a way that causes the resource provider to reject it:
+modify
+The property the alias maps to is marked asModifiablein the request's API version.
+The token type in themodifyoperation matches the expected token type for the property in the request's API version.
+modify
+If either of these checks fail, the policy evaluation falls back to the specifiedconflictEffect.
+conflictEffect
+Important
+It's recommended that Modify definitions that include aliases use theauditconflict effectto avoid failing requests using API versions where the mapped property isn't 'Modifiable'. If the
+same alias behaves differently between API versions, conditional modify operations can be used to
+determine themodifyoperation used for each API version.
+modify
+Skipped modification
+There are some cases when modify operations are skipped during evaluation:
+Existing resources:When a policy definition using themodifyeffect is run as part of an evaluation cycle, it doesn't make changes to resources that already exist. Instead, it marks any resource that meets theifcondition as non-compliant, so they can be remediated through a remediation task.
+modify
+if
+Not applicable:When the condition of an operation in theoperationsarray is evaluated tofalse, that particular operation is skipped.
+operations
+Property not modifiable:If an alias specified for an operation isn't modifiable in the request's API version, then evaluation uses the conflict effect. If the conflict effect is set todeny, the request is blocked. If the conflict effect is set toaudit, the request is allowed through but themodifyoperation is skipped.
+modify
+Property not present:If a property is not present in the resource payload of the request, then the modification may be skipped. In some cases, modifiable properties are nested within other properties and have an alias likeMicrosoft.Storage/storageAccounts/blobServices/deleteRetentionPolicy.enabled. If the "parent" property, in this casedeleteRetentionPolicy, isn't present in the request, modification is skipped because that property is assumed to be omitted intentionally. For a practical example, go to sectionExample of property not present.
+Microsoft.Storage/storageAccounts/blobServices/deleteRetentionPolicy.enabled
+deleteRetentionPolicy
+Non VM or VMSS identity operation:When a modify operation attempts to add or replace theidentity.typefield on a resource other than a Virtual Machine or Virtual Machine Scale Set, policy evaluation is skipped altogether so the modification isn't performed. In this case, the resource is considered notapplicableto the policy.
+identity.type
+Modification of resource properties depends on the API request and the updated resource payload. The payload can depend on client used, such as Azure portal, and other factors like resource provider.
+Imagine you apply a policy that modifies tags on a virtual machine (VM). Every time the VM is updated, such as during resizing or disk changes, the tags are updated accordingly regardless of the contents of the VM payload. This is because tags are independent of the VM properties.
+However, if you apply a policy that modifies properties on a VM, modification is dependent on the resource payload. If you attempt to modify properties that are not included in the update payload, the modification will not take place. For instance, this can happen when patching theassessmentModeproperty of a VM (aliasMicrosoft.Compute/virtualMachines/osProfile.windowsConfiguration.patchSettings.assessmentMode). The property is "nested", so if its parent properties are not included in the request, this omission is assumed to be intentional and modification is skipped. For modification to take place, the resource payload should contain this context.
+assessmentMode
+Microsoft.Compute/virtualMachines/osProfile.windowsConfiguration.patchSettings.assessmentMode
+Modify properties
+Thedetailsproperty of themodifyeffect has all the subproperties that define the permissions needed for remediation and theoperationsused to add, update, or remove tag values.
+details
+modify
+operations
+roleDefinitionIds(required)This property must include an array of strings that match role-based access control role ID accessible by the subscription. For more information, seeremediation - configure the policy definition.The role defined must include all operations granted to theContributorrole.
+roleDefinitionIds
+This property must include an array of strings that match role-based access control role ID accessible by the subscription. For more information, seeremediation - configure the policy definition.
+The role defined must include all operations granted to theContributorrole.
+conflictEffect(optional)Determines which policy definition "wins" if more than one policy definition modifies the same
+property or when themodifyoperation doesn't work on the specified alias.For new or updated resources, the policy definition withdenytakes precedence. Policy definitions withauditskip alloperations. If more than one policy definition has the effectdeny, the request is denied as a conflict. If all policy definitions haveaudit, then none of theoperationsof the conflicting policy definitions are processed.For existing resources, if more than one policy definition has the effectdeny, the compliance status isConflict. If one or fewer policy definitions have the effectdeny, each assignment returns a compliance status ofNon-compliant.Available values:audit,deny,disabled.Default value isdeny.
+conflictEffect
+Determines which policy definition "wins" if more than one policy definition modifies the same
+property or when themodifyoperation doesn't work on the specified alias.For new or updated resources, the policy definition withdenytakes precedence. Policy definitions withauditskip alloperations. If more than one policy definition has the effectdeny, the request is denied as a conflict. If all policy definitions haveaudit, then none of theoperationsof the conflicting policy definitions are processed.For existing resources, if more than one policy definition has the effectdeny, the compliance status isConflict. If one or fewer policy definitions have the effectdeny, each assignment returns a compliance status ofNon-compliant.
+modify
+For new or updated resources, the policy definition withdenytakes precedence. Policy definitions withauditskip alloperations. If more than one policy definition has the effectdeny, the request is denied as a conflict. If all policy definitions haveaudit, then none of theoperationsof the conflicting policy definitions are processed.
+operations
+operations
+For existing resources, if more than one policy definition has the effectdeny, the compliance status isConflict. If one or fewer policy definitions have the effectdeny, each assignment returns a compliance status ofNon-compliant.
+Available values:audit,deny,disabled.
+Default value isdeny.
+operations(required)An array of all tag operations to be completed on matching resources.Properties:operation(required)Defines what action to take on a matching resource. Options are:addOrReplace,Add, andRemove.Addbehaves similar to theappendeffect.Removeis only supported for resource tags.field(required)The tag to add, replace, or remove. Tag names must adhere to the same naming convention for otherfields.value(optional)The value to set the tag to.This property is required ifoperationisaddOrReplaceorAdd.condition(optional)A string containing an Azure Policy language expression withPolicy functionsthat evaluates totrueorfalse.Doesn't support the following Policy functions:field(),resourceGroup(),subscription().
+operations
+An array of all tag operations to be completed on matching resources.
+Properties:operation(required)Defines what action to take on a matching resource. Options are:addOrReplace,Add, andRemove.Addbehaves similar to theappendeffect.Removeis only supported for resource tags.field(required)The tag to add, replace, or remove. Tag names must adhere to the same naming convention for otherfields.value(optional)The value to set the tag to.This property is required ifoperationisaddOrReplaceorAdd.condition(optional)A string containing an Azure Policy language expression withPolicy functionsthat evaluates totrueorfalse.Doesn't support the following Policy functions:field(),resourceGroup(),subscription().
+operation(required)Defines what action to take on a matching resource. Options are:addOrReplace,Add, andRemove.Addbehaves similar to theappendeffect.Removeis only supported for resource tags.
+operation
+Defines what action to take on a matching resource. Options are:addOrReplace,Add, andRemove.
+addOrReplace
+Add
+Remove
+Addbehaves similar to theappendeffect.
+Add
+Removeis only supported for resource tags.
+Remove
+field(required)The tag to add, replace, or remove. Tag names must adhere to the same naming convention for otherfields.
+field
+The tag to add, replace, or remove. Tag names must adhere to the same naming convention for otherfields.
+value(optional)The value to set the tag to.This property is required ifoperationisaddOrReplaceorAdd.
+value
+The value to set the tag to.
+This property is required ifoperationisaddOrReplaceorAdd.
+operation
+condition(optional)A string containing an Azure Policy language expression withPolicy functionsthat evaluates totrueorfalse.Doesn't support the following Policy functions:field(),resourceGroup(),subscription().
+condition
+A string containing an Azure Policy language expression withPolicy functionsthat evaluates totrueorfalse.
+Doesn't support the following Policy functions:field(),resourceGroup(),subscription().
+field()
+resourceGroup()
+subscription()
+Modify operations
+Theoperationsproperty array makes it possible to alter several tags in different ways from a single policy definition. Each operation is made up ofoperation,field, andvalueproperties. Theoperationdetermines what the remediation task does to the tags,fielddetermines which tag is altered, andvaluedefines the new setting for that tag. The following example makes the following tag changes:
+operations
+operation
+field
+value
+operation
+field
+value
+Sets theenvironmenttag to "Test" even if it already exists with a different value.
+environment
+Removes the tagTempResource.
+TempResource
+Sets theDepttag to the policy parameterDeptNameconfigured on the policy assignment.
+Dept
+"details": {
+  ...
+  "operations": [
+    {
+      "operation": "addOrReplace",
+      "field": "tags['environment']",
+      "value": "Test"
+    },
+    {
+      "operation": "Remove",
+      "field": "tags['TempResource']",
+    },
+    {
+      "operation": "addOrReplace",
+      "field": "tags['Dept']",
+      "value": "[parameters('DeptName')]"
+    }
+  ]
+}
+"details": {
+  ...
+  "operations": [
+    {
+      "operation": "addOrReplace",
+      "field": "tags['environment']",
+      "value": "Test"
+    },
+    {
+      "operation": "Remove",
+      "field": "tags['TempResource']",
+    },
+    {
+      "operation": "addOrReplace",
+      "field": "tags['Dept']",
+      "value": "[parameters('DeptName')]"
+    }
+  ]
+}
+Theoperationproperty has the following options:
+operation
+addOrReplace
+add
+remove
+Modify examples
+Example 1: Add theenvironmenttag and replace existingenvironmenttags with "Test":
+environment
+environment
+"then": {
+  "effect": "modify",
+  "details": {
+    "roleDefinitionIds": [
+      "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c"
+    ],
+    "operations": [
+      {
+        "operation": "addOrReplace",
+        "field": "tags['environment']",
+        "value": "Test"
+      }
+    ]
+  }
+}
+"then": {
+  "effect": "modify",
+  "details": {
+    "roleDefinitionIds": [
+      "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c"
+    ],
+    "operations": [
+      {
+        "operation": "addOrReplace",
+        "field": "tags['environment']",
+        "value": "Test"
+      }
+    ]
+  }
+}
+Example 2: Remove theenvtag and add theenvironmenttag or replace existingenvironmenttags with a parameterized value:
+env
+environment
+environment
+"then": {
+  "effect": "modify",
+  "details": {
+    "roleDefinitionIds": [
+      "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c"
+    ],
+    "conflictEffect": "deny",
+    "operations": [
+      {
+        "operation": "Remove",
+        "field": "tags['env']"
+      },
+      {
+        "operation": "addOrReplace",
+        "field": "tags['environment']",
+        "value": "[parameters('tagValue')]"
+      }
+    ]
+  }
+}
+"then": {
+  "effect": "modify",
+  "details": {
+    "roleDefinitionIds": [
+      "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c"
+    ],
+    "conflictEffect": "deny",
+    "operations": [
+      {
+        "operation": "Remove",
+        "field": "tags['env']"
+      },
+      {
+        "operation": "addOrReplace",
+        "field": "tags['environment']",
+        "value": "[parameters('tagValue')]"
+      }
+    ]
+  }
+}
+Example 3: Ensure that a storage account doesn't allow blob public access, themodifyoperation is applied only when evaluating requests with API version greater or equals to2019-04-01:
+modify
+2019-04-01
+"then": {
+  "effect": "modify",
+  "details": {
+    "roleDefinitionIds": [
+      "/providers/microsoft.authorization/roleDefinitions/17d1049b-9a84-46fb-8f53-869881c3d3ab"
+    ],
+    "conflictEffect": "audit",
+    "operations": [
+      {
+        "condition": "[greaterOrEquals(requestContext().apiVersion, '2019-04-01')]",
+        "operation": "addOrReplace",
+        "field": "Microsoft.Storage/storageAccounts/allowBlobPublicAccess",
+        "value": false
+      }
+    ]
+  }
+}
+"then": {
+  "effect": "modify",
+  "details": {
+    "roleDefinitionIds": [
+      "/providers/microsoft.authorization/roleDefinitions/17d1049b-9a84-46fb-8f53-869881c3d3ab"
+    ],
+    "conflictEffect": "audit",
+    "operations": [
+      {
+        "condition": "[greaterOrEquals(requestContext().apiVersion, '2019-04-01')]",
+        "operation": "addOrReplace",
+        "field": "Microsoft.Storage/storageAccounts/allowBlobPublicAccess",
+        "value": false
+      }
+    ]
+  }
+}
+Next steps
+Review examples atAzure Policy samples.
+Review theAzure Policy definition structure.
+Understand how toprogrammatically create policies.
+Learn how toget compliance data.
+Learn how toremediate non-compliant resources.
+ReviewAzure management groups.
+Feedback
+Was this page helpful?
+Additional resources

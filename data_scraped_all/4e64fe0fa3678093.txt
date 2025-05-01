@@ -1,0 +1,302 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Build, test, and deploy containers to Azure Kubernetes Service (AKS) using GitHub Actions
+Article
+2024-08-01
+19 contributors
+In this article
+GitHub Actionsgives you the flexibility to build an automated software development lifecycle workflow. You can use multiple Kubernetes actions to deploy to containers from Azure Container Registry (ACR) to Azure Kubernetes Service (AKS) with GitHub Actions.
+Prerequisites
+An Azure account with an active subscription. If you don't have one,create an account for free.
+A GitHub account. If you don't have one,sign up for free.When using GitHub Actions, you need to configure the integration between Azure and your GitHub repository. To configure the integration, seeUse GitHub Actions to connect to Azure.
+When using GitHub Actions, you need to configure the integration between Azure and your GitHub repository. To configure the integration, seeUse GitHub Actions to connect to Azure.
+An existing AKS cluster with an attached ACR. If you don't have one, seeAuthenticate with ACR from AKS.
+GitHub Actions for AKS
+With GiHub Actions, you can automate your software development workflows from within GitHub. For more information, seeGitHub Actions for Azure.
+The following table lists the available actions for AKS:
+azure/aks-set-context
+azure/k8s-set-context
+azure/k8s-bake
+azure/k8s-create-secret
+azure/k8s-deploy
+azure/k8s-lint
+azure/setup-helm
+azure/setup-kubectl
+azure/k8s-artifact-substitute
+azure/aks-create-action
+azure/aks-github-runner
+azure/acr-build
+Use GitHub Actions with AKS
+As an example, you can use GitHub Actions to deploy an application to your AKS cluster every time a change is pushed to your GitHub repository. This example uses theAzure Voteapplication.
+Note
+This example uses a service principal for authentication with your ACR and AKS cluster. Alternatively, you can configure Open ID Connect (OIDC) and update theazure/loginaction to use OIDC. For more information, seeSet up Azure Login with OpenID Connect authentication.
+azure/login
+Fork and update the repository
+Navigate to theAzure Voterepository and selectFork.
+Navigate to theAzure Voterepository and selectFork.
+Update theazure-vote-all-in-one-redis.yamlto use your ACR for theazure-vote-frontimage. Replace<registryName>with the name of your registry....
+      containers:
+      - name: azure-vote-front
+        image: <registryName>.azurecr.io/azuredocs/azure-vote-front:v1
+...
+Update theazure-vote-all-in-one-redis.yamlto use your ACR for theazure-vote-frontimage. Replace<registryName>with the name of your registry.
+azure-vote-all-in-one-redis.yaml
+azure-vote-front
+<registryName>
+...
+      containers:
+      - name: azure-vote-front
+        image: <registryName>.azurecr.io/azuredocs/azure-vote-front:v1
+...
+...
+      containers:
+      - name: azure-vote-front
+        image: <registryName>.azurecr.io/azuredocs/azure-vote-front:v1
+...
+Commit the updatedazure-vote-all-in-one-redis.yamlto your repository.
+Commit the updatedazure-vote-all-in-one-redis.yamlto your repository.
+azure-vote-all-in-one-redis.yaml
+Create secrets
+Create a service principal to access your resource group with theContributorrole using theaz ad sp create-for-rbaccommand. Replace<SUBSCRIPTION_ID>with the subscription ID of your Azure account and<RESOURCE_GROUP>with the name of the resource group containing your ACR.az ad sp create-for-rbac \
+    --name "ghActionAzureVote" \
+    --scope /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP> \
+    --role Contributor \
+    --json-authYour output should look similar to the following example output:{
+  "clientId": <clientId>,
+  "clientSecret": <clientSecret>,
+  "subscriptionId": <subscriptionId>,
+  "tenantId": <tenantId>,
+  ...
+}
+Create a service principal to access your resource group with theContributorrole using theaz ad sp create-for-rbaccommand. Replace<SUBSCRIPTION_ID>with the subscription ID of your Azure account and<RESOURCE_GROUP>with the name of the resource group containing your ACR.
+Contributor
+az ad sp create-for-rbac
+<SUBSCRIPTION_ID>
+<RESOURCE_GROUP>
+az ad sp create-for-rbac \
+    --name "ghActionAzureVote" \
+    --scope /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP> \
+    --role Contributor \
+    --json-auth
+az ad sp create-for-rbac \
+    --name "ghActionAzureVote" \
+    --scope /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP> \
+    --role Contributor \
+    --json-auth
+Your output should look similar to the following example output:
+{
+  "clientId": <clientId>,
+  "clientSecret": <clientSecret>,
+  "subscriptionId": <subscriptionId>,
+  "tenantId": <tenantId>,
+  ...
+}
+{
+  "clientId": <clientId>,
+  "clientSecret": <clientSecret>,
+  "subscriptionId": <subscriptionId>,
+  "tenantId": <tenantId>,
+  ...
+}
+Navigate to your GitHub repository settings and selectSecurity>Secrets and variables>Actions.
+Navigate to your GitHub repository settings and selectSecurity>Secrets and variables>Actions.
+For each secret, selectNew Repository Secretand enter the name and value of the secret.Secret nameSecret valueAZURE_CREDENTIALSThe entire JSON output from theaz ad sp create-for-rbaccommand.service_principalThe value of<clientId>.service_principal_passwordThe value of<clientSecret>.subscriptionThe value of<subscriptionId>.tenantThe value of<tenantId>.registryThe name of your registry.repositoryazuredocsresource_groupThe name of your resource group.cluster_nameThe name of your cluster.
+For each secret, selectNew Repository Secretand enter the name and value of the secret.
+az ad sp create-for-rbac
+<clientId>
+<clientSecret>
+<subscriptionId>
+<tenantId>
+For more information about creating secrets, seeEncrypted Secrets.
+Create actions file
+In your repository, create a.github/workflows/main.ymland paste in the following contents:name: build_deploy_aks
+on:
+  push:
+    paths:
+      - "azure-vote/**"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code 
+        uses: actions/checkout@v3
+      - name: ACR build
+        id: build-push-acr
+        uses: azure/acr-build@v1
+        with:
+          service_principal: ${{ secrets.service_principal }}
+          service_principal_password: ${{ secrets.service_principal_password }}
+          tenant: ${{ secrets.tenant }}
+          registry: ${{ secrets.registry }}
+          repository: ${{ secrets.repository }}
+          image:  azure-vote-front
+          folder: azure-vote
+          branch: master
+          tag: ${{ github.sha }}
+      - name: Azure login
+        id: login
+        uses: azure/login@v1.4.3
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Set AKS context
+        id: set-context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: '${{ secrets.resource_group }}' 
+          cluster-name: '${{ secrets.cluster_name }}'
+      - name: Setup kubectl
+        id: install-kubectl
+        uses: azure/setup-kubectl@v3
+      - name: Deploy to AKS
+        id: deploy-aks
+        uses: Azure/k8s-deploy@v4
+        with:
+          namespace: 'default'
+          manifests: |
+             azure-vote-all-in-one-redis.yaml
+          images: '${{ secrets.registry }}.azurecr.io/${{ secrets.repository }}/azure-vote-front:${{ github.sha }}'
+          pull-images: falseTheonsection contains the event that triggers the action. In the example file, the action triggers when a change is pushed to theazure-votedirectory.Thestepssection contains each distinct action:Checkout source codeuses theGitHub Actions Checkout Actionto clone the repository.ACR builduses theAzure Container Registry Build Actionto build the image and upload it to your registry.Azure loginuses theAzure Login Actionto sign in to your Azure account.Set AKS contextuses theAzure AKS Set Context Actionto set the context for your AKS cluster.Setup kubectluses theAzure AKS Setup Kubectl Actionto install kubectl on your runner.Deploy to AKSuses theAzure Kubernetes Deploy Actionto deploy the application to your Kubernetes cluster.
+In your repository, create a.github/workflows/main.ymland paste in the following contents:
+.github/workflows/main.yml
+name: build_deploy_aks
+on:
+  push:
+    paths:
+      - "azure-vote/**"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code 
+        uses: actions/checkout@v3
+      - name: ACR build
+        id: build-push-acr
+        uses: azure/acr-build@v1
+        with:
+          service_principal: ${{ secrets.service_principal }}
+          service_principal_password: ${{ secrets.service_principal_password }}
+          tenant: ${{ secrets.tenant }}
+          registry: ${{ secrets.registry }}
+          repository: ${{ secrets.repository }}
+          image:  azure-vote-front
+          folder: azure-vote
+          branch: master
+          tag: ${{ github.sha }}
+      - name: Azure login
+        id: login
+        uses: azure/login@v1.4.3
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Set AKS context
+        id: set-context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: '${{ secrets.resource_group }}' 
+          cluster-name: '${{ secrets.cluster_name }}'
+      - name: Setup kubectl
+        id: install-kubectl
+        uses: azure/setup-kubectl@v3
+      - name: Deploy to AKS
+        id: deploy-aks
+        uses: Azure/k8s-deploy@v4
+        with:
+          namespace: 'default'
+          manifests: |
+             azure-vote-all-in-one-redis.yaml
+          images: '${{ secrets.registry }}.azurecr.io/${{ secrets.repository }}/azure-vote-front:${{ github.sha }}'
+          pull-images: false
+name: build_deploy_aks
+on:
+  push:
+    paths:
+      - "azure-vote/**"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code 
+        uses: actions/checkout@v3
+      - name: ACR build
+        id: build-push-acr
+        uses: azure/acr-build@v1
+        with:
+          service_principal: ${{ secrets.service_principal }}
+          service_principal_password: ${{ secrets.service_principal_password }}
+          tenant: ${{ secrets.tenant }}
+          registry: ${{ secrets.registry }}
+          repository: ${{ secrets.repository }}
+          image:  azure-vote-front
+          folder: azure-vote
+          branch: master
+          tag: ${{ github.sha }}
+      - name: Azure login
+        id: login
+        uses: azure/login@v1.4.3
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Set AKS context
+        id: set-context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: '${{ secrets.resource_group }}' 
+          cluster-name: '${{ secrets.cluster_name }}'
+      - name: Setup kubectl
+        id: install-kubectl
+        uses: azure/setup-kubectl@v3
+      - name: Deploy to AKS
+        id: deploy-aks
+        uses: Azure/k8s-deploy@v4
+        with:
+          namespace: 'default'
+          manifests: |
+             azure-vote-all-in-one-redis.yaml
+          images: '${{ secrets.registry }}.azurecr.io/${{ secrets.repository }}/azure-vote-front:${{ github.sha }}'
+          pull-images: false
+Theonsection contains the event that triggers the action. In the example file, the action triggers when a change is pushed to theazure-votedirectory.
+on
+azure-vote
+Thestepssection contains each distinct action:
+steps
+Checkout source codeuses theGitHub Actions Checkout Actionto clone the repository.
+ACR builduses theAzure Container Registry Build Actionto build the image and upload it to your registry.
+Azure loginuses theAzure Login Actionto sign in to your Azure account.
+Set AKS contextuses theAzure AKS Set Context Actionto set the context for your AKS cluster.
+Setup kubectluses theAzure AKS Setup Kubectl Actionto install kubectl on your runner.
+Deploy to AKSuses theAzure Kubernetes Deploy Actionto deploy the application to your Kubernetes cluster.
+Commit the.github/workflows/main.ymlfile to your repository.
+Commit the.github/workflows/main.ymlfile to your repository.
+.github/workflows/main.yml
+To confirm the action is working, update theazure-vote/azure-vote/config_file.cfgwith the following contents:# UI Configurations
+TITLE = 'Azure Voting App'
+VOTE1VALUE = 'Fish'
+VOTE2VALUE = 'Dogs'
+SHOWHOST = 'false'
+To confirm the action is working, update theazure-vote/azure-vote/config_file.cfgwith the following contents:
+azure-vote/azure-vote/config_file.cfg
+# UI Configurations
+TITLE = 'Azure Voting App'
+VOTE1VALUE = 'Fish'
+VOTE2VALUE = 'Dogs'
+SHOWHOST = 'false'
+# UI Configurations
+TITLE = 'Azure Voting App'
+VOTE1VALUE = 'Fish'
+VOTE2VALUE = 'Dogs'
+SHOWHOST = 'false'
+Commit the updatedazure-vote/azure-vote/config_file.cfgto your repository.
+Commit the updatedazure-vote/azure-vote/config_file.cfgto your repository.
+azure-vote/azure-vote/config_file.cfg
+In your repository, selectActionsand confirm a workflow is running. Then, confirm the workflow has a green checkmark and the updated application is deployed to your cluster.
+In your repository, selectActionsand confirm a workflow is running. Then, confirm the workflow has a green checkmark and the updated application is deployed to your cluster.
+Next steps
+Review the following starter workflows for AKS. For more information, seeUsing starter workflows.
+Azure Kubernetes Service (Basic)
+Azure Kubernetes Service Helm
+Azure Kubernetes Service Kustomize
+Azure Kubernetes Service Kompose
+Learn how to create multiple pipelines on GitHub Actions with AKS
+Learn about Azure Kubernetes Service
+Azure Kubernetes Service
+
+Additional resources

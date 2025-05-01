@@ -1,0 +1,540 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Manually configure an availability group - SQL Server on Azure VMs
+Article
+2024-06-18
+13 contributors
+In this article
+Applies to:SQL Server on Azure VM
+Tip
+There are manymethods to deploy an availability group. Simplify your deployment and eliminate the need for an Azure Load Balancer or distributed network name (DNN) for your Always On availability group by creating your SQL Server virtual machines (VMs) inmultiple subnetswithin the same Azure virtual network. If you've already created your availability group in a single subnet, you canmigrate it to a multi-subnet environment.
+This tutorial shows how to create an Always On availability group for SQL Server on Azure VMs within a single subnet. The complete tutorial creates an availability group with a database replica on two SQL Server instances.
+This article manually configures the availability group environment. It's also possible to automate the steps by using theAzure portal,PowerShell or the Azure CLI, orAzure Quickstart Templates.
+Time estimate: This tutorial takes about 30 minutes to complete after you meet theprerequisites.
+Prerequisites
+The tutorial assumes that you have a basic understanding of SQL Server Always On availability groups. If you need more information, seeOverview of Always On availability groups (SQL Server).
+Before you begin the procedures in this tutorial, you need to completeprerequisites for creating Always On availability groups in Azure virtual machines. If you completed these prerequisites already, you can jump toCreate the cluster.
+The following table summarizes the prerequisites that you need before you can complete this tutorial:
+Create the cluster
+The first task is to create a Windows Server failover cluster with both SQL Server VMs and a witness server:
+UseBastionto connect to the first SQL Server VM. Use a domain account that's an administrator on both SQL Server VMs and the witness server.TipIn theprerequisites, you created an account calledCORP\Install. Use this account.
+UseBastionto connect to the first SQL Server VM. Use a domain account that's an administrator on both SQL Server VMs and the witness server.
+Tip
+In theprerequisites, you created an account calledCORP\Install. Use this account.
+On theServer Managerdashboard, selectTools, and then selectFailover Cluster Manager.
+On theServer Managerdashboard, selectTools, and then selectFailover Cluster Manager.
+On the left pane, right-clickFailover Cluster Manager, and then selectCreate Cluster.
+On the left pane, right-clickFailover Cluster Manager, and then selectCreate Cluster.
+
+In theCreate Cluster Wizard, create a one-node cluster by stepping through the pages with the settings in the following table:PageSettingBefore You BeginUse defaults.Select ServersEnter the first SQL Server VM name inEnter server name, and then selectAdd.Validation WarningSelectNo. I do not require support from Microsoft for this cluster, and therefore do not want to run the validation tests. When I select Next, continue Creating the cluster.Access Point for Administering the ClusterInCluster Name, enter a cluster name (for example,SQLAGCluster1).ConfirmationUse defaults unless you're using Storage Spaces.
+In theCreate Cluster Wizard, create a one-node cluster by stepping through the pages with the settings in the following table:
+Set the Windows Server failover cluster's IP address
+Note
+On Windows Server 2019, the cluster creates aDistributed Server Namevalue instead of theCluster Network Namevalue. If you're using Windows Server 2019, skip any steps that refer to the cluster core name in this tutorial. You can create a cluster network name by usingPowerShell. For more information, review the blog postFailover Cluster: Cluster Network Object.
+InFailover Cluster Manager, scroll down toCluster Core Resourcesand expand the cluster details. Both theNameandIP Addressresources should be in theFailedstate.The IP address resource can't be brought online because the cluster is assigned the same IP address as the machine itself. It's a duplicate address.
+InFailover Cluster Manager, scroll down toCluster Core Resourcesand expand the cluster details. Both theNameandIP Addressresources should be in theFailedstate.
+The IP address resource can't be brought online because the cluster is assigned the same IP address as the machine itself. It's a duplicate address.
+Right-click the failedIP Addressresource, and then selectProperties.
+Right-click the failedIP Addressresource, and then selectProperties.
+
+SelectStatic IP Address. Specify an available address from the same subnet as your virtual machines.
+SelectStatic IP Address. Specify an available address from the same subnet as your virtual machines.
+In theCluster Core Resourcessection, right-click the cluster name and selectBring Online. Wait until both resources are online.When the cluster name resource comes online, it updates the domain controller server with a new Active Directory computer account. Use this Active Directory account to run the availability group's clustered service later.
+In theCluster Core Resourcessection, right-click the cluster name and selectBring Online. Wait until both resources are online.
+When the cluster name resource comes online, it updates the domain controller server with a new Active Directory computer account. Use this Active Directory account to run the availability group's clustered service later.
+Add the other SQL Server instance to the cluster
+In the browser tree, right-click the cluster and selectAdd Node.
+In the browser tree, right-click the cluster and selectAdd Node.
+
+In theAdd Node Wizard, selectNext.
+In theAdd Node Wizard, selectNext.
+On theSelect Serverspage, add the second SQL Server VM. Enter the VM name inEnter server name, and then selectAdd>Next.
+On theSelect Serverspage, add the second SQL Server VM. Enter the VM name inEnter server name, and then selectAdd>Next.
+On theValidation Warningpage, selectNo. (In a production scenario, you should perform the validation tests.) Then, selectNext.
+On theValidation Warningpage, selectNo. (In a production scenario, you should perform the validation tests.) Then, selectNext.
+On theConfirmationpage, if you're using Storage Spaces, clear theAdd all eligible storage to the clustercheckbox.WarningIf you don't clearAdd all eligible storage to the cluster, Windows detaches the virtual disks during the clustering process. As a result, they don't appear inDisk ManagerorObject Exploreruntil the storage is removed from the cluster and reattached via PowerShell.
+On theConfirmationpage, if you're using Storage Spaces, clear theAdd all eligible storage to the clustercheckbox.
+
+Warning
+If you don't clearAdd all eligible storage to the cluster, Windows detaches the virtual disks during the clustering process. As a result, they don't appear inDisk ManagerorObject Exploreruntil the storage is removed from the cluster and reattached via PowerShell.
+SelectNext.
+SelectNext.
+SelectFinish.Failover Cluster Managershows that your cluster has a new node and lists it in theNodescontainer.
+SelectFinish.
+Failover Cluster Managershows that your cluster has a new node and lists it in theNodescontainer.
+Sign out of the remote desktop session.
+Sign out of the remote desktop session.
+Add a file share for a cluster quorum
+In this example, the Windows cluster uses a file share to create a cluster quorum. This tutorial uses aNodeAndFileShareMajorityquorum. For more information, seeConfigure and manage quorum.
+NodeAndFileShareMajority
+Connect to the file share witness server VM by using a remote desktop session.
+Connect to the file share witness server VM by using a remote desktop session.
+InServer Manager, selectTools. OpenComputer Management.
+InServer Manager, selectTools. OpenComputer Management.
+SelectShared Folders.
+SelectShared Folders.
+Right-clickShares, and then selectNew Share.Use theCreate a Shared Folder Wizardto create a share.
+Right-clickShares, and then selectNew Share.
+
+Use theCreate a Shared Folder Wizardto create a share.
+On theFolder Pathpage, selectBrowse. Locate or create a path for the shared folder, and then selectNext.
+On theFolder Pathpage, selectBrowse. Locate or create a path for the shared folder, and then selectNext.
+On theName, Description, and Settingspage, verify the share name and path. SelectNext.
+On theName, Description, and Settingspage, verify the share name and path. SelectNext.
+On theShared Folder Permissionspage, setCustomize permissions. SelectCustom.
+On theShared Folder Permissionspage, setCustomize permissions. SelectCustom.
+In theCustomize Permissionsdialog, selectAdd.
+In theCustomize Permissionsdialog, selectAdd.
+Make sure that the account that's used to create the cluster has full control.
+Make sure that the account that's used to create the cluster has full control.
+
+SelectOK.
+SelectOK.
+On theShared Folder Permissionspage, selectFinish. Then selectFinishagain.
+On theShared Folder Permissionspage, selectFinish. Then selectFinishagain.
+Sign out of the server.
+Sign out of the server.
+Configure the cluster quorum
+Note
+Depending on the configuration of your availability group, it might be necessary to change the quorum vote of a node that's participating in the Windows Server failover cluster. For more information, seeConfigure cluster quorum for SQL Server on Azure VMs.
+Connect to the first cluster node by using a remote desktop session.
+Connect to the first cluster node by using a remote desktop session.
+InFailover Cluster Manager, right-click the cluster, point toMore Actions, and then selectConfigure Cluster Quorum Settings.
+InFailover Cluster Manager, right-click the cluster, point toMore Actions, and then selectConfigure Cluster Quorum Settings.
+
+In theConfigure Cluster Quorum Wizard, selectNext.
+In theConfigure Cluster Quorum Wizard, selectNext.
+On theSelect Quorum Configuration Optionpage, chooseSelect the quorum witness, and then selectNext.
+On theSelect Quorum Configuration Optionpage, chooseSelect the quorum witness, and then selectNext.
+On theSelect Quorum Witnesspage, selectConfigure a file share witness.TipWindows Server 2016 supports a cloud witness. If you choose this type of witness, you don't need a file share witness. For more information, seeDeploy a cloud witness for a failover cluster. This tutorial uses a file share witness, which previous operating systems support.
+On theSelect Quorum Witnesspage, selectConfigure a file share witness.
+Tip
+Windows Server 2016 supports a cloud witness. If you choose this type of witness, you don't need a file share witness. For more information, seeDeploy a cloud witness for a failover cluster. This tutorial uses a file share witness, which previous operating systems support.
+InConfigure File Share Witness, enter the path for the share that you created. Then selectNext.
+InConfigure File Share Witness, enter the path for the share that you created. Then selectNext.
+On theConfirmationpage, verify the settings. Then selectNext.
+On theConfirmationpage, verify the settings. Then selectNext.
+SelectFinish.
+SelectFinish.
+The cluster core resources are configured with a file share witness.
+Enable availability groups
+Next, enable Always On availability groups. Complete these steps on both SQL Server VMs.
+From theStartscreen, openSQL Server Configuration Manager.
+From theStartscreen, openSQL Server Configuration Manager.
+In the browser tree, selectSQL Server Services. Then right-click theSQL Server (MSSQLSERVER)service and selectProperties.
+In the browser tree, selectSQL Server Services. Then right-click theSQL Server (MSSQLSERVER)service and selectProperties.
+Select theAlways On High Availabilitytab, and then selectEnable Always On availability groups.
+Select theAlways On High Availabilitytab, and then selectEnable Always On availability groups.
+
+SelectApply. SelectOKin the pop-up dialog.
+SelectApply. SelectOKin the pop-up dialog.
+Restart the SQL Server service.
+Restart the SQL Server service.
+Enable FILESTREAM feature
+If you're not using FILESTREAM for your database in the availability group, skip this step and move to the next step -Create Database.
+If you plan on adding a database to your availability group that usesFILESTREAM, then FILESTREAM needs to be enabled as the feature is disabled by default. Use theSQL Server Configuration Managerto enable the feature on both SQL Server instances.
+Toenable the FILESTREAM feature, follow these steps:
+Connect to the first SQL Server VM (such asSQL-VM-1) with a domain account that is a member of sysadmin fixed server role, such as theCORP\Installdomain account created in theprerequisites document
+Connect to the first SQL Server VM (such asSQL-VM-1) with a domain account that is a member of sysadmin fixed server role, such as theCORP\Installdomain account created in theprerequisites document
+From theStartscreen of one your SQL Server VMs, launchSQL Server Configuration Manager.
+From theStartscreen of one your SQL Server VMs, launchSQL Server Configuration Manager.
+In the browser tree, highlightSQL Server Services, right-click theSQL Server (MSSQLSERVER)service and selectProperties.
+In the browser tree, highlightSQL Server Services, right-click theSQL Server (MSSQLSERVER)service and selectProperties.
+Select theFILESTREAMtab, then check the box toEnable FILESTREAM for Transact-SQL access:
+Select theFILESTREAMtab, then check the box toEnable FILESTREAM for Transact-SQL access:
+SelectApply. SelectOKin the pop-up dialog.
+SelectApply. SelectOKin the pop-up dialog.
+In SQL Server Management Studio, selectNew Queryto display the Query Editor.
+In SQL Server Management Studio, selectNew Queryto display the Query Editor.
+In Query Editor, enter the following Transact-SQL code:EXEC sp_configure filestream_access_level, 2
+RECONFIGURE
+In Query Editor, enter the following Transact-SQL code:
+EXEC sp_configure filestream_access_level, 2
+RECONFIGURE
+EXEC sp_configure filestream_access_level, 2
+RECONFIGURE
+SelectExecute.
+SelectExecute.
+Restart the SQL Server service.
+Restart the SQL Server service.
+Repeat these steps for the other SQL Server instance.
+Repeat these steps for the other SQL Server instance.
+Create a database on the first SQL Server instance
+Connect to the first SQL Server VM with a domain account that's a member ofsysadminfixed server role.
+Open SQL Server Management Studio (SSMS) and connect to the first SQL Server instance.
+InObject Explorer, right-clickDatabasesand selectNew Database.
+InDatabase name, enterMyDB1, and then selectOK.
+Create a backup share
+On the first SQL Server VM inServer Manager, selectTools. OpenComputer Management.
+On the first SQL Server VM inServer Manager, selectTools. OpenComputer Management.
+SelectShared Folders.
+SelectShared Folders.
+Right-clickShares, and then selectNew Share.Use theCreate a Shared Folder Wizardto create a share.
+Right-clickShares, and then selectNew Share.
+
+Use theCreate a Shared Folder Wizardto create a share.
+On theFolder Pathpage, selectBrowse. Locate or create a path for the database backup's shared folder, and then selectNext.
+On theFolder Pathpage, selectBrowse. Locate or create a path for the database backup's shared folder, and then selectNext.
+On theName, Description, and Settingspage, verify the share name and path. Then selectNext.
+On theName, Description, and Settingspage, verify the share name and path. Then selectNext.
+On theShared Folder Permissionspage, setCustomize permissions. Then selectCustom.
+On theShared Folder Permissionspage, setCustomize permissions. Then selectCustom.
+In theCustomize Permissionsdialog, selectAdd.
+In theCustomize Permissionsdialog, selectAdd.
+CheckFull Controlto grant full access to the share the SQL Server service account (Corp\SQLSvc):
+CheckFull Controlto grant full access to the share the SQL Server service account (Corp\SQLSvc):
+Corp\SQLSvc
+
+SelectOK.
+SelectOK.
+On theShared Folder Permissionspage, selectFinish. SelectFinishagain.
+On theShared Folder Permissionspage, selectFinish. SelectFinishagain.
+Take a full backup of the database
+You need to back up the new database to initialize the log chain. If you don't take a backup of the new database, it can't be included in an availability group.
+InObject Explorer, right-click the database, point toTasks, and then selectBack Up.
+InObject Explorer, right-click the database, point toTasks, and then selectBack Up.
+SelectOKto take a full backup to the default backup location.
+SelectOKto take a full backup to the default backup location.
+Create an availability group
+You're now ready to create and configure an availability group by doing the following tasks:
+Create a database on the first SQL Server instance.
+Take both a full backup and a transaction log backup of the database.
+Restore the full and log backups to the second SQL Server instance by using theNO RECOVERYoption.
+NO RECOVERY
+Create the availability group (MyTestAG) with synchronous commit, automatic failover, and readable secondary replicas.
+Create the availability group
+Connect to your SQL Server VM by using remote desktop, and open SQL Server Management Studio.
+Connect to your SQL Server VM by using remote desktop, and open SQL Server Management Studio.
+InObject Explorerin SSMS, right-clickAlways On High Availabilityand selectNew Availability Group Wizard.
+InObject Explorerin SSMS, right-clickAlways On High Availabilityand selectNew Availability Group Wizard.
+
+On theIntroductionpage, selectNext. On theSpecify Availability Group Optionspage, enter a name for the availability group in theAvailability group namebox. For example, enterMyTestAG. Then selectNext.
+On theIntroductionpage, selectNext. On theSpecify Availability Group Optionspage, enter a name for the availability group in theAvailability group namebox. For example, enterMyTestAG. Then selectNext.
+
+On theSelect Databasespage, select your database, and then selectNext.NoteThe database meets the prerequisites for an availability group because you've taken at least one full backup on the intended primary replica.
+On theSelect Databasespage, select your database, and then selectNext.
+Note
+The database meets the prerequisites for an availability group because you've taken at least one full backup on the intended primary replica.
+
+On theSpecify Replicaspage, selectAdd Replica.
+On theSpecify Replicaspage, selectAdd Replica.
+
+In theConnect to Serverdialog, forServer name, enter the name of the second SQL Server instance. Then selectConnect.Back on theSpecify Replicaspage, you should now see the second server listed underAvailability Replicas. Configure the replicas as follows.
+In theConnect to Serverdialog, forServer name, enter the name of the second SQL Server instance. Then selectConnect.
+Back on theSpecify Replicaspage, you should now see the second server listed underAvailability Replicas. Configure the replicas as follows.
+
+SelectEndpointsto see the database mirroring endpoint for this availability group. Use the same port that you used when you set thefirewall rule for database mirroring endpoints.
+SelectEndpointsto see the database mirroring endpoint for this availability group. Use the same port that you used when you set thefirewall rule for database mirroring endpoints.
+
+On theSelect Initial Data Synchronizationpage, selectFulland specify a shared network location. For the location, use thebackup share that you created. In the example, it was\\<First SQL Server Instance>\Backup\. SelectNext.NoteFull synchronization takes a full backup of the database on the first instance of SQL Server and restores it to the second instance. For large databases, we don't recommend full synchronization because it might take a long time.You can reduce this time by manually taking a backup of the database and restoring it withNO RECOVERY. If the database is already restored withNO RECOVERYon the second SQL Server instance before you configure the availability group, selectJoin only. If you want to take the backup after configuring the availability group, selectSkip initial data synchronization.
+On theSelect Initial Data Synchronizationpage, selectFulland specify a shared network location. For the location, use thebackup share that you created. In the example, it was\\<First SQL Server Instance>\Backup\. SelectNext.
+Note
+Full synchronization takes a full backup of the database on the first instance of SQL Server and restores it to the second instance. For large databases, we don't recommend full synchronization because it might take a long time.
+You can reduce this time by manually taking a backup of the database and restoring it withNO RECOVERY. If the database is already restored withNO RECOVERYon the second SQL Server instance before you configure the availability group, selectJoin only. If you want to take the backup after configuring the availability group, selectSkip initial data synchronization.
+NO RECOVERY
+NO RECOVERY
+
+On theValidationpage, selectNext. This page should look similar to the following image:NoteThere's a warning for the listener configuration because you haven't configured an availability group listener. You can ignore this warning because on Azure virtual machines, you create the listener after you create the Azure load balancer.
+On theValidationpage, selectNext. This page should look similar to the following image:
+
+Note
+There's a warning for the listener configuration because you haven't configured an availability group listener. You can ignore this warning because on Azure virtual machines, you create the listener after you create the Azure load balancer.
+On theSummarypage, selectFinish, and then wait while the wizard configures the new availability group. On theProgresspage, you can selectMore detailsto view the detailed progress.After the wizard finishes the configuration, inspect theResultspage to verify that the availability group is successfully created.
+On theSummarypage, selectFinish, and then wait while the wizard configures the new availability group. On theProgresspage, you can selectMore detailsto view the detailed progress.
+After the wizard finishes the configuration, inspect theResultspage to verify that the availability group is successfully created.
+
+SelectCloseto close the wizard.
+SelectCloseto close the wizard.
+Check the availability group
+InObject Explorer, expandAlways On High Availability, and then expandAvailability Groups. You should now see the new availability group in this container. Right-click the availability group and selectShow Dashboard.Your availability group dashboard should look similar to the following screenshot:The dashboard shows the replicas, the failover mode of each replica, and the synchronization state.
+InObject Explorer, expandAlways On High Availability, and then expandAvailability Groups. You should now see the new availability group in this container. Right-click the availability group and selectShow Dashboard.
+
+Your availability group dashboard should look similar to the following screenshot:
+
+The dashboard shows the replicas, the failover mode of each replica, and the synchronization state.
+InFailover Cluster Manager, select your cluster. SelectRoles.The availability group name that you used is a role on the cluster. That availability group doesn't have an IP address for client connections because you didn't configure a listener. You'll configure the listener after you create an Azure load balancer.WarningDon't try to fail over the availability group from Failover Cluster Manager. All failover operations should be performed on the availability group dashboard in SSMS.Learn more about restrictions on using Failover Cluster Manager with availability groups.
+InFailover Cluster Manager, select your cluster. SelectRoles.
+The availability group name that you used is a role on the cluster. That availability group doesn't have an IP address for client connections because you didn't configure a listener. You'll configure the listener after you create an Azure load balancer.
+
+Warning
+Don't try to fail over the availability group from Failover Cluster Manager. All failover operations should be performed on the availability group dashboard in SSMS.Learn more about restrictions on using Failover Cluster Manager with availability groups.
+At this point, you have an availability group with two SQL Server replicas. You can move the availability group between instances. You can't connect to the availability group yet because you don't have a listener.
+In Azure virtual machines, the listener requires a load balancer. The next step is to create the load balancer in Azure.
+Create an Azure load balancer
+Note
+Availability group deployments tomultiple subnetsdon't require a load balancer. In a single-subnet environment, customers who use SQL Server 2019 CU8 and later on Windows 2016 and later can replace the traditional virtual network name (VNN) listener and Azure Load Balancer with adistributed network name (DNN) listener. If you want to use a DNN, skip any tutorial steps that configure Azure Load Balancer for your availability group.
+On Azure virtual machines in a single subnet, a SQL Server availability group requires a load balancer. The load balancer holds the IP addresses for the availability group listeners and the Windows Server failover cluster. This section summarizes how to create the load balancer in the Azure portal.
+A load balancer in Azure can be eitherstandardorbasic. A standard load balancer has more features than the basic load balancer. For an availability group, the standard load balancer is required if you use an availability zone (instead of an availability set). For details on the difference between the SKUs, seeAzure Load Balancer SKUs.
+Important
+On September 30, 2025, the Basic SKU for Azure Load Balancer will be retired. For more information, see theofficial announcement. If you're currently using Basic Load Balancer, upgrade to Standard Load Balancer before the retirement date. For guidance, reviewUpgrade Load Balancer.
+In the Azure portal, go to the resource group that contains your SQL Server VMs and select+ Add.
+In the Azure portal, go to the resource group that contains your SQL Server VMs and select+ Add.
+Search forload balancer. Choose the load balancer that Microsoft publishes.
+Search forload balancer. Choose the load balancer that Microsoft publishes.
+
+SelectCreate.
+SelectCreate.
+On theCreate load balancerpage, configure the following parameters for the load balancer:SettingEntry or selectionSubscriptionUse the same subscription as the virtual machine.Resource groupUse the same resource group as the virtual machine.NameUse a text name for the load balancer, such assqlLB.RegionUse the same region as the virtual machine.SKUSelectStandard.TypeSelectInternal.The page should look like this:
+On theCreate load balancerpage, configure the following parameters for the load balancer:
+The page should look like this:
+
+SelectNext: Frontend IP configuration.
+SelectNext: Frontend IP configuration.
+Select+ Add a frontend IP configuration.
+Select+ Add a frontend IP configuration.
+
+Set up the frontend IP address by using the following values:Name: Enter a name that identifies the frontend IP configuration.Virtual network: Select the same network as the virtual machines.Subnet: Select the same subnet as the virtual machines.Assignment: SelectStatic.IP address: Use an available address from the subnet.Use this address for your availability group listener. This address is different from your cluster IP address.Availability zone: Optionally, choose an availability zone to deploy your IP address to.The following image shows theAdd frontend IP configurationdialog:
+Set up the frontend IP address by using the following values:
+Name: Enter a name that identifies the frontend IP configuration.
+Virtual network: Select the same network as the virtual machines.
+Subnet: Select the same subnet as the virtual machines.
+Assignment: SelectStatic.
+IP address: Use an available address from the subnet.Use this address for your availability group listener. This address is different from your cluster IP address.
+Availability zone: Optionally, choose an availability zone to deploy your IP address to.
+The following image shows theAdd frontend IP configurationdialog:
+
+SelectAdd.
+SelectAdd.
+ChooseReview + Createto validate the configuration. Then selectCreateto create the load balancer and the frontend IP address.
+ChooseReview + Createto validate the configuration. Then selectCreateto create the load balancer and the frontend IP address.
+To configure the load balancer, you need to create a backend pool, create a probe, and set the load-balancing rules.
+Add a backend pool for the availability group listener
+In the Azure portal, go to your resource group. You might need to refresh the view to see the newly created load balancer.
+In the Azure portal, go to your resource group. You might need to refresh the view to see the newly created load balancer.
+
+Select the load balancer, selectBackend pools, and then select+Add.
+Select the load balancer, selectBackend pools, and then select+Add.
+ForName, provide a name for the backend pool.
+ForName, provide a name for the backend pool.
+ForBackend Pool Configuration, selectNIC.
+ForBackend Pool Configuration, selectNIC.
+SelectAddto associate the backend pool with the availability set that contains the VMs.
+SelectAddto associate the backend pool with the availability set that contains the VMs.
+UnderVirtual machine, choose the virtual machines that will host availability group replicas. Don't include the file share witness server.NoteIf both virtual machines are not specified, only connections to the primary replica will succeed.
+UnderVirtual machine, choose the virtual machines that will host availability group replicas. Don't include the file share witness server.
+Note
+If both virtual machines are not specified, only connections to the primary replica will succeed.
+SelectAddto add the virtual machines to the backend pool.
+SelectAddto add the virtual machines to the backend pool.
+SelectSaveto create the backend pool.
+SelectSaveto create the backend pool.
+Set the probe
+In the Azure portal, select the load balancer, selectHealth probes, and then select+Add.
+In the Azure portal, select the load balancer, selectHealth probes, and then select+Add.
+Set the listener health probe as follows:SettingDescriptionExampleNameTextSQLAlwaysOnEndPointProbeProtocolChoose TCPTCPPortAny unused port59999IntervalThe amount of time between probe attempts, in seconds5
+Set the listener health probe as follows:
+SelectAdd.
+SelectAdd.
+Set the load balancing rules
+In the Azure portal, select the load balancer, selectLoad balancing rules, and then select+Add.
+In the Azure portal, select the load balancer, selectLoad balancing rules, and then select+Add.
+Set the listener's load-balancing rules as follows:SettingDescriptionExampleNameTextSQLAlwaysOnEndPointListenerFrontend IP addressChoose an addressUse the address that you created when you created the load balancer.Backend poolChoose the backend poolSelect the backend pool that contains the virtual machines targeted for the load balancer.ProtocolChoose TCPTCPPortUse the port for the availability group listener1433Backend PortThis field isn't used when a floating IP is set for direct server return1433Health ProbeThe name that you specified for the probeSQLAlwaysOnEndPointProbeSession PersistenceDropdown listNoneIdle TimeoutMinutes to keep a TCP connection open4Floating IP (direct server return)A flow topology and an IP address mapping schemeEnabledWarningDirect server return is set during creation. You can't change it.
+Set the listener's load-balancing rules as follows:
+Warning
+Direct server return is set during creation. You can't change it.
+SelectSave.
+SelectSave.
+Add the cluster core IP address for the Windows Server failover cluster
+The IP address for the Windows Server failover cluster also needs to be on the load balancer. If you're using Windows Server 2019, skip this process because the cluster creates aDistributed Server Namevalue instead of theCluster Network Namevalue.
+In the Azure portal, go to the same Azure load balancer. SelectFrontend IP configuration, and then select+Add. Use the IP address that you configured for the Windows Server failover cluster in the cluster core resources. Set the IP address asStatic.
+In the Azure portal, go to the same Azure load balancer. SelectFrontend IP configuration, and then select+Add. Use the IP address that you configured for the Windows Server failover cluster in the cluster core resources. Set the IP address asStatic.
+On the load balancer, selectHealth probes, and then select+Add.
+On the load balancer, selectHealth probes, and then select+Add.
+Set the cluster core IP address health probe for the Windows Server failover cluster as follows:SettingDescriptionExampleNameTextWSFCEndPointProbeProtocolChoose TCPTCPPortAny unused port58888IntervalThe amount of time between probe attempts, in seconds5
+Set the cluster core IP address health probe for the Windows Server failover cluster as follows:
+SelectAddto set the health probe.
+SelectAddto set the health probe.
+SelectLoad balancing rules, and then select+Add.
+SelectLoad balancing rules, and then select+Add.
+Set the load-balancing rules for the cluster core IP address as follows:SettingDescriptionExampleNameTextWSFCEndPointFrontend IP addressChoose an addressUse the address that you created when you configured the IP address for the Windows Server failover cluster. This is different from the listener IP address.Backend poolChoose the backend poolSelect the backend pool that contains the virtual machines targeted for the load balancer.ProtocolChoose TCPTCPPortUse the port for the cluster IP address. This is an available port that isn't used for the listener probe port.58888Backend PortThis field isn't used when a floating IP is set for direct server return58888ProbeThe name that you specified for the probeWSFCEndPointProbeSession PersistenceDropdown listNoneIdle TimeoutMinutes to keep a TCP connection open4Floating IP (direct server return)A flow topology and an IP address mapping schemeEnabledWarningDirect server return is set during creation. You can't change it.
+Set the load-balancing rules for the cluster core IP address as follows:
+Warning
+Direct server return is set during creation. You can't change it.
+SelectOK.
+SelectOK.
+Configure the listener
+The next thing to do is configure an availability group listener on the failover cluster.
+Note
+This tutorial shows how to create a single listener, with one IP address for the internal load balancer. To create listeners by using one or more IP addresses, seeConfigure one or more Always On availability group listeners.
+The availability group listener is an IP address and network name that the SQL Server availability group listens on. To create the availability group listener:
+Get the name of the cluster network resource:a. Use RDP to connect to the Azure virtual machine that hosts the primary replica.b. OpenFailover Cluster Manager.c. Select theNetworksnode, and note the cluster network name. Use this name in the$ClusterNetworkNamevariable in the PowerShell script. In the following image, the cluster network name isCluster Network 1:
+Get the name of the cluster network resource:
+a. Use RDP to connect to the Azure virtual machine that hosts the primary replica.
+b. OpenFailover Cluster Manager.
+c. Select theNetworksnode, and note the cluster network name. Use this name in the$ClusterNetworkNamevariable in the PowerShell script. In the following image, the cluster network name isCluster Network 1:
+$ClusterNetworkName
+
+Add the client access point. The client access point is the network name that applications use to connect to the databases in an availability group.a. InFailover Cluster Manager, expand the cluster name, and then selectRoles.b. On theRolespane, right-click the availability group name, and then selectAdd Resource>Client Access Point.c. In theNamebox, create a name for this new listener.
+The name for the new listener is the network name that applications use to connect to databases in the SQL Server availability group.d. To finish creating the listener, selectNexttwice, and then selectFinish. Don't bring the listener or resource online at this point.
+Add the client access point. The client access point is the network name that applications use to connect to the databases in an availability group.
+a. InFailover Cluster Manager, expand the cluster name, and then selectRoles.
+b. On theRolespane, right-click the availability group name, and then selectAdd Resource>Client Access Point.
+
+c. In theNamebox, create a name for this new listener.
+The name for the new listener is the network name that applications use to connect to databases in the SQL Server availability group.
+d. To finish creating the listener, selectNexttwice, and then selectFinish. Don't bring the listener or resource online at this point.
+Take the cluster role for the availability group offline. InFailover Cluster Manager, underRoles, right-click the role, and then selectStop Role.
+Take the cluster role for the availability group offline. InFailover Cluster Manager, underRoles, right-click the role, and then selectStop Role.
+Configure the IP resource for the availability group:a. Select theResourcestab, and then expand the client access point that you created. The client access point is offline.b. Right-click the IP resource, and then selectProperties. Note the name of the IP address, and use it in the$IPResourceNamevariable in the PowerShell script.c. UnderIP Address, selectStatic IP Address. Set the IP address as the same address that you used when you set the load balancer address on the Azure portal.
+Configure the IP resource for the availability group:
+a. Select theResourcestab, and then expand the client access point that you created. The client access point is offline.
+
+b. Right-click the IP resource, and then selectProperties. Note the name of the IP address, and use it in the$IPResourceNamevariable in the PowerShell script.
+$IPResourceName
+c. UnderIP Address, selectStatic IP Address. Set the IP address as the same address that you used when you set the load balancer address on the Azure portal.
+
+Make the SQL Server availability group dependent on the client access point:a. InFailover Cluster Manager, selectRoles, and then select your availability group.b. On theResourcestab, underOther Resources, right-click the availability group resource, and then selectProperties.c. On theDependenciestab, add the name of the client access point (the listener).d. SelectOK.
+Make the SQL Server availability group dependent on the client access point:
+a. InFailover Cluster Manager, selectRoles, and then select your availability group.
+b. On theResourcestab, underOther Resources, right-click the availability group resource, and then selectProperties.
+c. On theDependenciestab, add the name of the client access point (the listener).
+
+d. SelectOK.
+Make the client access point dependent on the IP address:a. InFailover Cluster Manager, selectRoles, and then select your availability group.b. On theResourcestab, right-click the client access point underServer Name, and then selectProperties.c. Select theDependenciestab. Verify that the IP address is a dependency. If it isn't, set a dependency on the IP address. If multiple resources are listed, verify that the IP addresses haveOR, notAND, dependencies. Then selectOK.TipYou can validate that the dependencies are correctly configured. InFailover Cluster Manager, go toRoles, right-click the availability group, selectMore Actions, and then selectShow Dependency Report. When the dependencies are correctly configured, the availability group is dependent on the network name, and the network name is dependent on the IP address.
+Make the client access point dependent on the IP address:
+a. InFailover Cluster Manager, selectRoles, and then select your availability group.
+b. On theResourcestab, right-click the client access point underServer Name, and then selectProperties.
+
+c. Select theDependenciestab. Verify that the IP address is a dependency. If it isn't, set a dependency on the IP address. If multiple resources are listed, verify that the IP addresses haveOR, notAND, dependencies. Then selectOK.
+
+Tip
+You can validate that the dependencies are correctly configured. InFailover Cluster Manager, go toRoles, right-click the availability group, selectMore Actions, and then selectShow Dependency Report. When the dependencies are correctly configured, the availability group is dependent on the network name, and the network name is dependent on the IP address.
+Set the cluster parameters in PowerShell:a. Copy the following PowerShell script to one of your SQL Server instances. Update the variables for your environment.$ClusterNetworkNamefind the name in theFailover Cluster Managerby selectingNetworks, right-click the network and selectProperties. The$ClusterNetworkNameis underNameon the General tab.$IPResourceNameis the name given to the IP Address resource in theFailover Cluster Manager. This is found in theFailover Cluster Managerby selectingRoles, select theSQL Server AG or FCI name, select theResourcestab underServer Name, right-click the IP address resource and selectProperties. The correct value is underNameon the General tab.$ListenerILBIPis the IP address that you created on the Azure load balancer for the availability group listener. Find the$ListenerILBIPin theFailover Cluster Manageron the same properties page as the SQL Server AG/FCI Listener Resource Name.$ListenerProbePortis the port that you configured on the Azure load balancer for the availability group listener, such as 59999. Any unused TCP port is valid.$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<IPResourceName>" # The IP address resource name.
+$ListenerILBIP = "<n.n.n.n>" # The IP address of the internal load balancer. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ListenerProbePort = <nnnnn>
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ListenerILBIP";"ProbePort"=$ListenerProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}b. Set the cluster parameters by running the PowerShell script on one of the cluster nodes.NoteIf your SQL Server instances are in separate regions, you need to run the PowerShell script twice. The first time, use the$ListenerILBIPand$ListenerProbePortvalues from the first region. The second time, use the$ListenerILBIPand$ListenerProbePortvalues from the second region. The cluster network name and the cluster IP resource name are also different for each region.
+Set the cluster parameters in PowerShell:
+a. Copy the following PowerShell script to one of your SQL Server instances. Update the variables for your environment.
+$ClusterNetworkNamefind the name in theFailover Cluster Managerby selectingNetworks, right-click the network and selectProperties. The$ClusterNetworkNameis underNameon the General tab.
+$ClusterNetworkNamefind the name in theFailover Cluster Managerby selectingNetworks, right-click the network and selectProperties. The$ClusterNetworkNameis underNameon the General tab.
+$ClusterNetworkName
+$IPResourceNameis the name given to the IP Address resource in theFailover Cluster Manager. This is found in theFailover Cluster Managerby selectingRoles, select theSQL Server AG or FCI name, select theResourcestab underServer Name, right-click the IP address resource and selectProperties. The correct value is underNameon the General tab.
+$IPResourceNameis the name given to the IP Address resource in theFailover Cluster Manager. This is found in theFailover Cluster Managerby selectingRoles, select theSQL Server AG or FCI name, select theResourcestab underServer Name, right-click the IP address resource and selectProperties. The correct value is underNameon the General tab.
+$IPResourceName
+$ListenerILBIPis the IP address that you created on the Azure load balancer for the availability group listener. Find the$ListenerILBIPin theFailover Cluster Manageron the same properties page as the SQL Server AG/FCI Listener Resource Name.
+$ListenerILBIPis the IP address that you created on the Azure load balancer for the availability group listener. Find the$ListenerILBIPin theFailover Cluster Manageron the same properties page as the SQL Server AG/FCI Listener Resource Name.
+$ListenerILBIP
+$ListenerProbePortis the port that you configured on the Azure load balancer for the availability group listener, such as 59999. Any unused TCP port is valid.
+$ListenerProbePortis the port that you configured on the Azure load balancer for the availability group listener, such as 59999. Any unused TCP port is valid.
+$ListenerProbePort
+$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<IPResourceName>" # The IP address resource name.
+$ListenerILBIP = "<n.n.n.n>" # The IP address of the internal load balancer. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ListenerProbePort = <nnnnn>
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ListenerILBIP";"ProbePort"=$ListenerProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<IPResourceName>" # The IP address resource name.
+$ListenerILBIP = "<n.n.n.n>" # The IP address of the internal load balancer. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ListenerProbePort = <nnnnn>
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ListenerILBIP";"ProbePort"=$ListenerProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+b. Set the cluster parameters by running the PowerShell script on one of the cluster nodes.
+Note
+If your SQL Server instances are in separate regions, you need to run the PowerShell script twice. The first time, use the$ListenerILBIPand$ListenerProbePortvalues from the first region. The second time, use the$ListenerILBIPand$ListenerProbePortvalues from the second region. The cluster network name and the cluster IP resource name are also different for each region.
+$ListenerILBIP
+$ListenerProbePort
+$ListenerILBIP
+$ListenerProbePort
+Bring the cluster role for the availability group online. InFailover Cluster Manager, underRoles, right-click the role, and then selectStart Role.
+Bring the cluster role for the availability group online. InFailover Cluster Manager, underRoles, right-click the role, and then selectStart Role.
+If necessary, repeat the preceding steps to set the cluster parameters for the IP address of the Windows Server failover cluster:
+Get the IP address name of the Windows Server failover cluster. InFailover Cluster Manager, underCluster Core Resources, locateServer Name.
+Get the IP address name of the Windows Server failover cluster. InFailover Cluster Manager, underCluster Core Resources, locateServer Name.
+Right-clickIP Address, and then selectProperties.
+Right-clickIP Address, and then selectProperties.
+Copy the name of the IP address fromName. It might beCluster IP Address.
+Copy the name of the IP address fromName. It might beCluster IP Address.
+Set the cluster parameters in PowerShell:a. Copy the following PowerShell script to one of your SQL Server instances. Update the variables for your environment.$ClusterCoreIPis the IP address that you created on the Azure load balancer for the Windows Server failover cluster's core cluster resource. It's different from the IP address for the availability group listener.$ClusterProbePortis the port that you configured on the Azure load balancer for the Windows Server failover cluster's health probe. It's different from the probe for the availability group listener.$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<ClusterIPResourceName>" # The IP address resource name.
+$ClusterCoreIP = "<n.n.n.n>" # The IP address of the cluster IP resource. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ClusterProbePort = <nnnnn> # The probe port from WSFCEndPointprobe in the Azure portal. This port must be different from the probe port for the availability group listener.
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ClusterCoreIP";"ProbePort"=$ClusterProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}b. Set the cluster parameters by running the PowerShell script on one of the cluster nodes.
+Set the cluster parameters in PowerShell:
+a. Copy the following PowerShell script to one of your SQL Server instances. Update the variables for your environment.
+$ClusterCoreIPis the IP address that you created on the Azure load balancer for the Windows Server failover cluster's core cluster resource. It's different from the IP address for the availability group listener.
+$ClusterCoreIPis the IP address that you created on the Azure load balancer for the Windows Server failover cluster's core cluster resource. It's different from the IP address for the availability group listener.
+$ClusterCoreIP
+$ClusterProbePortis the port that you configured on the Azure load balancer for the Windows Server failover cluster's health probe. It's different from the probe for the availability group listener.
+$ClusterProbePortis the port that you configured on the Azure load balancer for the Windows Server failover cluster's health probe. It's different from the probe for the availability group listener.
+$ClusterProbePort
+$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<ClusterIPResourceName>" # The IP address resource name.
+$ClusterCoreIP = "<n.n.n.n>" # The IP address of the cluster IP resource. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ClusterProbePort = <nnnnn> # The probe port from WSFCEndPointprobe in the Azure portal. This port must be different from the probe port for the availability group listener.
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ClusterCoreIP";"ProbePort"=$ClusterProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster network name. Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.
+$IPResourceName = "<ClusterIPResourceName>" # The IP address resource name.
+$ClusterCoreIP = "<n.n.n.n>" # The IP address of the cluster IP resource. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ClusterProbePort = <nnnnn> # The probe port from WSFCEndPointprobe in the Azure portal. This port must be different from the probe port for the availability group listener.
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ClusterCoreIP";"ProbePort"=$ClusterProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+b. Set the cluster parameters by running the PowerShell script on one of the cluster nodes.
+If any SQL resource is configured to use a port between 49152 and 65536 (thedefault dynamic port range for TCP/IP), add an exclusion for each port. Such resources might include:
+SQL Server database engine
+Always On availability group listener
+Health probe for the failover cluster instance
+Database mirroring endpoint
+Cluster core IP resource
+Adding an exclusion will prevent other system processes from being dynamically assigned to the same port. For this scenario, configure the following exclusions on all cluster nodes:
+netsh int ipv4 add excludedportrange tcp startport=58888 numberofports=1 store=persistent
+netsh int ipv4 add excludedportrange tcp startport=58888 numberofports=1 store=persistent
+netsh int ipv4 add excludedportrange tcp startport=59999 numberofports=1 store=persistent
+netsh int ipv4 add excludedportrange tcp startport=59999 numberofports=1 store=persistent
+It's important to configure the port exclusion when the port is not in use. Otherwise, the command will fail with a message like "The process cannot access the file because it is being used by another process."
+To confirm that the exclusions are configured correctly, use the following command:netsh int ipv4 show excludedportrange tcp.
+netsh int ipv4 show excludedportrange tcp
+Warning
+The port for the availability group listener's health probe has to be different from the port for the cluster core IP address's health probe. In these examples, the listener port is 59999 and the cluster core IP address's health probe port is 58888. Both ports require an "allow inbound" firewall rule.
+Set the listener port
+In SQL Server Management Studio, set the listener port:
+Open SQL Server Management Studio and connect to the primary replica.
+Open SQL Server Management Studio and connect to the primary replica.
+Go toAlways On High Availability>Availability groups>Availability group listeners.
+Go toAlways On High Availability>Availability groups>Availability group listeners.
+Right-click the listener name that you created in Failover Cluster Manager, and then selectProperties.
+Right-click the listener name that you created in Failover Cluster Manager, and then selectProperties.
+In thePortbox, specify the port number for the availability group listener. The default is 1433. SelectOK.
+In thePortbox, specify the port number for the availability group listener. The default is 1433. SelectOK.
+You now have an availability group for SQL Server on Azure VMs running in Azure Resource Manager mode.
+Test the connection to the listener
+To test the connection:
+UseBastionto connect to a SQL Server VM that's in the same virtual network but doesn't own the replica, such as the other replica.
+UseBastionto connect to a SQL Server VM that's in the same virtual network but doesn't own the replica, such as the other replica.
+Use thesqlcmdutility to test the connection. For example, the following script establishes asqlcmdconnection to the primary replica through the listener by using Windows authentication:sqlcmd -S <listenerName> -EIf the listener is using a port other than the default port (1433), specify the port in the connection string. For example, the following command connects to a listener at port 1435:sqlcmd -S <listenerName>,1435 -E
+Use thesqlcmdutility to test the connection. For example, the following script establishes asqlcmdconnection to the primary replica through the listener by using Windows authentication:
+sqlcmd -S <listenerName> -E
+sqlcmd -S <listenerName> -E
+If the listener is using a port other than the default port (1433), specify the port in the connection string. For example, the following command connects to a listener at port 1435:
+sqlcmd -S <listenerName>,1435 -E
+sqlcmd -S <listenerName>,1435 -E
+Thesqlcmdutility automatically connects to whichever SQL Server instance is the current primary replica of the availability group.
+Tip
+Make sure that the port you specify is open on the firewall of both SQL Server VMs. Both servers require an inbound rule for the TCP port that you use. For more information, seeAdd or edit firewall rules.
+Related content
+Add an IP address to a load balancer for a second availability group
+Configure automatic or manual failover
+Windows Server failover cluster with SQL Server on Azure VMs
+Always On availability groups with SQL Server on Azure VMs
+Overview of Always On availability groups
+HADR settings for SQL Server on Azure VMs
+Feedback
+Was this page helpful?
+Additional resources

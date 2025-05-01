@@ -1,0 +1,389 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Tutorial: Deploy an event-driven job with Azure Container Apps
+Article
+2024-12-10
+4 contributors
+In this article
+Azure Container Appsjobsallow you to run containerized tasks that execute for a finite duration and exit. You can trigger a job execution manually, on a schedule, or based on events. Jobs are best suited to for tasks such as data processing, machine learning, resource cleanup, or any scenario that requires serverless ephemeral compute resources.
+In this tutorial, you learn how to work withevent-driven jobs.
+Create a Container Apps environment to deploy your container apps
+Create an Azure Storage Queue to send messages to the container app
+Build a container image that runs a job
+Deploy the job to the Container Apps environment
+Verify that the queue messages are processed by the container app
+The job you create starts an execution for each message that is sent to an Azure Storage queue. Each job execution runs a container that performs the following steps:
+Gets one message from the queue.
+Logs the message to the job execution logs.
+Deletes the message from the queue.
+Exits.
+Important
+The scaler monitors the queue's length to determine how many jobs to start. For accurate scaling, don't delete a message from the queue until the job execution has finished processing it.
+The source code for the job you run in this tutorial is available in an Azure SamplesGitHub repository.
+Prerequisites
+An Azure account with an active subscription.If you don't have one, youcan create one for free.
+If you don't have one, youcan create one for free.
+Install theAzure CLI.
+Refer tojobs restrictionsfor a list of limitations.
+Setup
+To sign in to Azure from the CLI, run the following command and follow the prompts to complete the authentication process.az login
+To sign in to Azure from the CLI, run the following command and follow the prompts to complete the authentication process.
+az login
+az login
+Ensure you're running the latest version of the CLI via the upgrade command.az upgrade
+Ensure you're running the latest version of the CLI via the upgrade command.
+az upgrade
+az upgrade
+Install the latest version of the Azure Container Apps CLI extension.az extension add --name containerapp --upgrade
+Install the latest version of the Azure Container Apps CLI extension.
+az extension add --name containerapp --upgrade
+az extension add --name containerapp --upgrade
+Register theMicrosoft.App,Microsoft.OperationalInsights, andMicrosoft.Storagenamespaces if you haven't already registered them in your Azure subscription.az provider register --namespace Microsoft.App
+az provider register --namespace Microsoft.OperationalInsights
+az provider register --namespace Microsoft.Storage
+Register theMicrosoft.App,Microsoft.OperationalInsights, andMicrosoft.Storagenamespaces if you haven't already registered them in your Azure subscription.
+Microsoft.App
+Microsoft.OperationalInsights
+Microsoft.Storage
+az provider register --namespace Microsoft.App
+az provider register --namespace Microsoft.OperationalInsights
+az provider register --namespace Microsoft.Storage
+az provider register --namespace Microsoft.App
+az provider register --namespace Microsoft.OperationalInsights
+az provider register --namespace Microsoft.Storage
+Now that your Azure CLI setup is complete, you can define the environment variables that are used throughout this article.RESOURCE_GROUP="jobs-quickstart"
+LOCATION="northcentralus"
+ENVIRONMENT="env-jobs-quickstart"
+JOB_NAME="my-job"
+Now that your Azure CLI setup is complete, you can define the environment variables that are used throughout this article.
+RESOURCE_GROUP="jobs-quickstart"
+LOCATION="northcentralus"
+ENVIRONMENT="env-jobs-quickstart"
+JOB_NAME="my-job"
+RESOURCE_GROUP="jobs-quickstart"
+LOCATION="northcentralus"
+ENVIRONMENT="env-jobs-quickstart"
+JOB_NAME="my-job"
+Create a Container Apps environment
+The Azure Container Apps environment acts as a secure boundary around container apps and jobs so they can share the same network and communicate with each other.
+Create a resource group using the following command.az group create \
+    --name "$RESOURCE_GROUP" \
+    --location "$LOCATION"
+Create a resource group using the following command.
+az group create \
+    --name "$RESOURCE_GROUP" \
+    --location "$LOCATION"
+az group create \
+    --name "$RESOURCE_GROUP" \
+    --location "$LOCATION"
+Create the Container Apps environment using the following command.az containerapp env create \
+    --name "$ENVIRONMENT" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION"
+Create the Container Apps environment using the following command.
+az containerapp env create \
+    --name "$ENVIRONMENT" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION"
+az containerapp env create \
+    --name "$ENVIRONMENT" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION"
+Set up a storage queue
+The job uses an Azure Storage queue to receive messages. In this section, you create a storage account and a queue.
+Define a name for your storage account.STORAGE_ACCOUNT_NAME="<STORAGE_ACCOUNT_NAME>"
+QUEUE_NAME="myqueue"Replace<STORAGE_ACCOUNT_NAME>with a unique name for your storage account. Storage account names must beunique within Azureand be from 3 to 24 characters in length containing numbers and lowercase letters only.
+Define a name for your storage account.
+STORAGE_ACCOUNT_NAME="<STORAGE_ACCOUNT_NAME>"
+QUEUE_NAME="myqueue"
+STORAGE_ACCOUNT_NAME="<STORAGE_ACCOUNT_NAME>"
+QUEUE_NAME="myqueue"
+Replace<STORAGE_ACCOUNT_NAME>with a unique name for your storage account. Storage account names must beunique within Azureand be from 3 to 24 characters in length containing numbers and lowercase letters only.
+<STORAGE_ACCOUNT_NAME>
+Create an Azure Storage account.az storage account create \
+    --name "$STORAGE_ACCOUNT_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --sku Standard_LRS \
+    --kind StorageV2If this command returns the error:(SubscriptionNotFound) Subscription <SUBSCRIPTION_ID> was not found.
+Code: SubscriptionNotFound
+Message: Subscription <SUBSCRIPTION_ID> was not found.Be sure you have registered theMicrosoft.Storagenamespace in your Azure subscription.az provider register --namespace Microsoft.Storage
+Create an Azure Storage account.
+az storage account create \
+    --name "$STORAGE_ACCOUNT_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --sku Standard_LRS \
+    --kind StorageV2
+az storage account create \
+    --name "$STORAGE_ACCOUNT_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --sku Standard_LRS \
+    --kind StorageV2
+If this command returns the error:
+(SubscriptionNotFound) Subscription <SUBSCRIPTION_ID> was not found.
+Code: SubscriptionNotFound
+Message: Subscription <SUBSCRIPTION_ID> was not found.
+(SubscriptionNotFound) Subscription <SUBSCRIPTION_ID> was not found.
+Code: SubscriptionNotFound
+Message: Subscription <SUBSCRIPTION_ID> was not found.
+Be sure you have registered theMicrosoft.Storagenamespace in your Azure subscription.
+Microsoft.Storage
+az provider register --namespace Microsoft.Storage
+az provider register --namespace Microsoft.Storage
+Save the queue's connection string into a variable.QUEUE_CONNECTION_STRING=$(az storage account show-connection-string -g $RESOURCE_GROUP --name $STORAGE_ACCOUNT_NAME --query connectionString --output tsv)
+Save the queue's connection string into a variable.
+QUEUE_CONNECTION_STRING=$(az storage account show-connection-string -g $RESOURCE_GROUP --name $STORAGE_ACCOUNT_NAME --query connectionString --output tsv)
+QUEUE_CONNECTION_STRING=$(az storage account show-connection-string -g $RESOURCE_GROUP --name $STORAGE_ACCOUNT_NAME --query connectionString --output tsv)
+Create the message queue.az storage queue create \
+    --name "$QUEUE_NAME" \
+    --account-name "$STORAGE_ACCOUNT_NAME" \
+    --connection-string "$QUEUE_CONNECTION_STRING"
+Create the message queue.
+az storage queue create \
+    --name "$QUEUE_NAME" \
+    --account-name "$STORAGE_ACCOUNT_NAME" \
+    --connection-string "$QUEUE_CONNECTION_STRING"
+az storage queue create \
+    --name "$QUEUE_NAME" \
+    --account-name "$STORAGE_ACCOUNT_NAME" \
+    --connection-string "$QUEUE_CONNECTION_STRING"
+Create a user-assigned managed identity
+To avoid using administrative credentials, pull images from private repositories in Microsoft Azure Container Registry using managed identities for authentication. When possible, use a user-assigned managed identity to pull images.
+Create a user-assigned managed identity. Before you run the following commands, choose a name for your managed identity and replace the\<PLACEHOLDER\>with the name.IDENTITY="<YOUR_IDENTITY_NAME>"az identity create \
+    --name $IDENTITY \
+    --resource-group $RESOURCE_GROUP
+Create a user-assigned managed identity. Before you run the following commands, choose a name for your managed identity and replace the\<PLACEHOLDER\>with the name.
+\<PLACEHOLDER\>
+IDENTITY="<YOUR_IDENTITY_NAME>"
+IDENTITY="<YOUR_IDENTITY_NAME>"
+az identity create \
+    --name $IDENTITY \
+    --resource-group $RESOURCE_GROUP
+az identity create \
+    --name $IDENTITY \
+    --resource-group $RESOURCE_GROUP
+Get the identity's resource ID.IDENTITY_ID=$(az identity show \
+    --name $IDENTITY \
+    --resource-group $RESOURCE_GROUP \
+    --query id \
+    --output tsv)
+Get the identity's resource ID.
+IDENTITY_ID=$(az identity show \
+    --name $IDENTITY \
+    --resource-group $RESOURCE_GROUP \
+    --query id \
+    --output tsv)
+IDENTITY_ID=$(az identity show \
+    --name $IDENTITY \
+    --resource-group $RESOURCE_GROUP \
+    --query id \
+    --output tsv)
+Build and deploy the job
+To deploy the job, you must first build a container image for the job and push it to a registry. Then, you can deploy the job to the Container Apps environment.
+Define a name for your container image and registry.CONTAINER_IMAGE_NAME="queue-reader-job:1.0"
+CONTAINER_REGISTRY_NAME="<CONTAINER_REGISTRY_NAME>"Replace<CONTAINER_REGISTRY_NAME>with a unique name for your container registry. Container registry names must beunique within Azureand be from 5 to 50 characters in length containing numbers and lowercase letters only.
+Define a name for your container image and registry.
+CONTAINER_IMAGE_NAME="queue-reader-job:1.0"
+CONTAINER_REGISTRY_NAME="<CONTAINER_REGISTRY_NAME>"
+CONTAINER_IMAGE_NAME="queue-reader-job:1.0"
+CONTAINER_REGISTRY_NAME="<CONTAINER_REGISTRY_NAME>"
+Replace<CONTAINER_REGISTRY_NAME>with a unique name for your container registry. Container registry names must beunique within Azureand be from 5 to 50 characters in length containing numbers and lowercase letters only.
+<CONTAINER_REGISTRY_NAME>
+Create a container registry.az acr create \
+    --name "$CONTAINER_REGISTRY_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --sku Basic
+Create a container registry.
+az acr create \
+    --name "$CONTAINER_REGISTRY_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --sku Basic
+az acr create \
+    --name "$CONTAINER_REGISTRY_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --location "$LOCATION" \
+    --sku Basic
+Your container registry must allow Azure Resource Manager (ARM) audience tokens for authentication in order to use managed identity to pull images.Use the following command to check if ARM tokens are allowed to access your Azure Container Registry (ACR).az acr config authentication-as-arm show --registry "$CONTAINER_REGISTRY_NAME"If ARM tokens are allowed, the command outputs the following.{
+  "status": "enabled"
+}If thestatusisdisabled, allow ARM tokens with the following command.az acr config authentication-as-arm update --registry "$CONTAINER_REGISTRY_NAME" --status enabled
+Your container registry must allow Azure Resource Manager (ARM) audience tokens for authentication in order to use managed identity to pull images.
+Use the following command to check if ARM tokens are allowed to access your Azure Container Registry (ACR).
+az acr config authentication-as-arm show --registry "$CONTAINER_REGISTRY_NAME"
+az acr config authentication-as-arm show --registry "$CONTAINER_REGISTRY_NAME"
+If ARM tokens are allowed, the command outputs the following.
+{
+  "status": "enabled"
+}
+{
+  "status": "enabled"
+}
+If thestatusisdisabled, allow ARM tokens with the following command.
+status
+disabled
+az acr config authentication-as-arm update --registry "$CONTAINER_REGISTRY_NAME" --status enabled
+az acr config authentication-as-arm update --registry "$CONTAINER_REGISTRY_NAME" --status enabled
+The source code for the job is available onGitHub. Run the following command to clone the repository and build the container image in the cloud using theaz acr buildcommand.az acr build \
+    --registry "$CONTAINER_REGISTRY_NAME" \
+    --image "$CONTAINER_IMAGE_NAME" \
+    "https://github.com/Azure-Samples/container-apps-event-driven-jobs-tutorial.git"The image is now available in the container registry.
+The source code for the job is available onGitHub. Run the following command to clone the repository and build the container image in the cloud using theaz acr buildcommand.
+az acr build
+az acr build \
+    --registry "$CONTAINER_REGISTRY_NAME" \
+    --image "$CONTAINER_IMAGE_NAME" \
+    "https://github.com/Azure-Samples/container-apps-event-driven-jobs-tutorial.git"
+az acr build \
+    --registry "$CONTAINER_REGISTRY_NAME" \
+    --image "$CONTAINER_IMAGE_NAME" \
+    "https://github.com/Azure-Samples/container-apps-event-driven-jobs-tutorial.git"
+The image is now available in the container registry.
+Create a job in the Container Apps environment.az containerapp job create \
+    --name "$JOB_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --environment "$ENVIRONMENT" \
+    --trigger-type "Event" \
+    --replica-timeout "1800" \
+    --min-executions "0" \
+    --max-executions "10" \
+    --polling-interval "60" \
+    --scale-rule-name "queue" \
+    --scale-rule-type "azure-queue" \
+    --scale-rule-metadata "accountName=$STORAGE_ACCOUNT_NAME" "queueName=$QUEUE_NAME" "queueLength=1" \
+    --scale-rule-auth "connection=connection-string-secret" \
+    --image "$CONTAINER_REGISTRY_NAME.azurecr.io/$CONTAINER_IMAGE_NAME" \
+    --cpu "0.5" \
+    --memory "1Gi" \
+    --secrets "connection-string-secret=$QUEUE_CONNECTION_STRING" \
+    --registry-server "$CONTAINER_REGISTRY_NAME.azurecr.io" \
+    --mi-user-assigned "$IDENTITY_ID" \
+    --registry-identity "$IDENTITY_ID" \
+    --env-vars "AZURE_STORAGE_QUEUE_NAME=$QUEUE_NAME" "AZURE_STORAGE_CONNECTION_STRING=secretref:connection-string-secret"The following table describes the key parameters used in the command.ParameterDescription--replica-timeoutThe maximum duration a replica can execute.--min-executionsThe minimum number of job executions to run per polling interval.--max-executionsThe maximum number of job executions to run per polling interval.--polling-intervalThe polling interval at which to evaluate the scale rule.--scale-rule-nameThe name of the scale rule.--scale-rule-typeThe type of scale rule to use.--scale-rule-metadataThe metadata for the scale rule.--scale-rule-authThe authentication for the scale rule.--secretsThe secrets to use for the job.--registry-serverThe container registry server to use for the job. For an Azure Container Registry, the command automatically configures authentication.--mi-user-assignedThe resource ID of the user-assigned managed identity to assign to the job.--registry-identityThe resource ID of a managed identity to authenticate with the registry server instead of using a username and password. If possible, an 'acrpull' role assignment is created for the identity automatically.--env-varsThe environment variables to use for the job.The scale rule configuration defines the event source to monitor. It is evaluated on each polling interval and determines how many job executions to trigger. To learn more, seeSet scaling rules.
+Create a job in the Container Apps environment.
+az containerapp job create \
+    --name "$JOB_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --environment "$ENVIRONMENT" \
+    --trigger-type "Event" \
+    --replica-timeout "1800" \
+    --min-executions "0" \
+    --max-executions "10" \
+    --polling-interval "60" \
+    --scale-rule-name "queue" \
+    --scale-rule-type "azure-queue" \
+    --scale-rule-metadata "accountName=$STORAGE_ACCOUNT_NAME" "queueName=$QUEUE_NAME" "queueLength=1" \
+    --scale-rule-auth "connection=connection-string-secret" \
+    --image "$CONTAINER_REGISTRY_NAME.azurecr.io/$CONTAINER_IMAGE_NAME" \
+    --cpu "0.5" \
+    --memory "1Gi" \
+    --secrets "connection-string-secret=$QUEUE_CONNECTION_STRING" \
+    --registry-server "$CONTAINER_REGISTRY_NAME.azurecr.io" \
+    --mi-user-assigned "$IDENTITY_ID" \
+    --registry-identity "$IDENTITY_ID" \
+    --env-vars "AZURE_STORAGE_QUEUE_NAME=$QUEUE_NAME" "AZURE_STORAGE_CONNECTION_STRING=secretref:connection-string-secret"
+az containerapp job create \
+    --name "$JOB_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --environment "$ENVIRONMENT" \
+    --trigger-type "Event" \
+    --replica-timeout "1800" \
+    --min-executions "0" \
+    --max-executions "10" \
+    --polling-interval "60" \
+    --scale-rule-name "queue" \
+    --scale-rule-type "azure-queue" \
+    --scale-rule-metadata "accountName=$STORAGE_ACCOUNT_NAME" "queueName=$QUEUE_NAME" "queueLength=1" \
+    --scale-rule-auth "connection=connection-string-secret" \
+    --image "$CONTAINER_REGISTRY_NAME.azurecr.io/$CONTAINER_IMAGE_NAME" \
+    --cpu "0.5" \
+    --memory "1Gi" \
+    --secrets "connection-string-secret=$QUEUE_CONNECTION_STRING" \
+    --registry-server "$CONTAINER_REGISTRY_NAME.azurecr.io" \
+    --mi-user-assigned "$IDENTITY_ID" \
+    --registry-identity "$IDENTITY_ID" \
+    --env-vars "AZURE_STORAGE_QUEUE_NAME=$QUEUE_NAME" "AZURE_STORAGE_CONNECTION_STRING=secretref:connection-string-secret"
+The following table describes the key parameters used in the command.
+--replica-timeout
+--min-executions
+--max-executions
+--polling-interval
+--scale-rule-name
+--scale-rule-type
+--scale-rule-metadata
+--scale-rule-auth
+--secrets
+--registry-server
+--mi-user-assigned
+--registry-identity
+--env-vars
+The scale rule configuration defines the event source to monitor. It is evaluated on each polling interval and determines how many job executions to trigger. To learn more, seeSet scaling rules.
+The event-driven job is now created in the Container Apps environment.
+Verify the deployment
+The job is configured to evaluate the scale rule every 60 seconds, which checks the number of messages in the queue. For each evaluation period, it starts a new job execution for each message in the queue, up to a maximum of 10 executions.
+To verify the job was configured correctly, you can send some messages to the queue, confirm that job executions are started, and the messages are logged to the job execution logs.
+Send a message to the queue.az storage message put \
+    --content "Hello Queue Reader Job" \
+    --queue-name "$QUEUE_NAME" \
+    --connection-string "$QUEUE_CONNECTION_STRING"
+Send a message to the queue.
+az storage message put \
+    --content "Hello Queue Reader Job" \
+    --queue-name "$QUEUE_NAME" \
+    --connection-string "$QUEUE_CONNECTION_STRING"
+az storage message put \
+    --content "Hello Queue Reader Job" \
+    --queue-name "$QUEUE_NAME" \
+    --connection-string "$QUEUE_CONNECTION_STRING"
+List the executions of a job.az containerapp job execution list \
+    --name "$JOB_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --output jsonSince the job is configured to evaluate the scale rule every 60 seconds, it may take up to a full minute for the job execution to start. Repeat the command until you see the job execution and its status isSucceeded.
+List the executions of a job.
+az containerapp job execution list \
+    --name "$JOB_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --output json
+az containerapp job execution list \
+    --name "$JOB_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --output json
+Since the job is configured to evaluate the scale rule every 60 seconds, it may take up to a full minute for the job execution to start. Repeat the command until you see the job execution and its status isSucceeded.
+Succeeded
+Run the following commands to see logged messages. These commands require the Log analytics extension, so accept the prompt to install extension when requested.LOG_ANALYTICS_WORKSPACE_ID=$(az containerapp env show --name $ENVIRONMENT --resource-group $RESOURCE_GROUP --query properties.appLogsConfiguration.logAnalyticsConfiguration.customerId --output tsv)
+
+az monitor log-analytics query \
+    --workspace "$LOG_ANALYTICS_WORKSPACE_ID" \
+    --analytics-query "ContainerAppConsoleLogs_CL | where ContainerJobName_s == '$JOB_NAME' | order by _timestamp_d asc"Until theContainerAppConsoleLogs_CLtable is ready, the command returns an error:BadArgumentError: The request had some invalid properties. Wait a few minutes and try again.
+Run the following commands to see logged messages. These commands require the Log analytics extension, so accept the prompt to install extension when requested.
+LOG_ANALYTICS_WORKSPACE_ID=$(az containerapp env show --name $ENVIRONMENT --resource-group $RESOURCE_GROUP --query properties.appLogsConfiguration.logAnalyticsConfiguration.customerId --output tsv)
+
+az monitor log-analytics query \
+    --workspace "$LOG_ANALYTICS_WORKSPACE_ID" \
+    --analytics-query "ContainerAppConsoleLogs_CL | where ContainerJobName_s == '$JOB_NAME' | order by _timestamp_d asc"
+LOG_ANALYTICS_WORKSPACE_ID=$(az containerapp env show --name $ENVIRONMENT --resource-group $RESOURCE_GROUP --query properties.appLogsConfiguration.logAnalyticsConfiguration.customerId --output tsv)
+
+az monitor log-analytics query \
+    --workspace "$LOG_ANALYTICS_WORKSPACE_ID" \
+    --analytics-query "ContainerAppConsoleLogs_CL | where ContainerJobName_s == '$JOB_NAME' | order by _timestamp_d asc"
+Until theContainerAppConsoleLogs_CLtable is ready, the command returns an error:BadArgumentError: The request had some invalid properties. Wait a few minutes and try again.
+ContainerAppConsoleLogs_CL
+BadArgumentError: The request had some invalid properties
+Tip
+Having issues? Let us know on GitHub by opening an issue in theAzure Container Apps repo.
+Clean up resources
+Once you're done, run the following command to delete the resource group that contains your Container Apps resources.
+Caution
+The following command deletes the specified resource group and all resources contained within it. If resources outside the scope of this tutorial exist in the specified resource group, they will also be deleted.
+az group delete \
+    --resource-group $RESOURCE_GROUP
+az group delete \
+    --resource-group $RESOURCE_GROUP
+Next steps
+Container Apps jobs
+Feedback
+Was this page helpful?
+Additional resources

@@ -1,0 +1,163 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Use read-only replicas to offload read-only query workloads
+Article
+2023-11-28
+24 contributors
+In this article
+Applies to:Azure SQL DatabaseAzure SQL Managed Instance
+As part ofHigh Availability architecture, each single database or elastic pool database in the Premium and Business Critical service tier is automatically provisioned with a primary read-write replica and one or more secondary read-only replicas. The secondary replicas are provisioned with the same compute size as the primary replica. Theread scale-outfeature allows you to offload read-only workloads using the compute capacity of one of the read-only replicas, instead of running them on the read-write replica. This way, some read-only workloads can be isolated from the read-write workloads, and don't affect their performance. The feature is intended for the applications that include logically separated read-only workloads, such as analytics. In the Premium and Business Critical service tiers, applications could gain performance benefits using this additional capacity at no extra cost.
+Theread scale-outfeature is also available in the Hyperscale service tier when at least onesecondary replicais added. Hyperscale secondarynamed replicasprovide independent scaling, access isolation, workload isolation, support for various read scale-out scenarios, and other benefits. Multiple secondaryHA replicascan be used for load-balancing read-only workloads that require more resources than available on one secondary HA replica.
+The High Availability architecture of Basic, Standard, and General Purpose service tiers doesn't include any replicas. Theread scale-outfeature isn't available in these service tiers. However, when using Azure SQL Database,geo-replicascan provide similar functionality in these service tiers.  When using Azure SQL Managed Instance and failover groups, thefailover group read-only listenercan provide similar functionality respectively.
+The following diagram illustrates the feature for Premium and Business Critical databases and managed instances.
+
+Theread scale-outfeature is enabled by default on new Premium,  Business Critical, and Hyperscale databases.
+Note
+Read scale-out is always enabled in the Business Critical service tier of SQL Managed Instance, and for Hyperscale databases with at least one secondary replica.
+If your SQL connection string is configured withApplicationIntent=ReadOnly, the application is redirected to a read-only replica of that database or managed instance. For information on how to use theApplicationIntentproperty, seeSpecifying Application Intent.
+ApplicationIntent=ReadOnly
+ApplicationIntent
+For Azure SQL Database only, if you wish to ensure that the application connects to the primary replica regardless of theApplicationIntentsetting in the SQL connection string, you must explicitly disable read scale-out when creating the database or when altering its configuration. For example, if you upgrade your database from Standard or General Purpose tier to Premium or Business Critical and want to make sure all your connections continue to go to the primary replica, disable read scale-out. For details on how to disable it, seeEnable and disable read scale-out.
+ApplicationIntent
+Note
+Query Store and SQL Profiler features are not supported on read-only replicas.
+Data consistency
+Data changes made on the primary replica are persisted on read-only replicas synchronously or asynchronously depending on replica type. However, for all replica types, reads from a read-only replica are always asynchronous with respect to the primary. Within a session connected to a read-only replica, reads are always transactionally consistent. Because data propagation latency is variable, different replicas can return data at slightly different points in time relative to the primary and each other. If a read-only replica becomes unavailable and a session reconnects, it may connect to a replica that is at a different point in time than the original replica. Likewise, if an application changes data using a read-write session on the primary and immediately reads it using a read-only session on a read-only replica, it is possible that the latest changes aren't immediately visible.
+Typical data propagation latency between the primary replica and read-only replicas varies in the range from tens of milliseconds to single-digit seconds. However, there is no fixed upper bound on data propagation latency. Conditions such as high resource utilization on the replica can increase latency substantially. Applications that require guaranteed data consistency across sessions, or require committed data to be readable immediately should use the primary replica.
+Note
+Data propagation latency includes the time required to send and persist (if applicable) log records to a secondary replica. It also includes the time required to redo (apply) these log records to data pages. To ensure data consistency, changes are not visible until the transaction commit log record is applied. When the workload uses larger transactions, effective data propagation latency is increased.
+To monitor data propagation latency, seeMonitor and troubleshoot read-only replica.
+Connect to a read-only replica
+When you enable read scale-out for a database, theApplicationIntentoption in the connection string provided by the client dictates whether the connection is routed to the write replica or to a read-only replica. Specifically, if theApplicationIntentvalue isReadWrite(the default value), the connection is directed to the read-write replica. This is identical to the behavior whenApplicationIntentisn't included in the connection string. If theApplicationIntentvalue isReadOnly, the connection is routed to a read-only replica.
+ApplicationIntent
+ApplicationIntent
+ReadWrite
+ApplicationIntent
+ApplicationIntent
+ReadOnly
+For example, the following connection string connects the client to a read-only replica (replacing the items in the angle brackets with the correct values for your environment and dropping the angle brackets):
+Server=tcp:<server>.database.windows.net;Database=<mydatabase>;ApplicationIntent=ReadOnly;User ID=<myLogin>;Password=<password>;Trusted_Connection=False; Encrypt=True;
+Server=tcp:<server>.database.windows.net;Database=<mydatabase>;ApplicationIntent=ReadOnly;User ID=<myLogin>;Password=<password>;Trusted_Connection=False; Encrypt=True;
+To connect to a read-only replica using SQL Server Management Studio (SSMS), selectOptions
+
+SelectAdditional Connection Parametersand enterApplicationIntent=ReadOnlyand then selectConnect
+ApplicationIntent=ReadOnly
+
+Either of the following connection strings connects the client to a read-write replica (replacing the items in the angle brackets with the correct values for your environment and dropping the angle brackets):
+Server=tcp:<server>.database.windows.net;Database=<mydatabase>;ApplicationIntent=ReadWrite;User ID=<myLogin>;Password=<password>;Trusted_Connection=False; Encrypt=True;
+
+Server=tcp:<server>.database.windows.net;Database=<mydatabase>;User ID=<myLogin>;Password=<password>;Trusted_Connection=False; Encrypt=True;
+Server=tcp:<server>.database.windows.net;Database=<mydatabase>;ApplicationIntent=ReadWrite;User ID=<myLogin>;Password=<password>;Trusted_Connection=False; Encrypt=True;
+
+Server=tcp:<server>.database.windows.net;Database=<mydatabase>;User ID=<myLogin>;Password=<password>;Trusted_Connection=False; Encrypt=True;
+Verify that a connection is to a read-only replica
+You can verify whether you are connected to a read-only replica by running the following query in the context of your database. It returns READ_ONLY when you are connected to a read-only replica.
+SELECT DATABASEPROPERTYEX(DB_NAME(), 'Updateability');
+SELECT DATABASEPROPERTYEX(DB_NAME(), 'Updateability');
+Note
+In Premium and Business Critical service tiers, only one of the read-only replicas is accessible at any given time. Hyperscale supports multiple read-only replicas.
+Monitor and troubleshoot read-only replicas
+You have a variety of ways to monitor read-only replicas, including: DMVs, extended events, anddatabase watcher (preview).
+When connected to a read-only replica, Dynamic Management Views (DMVs) reflect the state of the replica, and can be queried for monitoring and troubleshooting purposes. The database engine provides multiple views to expose a wide variety of monitoring data.
+The following views are commonly used for replica monitoring and troubleshooting:
+Note
+Thesys.resource_statsandsys.elastic_pool_resource_statsDMVs in the logicalmasterdatabase return resource utilization data of the primary replica.
+sys.resource_stats
+sys.elastic_pool_resource_stats
+master
+Monitor read-only replicas with Extended Events
+An extended event session can't be created when connected to a read-only replica. However, in Azure SQL Database and Azure SQL Managed Instance, the definitions of database-scopedExtended Eventsessions created and altered on the primary replica replicate to read-only replicas, including geo-replicas, and capture events on read-only replicas.
+In Azure SQL Database, an extended event session on a read-only replica that is based on a session definition from the primary replica can be started and stopped independently of the session on the primary replica.
+In Azure SQL Managed Instance, to start a trace on a read-only replica, you must first start the trace on the primary replica before you can start the trace on the read-only replica. If you don't first start the trace on the primary replica, you receive the following error when attempting to start the trace on the read-only replica:
+Msg 3906, Level 16, State 2, Line 1
+Failed to update database "master" because the database is read-only.
+After starting the trace first on the primary replica, then on the read-only replica, you may stop the trace on the primary replica.
+To drop an event session on a read-only replica, follow these steps:
+ConnectSSMS Object Explorer or a query window to the read-only replica.
+Stop the session on the read-only replica, either by selectingStop Sessionon the session context menu in Object Explorer, or by executingALTER EVENT SESSION [session-name-here] ON DATABASE STATE = STOP;in a query window.
+ALTER EVENT SESSION [session-name-here] ON DATABASE STATE = STOP;
+Connect Object Explorer or a query window to the primary replica.
+Drop the session on the primary replica, either by selectingDeleteon the session context menu, or by executingDROP EVENT SESSION [session-name-here] ON DATABASE;
+DROP EVENT SESSION [session-name-here] ON DATABASE;
+Transaction isolation level on read-only replicas
+Transactions on read-only replicas always use the snapshottransaction isolation level, regardless of transaction isolation level of the session, and regardless of any query hints. Snapshot isolation uses row versioning to avoid blocking scenarios where readers block writers.
+In rare cases, if a snapshot isolation transaction accesses object metadata that has been modified in another concurrent transaction, it may receive error3961, "Snapshot isolation transaction failed in database '%.*ls' because the object accessed by the statement has been modified by a DDL statement in another concurrent transaction since the start of this transaction. It is disallowed because the metadata is not versioned. A concurrent update to metadata can lead to inconsistency if mixed with snapshot isolation."
+Long-running queries on read-only replicas
+Queries running on read-only replicas need to access metadata for the objects referenced in the query (tables, indexes, statistics, etc.) In rare cases, if object metadata is modified on the primary replica while a query holds a lock on the same object on the read-only replica, the query canblockthe process that applies changes from the primary replica to the read-only replica. If such a query were to run for a long time, it would cause the read-only replica to be significantly out of sync with the primary replica. For replicas that are potential failover targets (secondary replicas in Premium and Business Critical service tiers, Hyperscale HA replicas, and all geo-replicas), this would also delay database recovery if a failover were to occur, causing longer than expected downtime.
+If a long-running query on a read-only replica directly or indirectly causes this kind of blocking, it may be automatically terminated to avoid excessive data latency and potential database availability impact. The session receives error 1219, "Your session has been disconnected because of a high priority DDL operation", or error 3947, "The transaction was aborted because the secondary compute failed to catch up redo. Retry the transaction."
+Note
+If you receive error 3961, 1219, or 3947 when running queries against a read-only replica, retry the query. Alternatively, avoid operations that modify object metadata (schema changes, index maintenance, statistics updates, etc.) on the primary replica while long-running queries execute on secondary replicas.
+Tip
+In Premium and Business Critical service tiers, when connected to a read-only replica, theredo_queue_sizeandredo_ratecolumns in thesys.dm_database_replica_statesDMV may be used to monitor data synchronization process, serving as indicators of data propagation latency on the read-only replica.
+redo_queue_size
+redo_rate
+Enable and disable read scale-out for SQL Database
+For SQL Managed Instance, read-scale out is automatically enabled on the Business Critical service tier, and isn't available in the General Purpose service tier.  Disabling and reenabling read scale-out isn't possible.
+For SQL Database, read scale-out is enabled by default on Premium, Business Critical, and Hyperscale service tiers. Read scale-out can't be enabled in Basic, Standard, or General Purpose service tiers. Read scale-out is automatically disabled on Hyperscale databases configured with zero secondary replicas.
+For single and pooled databases in Azure SQL Database, you can disable and re-enable read scale-out in the Premium or Business Critical service tiers by using the Azure portal, and Azure PowerShell. These options aren't available for SQL Managed Instance as read-scale out can't be disabled.
+Note
+For single databases and elastic pool databases, the ability to disable read scale-out is provided for backward compatibility. Read scale-out cannot be disabled on Business Critical managed instances.
+Azure portal
+For Azure SQL Database, you can manage the read scale-out setting on theCompute + storagedatabase pane, available underSettings. Using the Azure portal to enable or disable read scale-out isn't available for Azure SQL Managed Instance.
+PowerShell
+Important
+The PowerShell Azure Resource Manager module is still supported, but all future development is for the Az.Sql module. The Azure Resource Manager module will continue to receive bug fixes until at least December 2020.  The arguments for the commands in the Az module and in the Azure Resource Manager modules are substantially identical. For more information about their compatibility, seeIntroducing the new Azure PowerShell Az module.
+Managing read scale-out in Azure PowerShell requires the December 2016 Azure PowerShell release or newer. For the newest PowerShell release, seeAzure PowerShell.
+In Azure SQL Database, you can disable or re-enable read scale-out in Azure PowerShell by invoking theSet-AzSqlDatabasecmdlet and passing in the desired value  (EnabledorDisabled) for the-ReadScaleparameter. Disabling read scale-out for SQL Managed Instance isn't available.
+Enabled
+Disabled
+-ReadScale
+To disable read scale-out on an existing database (replacing the items in the angle brackets with the correct values for your environment and dropping the angle brackets):
+Set-AzSqlDatabase -ResourceGroupName <resourceGroupName> -ServerName <serverName> -DatabaseName <databaseName> -ReadScale Disabled
+Set-AzSqlDatabase -ResourceGroupName <resourceGroupName> -ServerName <serverName> -DatabaseName <databaseName> -ReadScale Disabled
+To disable read scale-out on a new database (replacing the items in the angle brackets with the correct values for your environment and dropping the angle brackets):
+New-AzSqlDatabase -ResourceGroupName <resourceGroupName> -ServerName <serverName> -DatabaseName <databaseName> -ReadScale Disabled -Edition Premium
+New-AzSqlDatabase -ResourceGroupName <resourceGroupName> -ServerName <serverName> -DatabaseName <databaseName> -ReadScale Disabled -Edition Premium
+To re-enable read scale-out on an existing database (replacing the items in the angle brackets with the correct values for your environment and dropping the angle brackets):
+Set-AzSqlDatabase -ResourceGroupName <resourceGroupName> -ServerName <serverName> -DatabaseName <databaseName> -ReadScale Enabled
+Set-AzSqlDatabase -ResourceGroupName <resourceGroupName> -ServerName <serverName> -DatabaseName <databaseName> -ReadScale Enabled
+REST API
+To create a database with read scale-out disabled, or to change the setting for an existing database, use the following method with thereadScaleproperty set toEnabledorDisabled, as in the following sample request.
+readScale
+Enabled
+Disabled
+Method: PUT
+URL: https://management.azure.com/subscriptions/{SubscriptionId}/resourceGroups/{GroupName}/providers/Microsoft.Sql/servers/{ServerName}/databases/{DatabaseName}?api-version= 2014-04-01-preview
+Body: {
+   "properties": {
+      "readScale":"Disabled"
+   }
+}
+Method: PUT
+URL: https://management.azure.com/subscriptions/{SubscriptionId}/resourceGroups/{GroupName}/providers/Microsoft.Sql/servers/{ServerName}/databases/{DatabaseName}?api-version= 2014-04-01-preview
+Body: {
+   "properties": {
+      "readScale":"Disabled"
+   }
+}
+For more information, seeDatabases - Create or update.
+Use thetempdbdatabase on a read-only replica
+tempdb
+Thetempdbdatabase on the primary replica isn't replicated to the read-only replicas. Each replica has its owntempdbdatabase that is created when the replica is created. This ensures thattempdbis updateable and can be modified during your query execution. If your read-only workload depends on usingtempdbobjects, you should create these objects as part of the same workload, while connected to a read-only replica.
+tempdb
+tempdb
+tempdb
+tempdb
+Use read scale-out with geo-replicated databases
+Geo-replicated secondary databases have the same High Availability architecture as primary databases. If you're connecting to the geo-replicated secondary database with read scale-out enabled, your sessions withApplicationIntent=ReadOnlyare routed to one of the high availability replicas in the same way they are routed on the primary writeable database. The sessions withoutApplicationIntent=ReadOnlyare routed to the primary replica of the geo-replicated secondary, which is also read-only.
+ApplicationIntent=ReadOnly
+ApplicationIntent=ReadOnly
+In this fashion, creating a geo-replica can provide multiple additional read-only replicas for a read-write primary database. Each additional geo-replica provides another set of read-only replicas. Geo-replicas can be created in any Azure region, including the region of the primary database.
+Note
+There is no automatic round-robin or any other load-balanced routing between the replicas of a geo-replicated secondary database, with the exception of a Hyperscale geo-replica with more than one HA replica. In that case, sessions with read-only intent are distributed over all HA replicas of a geo-replica.
+Feature support on read-only replicas
+A list of the behavior of some features on read-only replicas follows:
+Auditing on read-only replicas is automatically enabled. For more information about the hierarchy of the storage folders, naming conventions, and log format, seeSQL Database Audit Log Format.
+Query Performance Insightrelies on data from theQuery Store, which currently doesn't track activity on the read-only replica. Query Performance Insight doesn't show queries that execute on the read-only replica.
+Automatic tuning relies on the Query Store, as detailed in theAutomatic tuning paper. Automatic tuning only works for workloads running on the primary replica.
+Next steps
+For information about SQL Database Hyperscale offering, seeHyperscale service tier.
+Feedback
+Was this page helpful?
+Additional resources

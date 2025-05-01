@@ -1,0 +1,672 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Configure customer-managed keys for data encryption in Azure AI Search
+Article
+2025-04-07
+13 contributors
+In this article
+Azure AI Search automatically encrypts data at rest withMicrosoft-managed keys. If you need another layer of encryption or the ability to revoke keys and shut down access to content, you can use keys that you create and manage in Azure Key Vault. This article explains how to set up customer-managed key (CMK) encryption.
+You can store keys using either Azure Key Vault or Azure Key Vault Managed HSM (Hardware Security Module). An Azure Key Vault Managed HSM is an FIPS 140-2 Level 3 validated HSM. HSM support is new in Azure AI Search. To migrate to HSM,rotate your keysand choose Managed HSM for storage.
+Important
+CMK encryption is irreversible. You can rotate keys and change CMK configuration, but index encryption lasts for the lifetime of the index. Post-CMK encryption, an index is only accessible if the search service has access to the key. If you revoke access to the key by deleting or changing role assignment, the index is unusable and the service can't be scaled until the index is deleted or access to the key is restored. If you delete or rotate keys, the most recent key is cached for up to 60 minutes.
+CMK encrypted objects
+CMK encryption applies to individual objects when they're created. This means you can't encrypt objects that already exist. CMK encryption occurs each time an object is saved to disk, for both data at rest (long-term storage) or temporary cached data (short-term storage). With CMK, the disk never sees unencrypted data.
+Objects that can be encrypted include indexes, synonym lists, indexers, data sources, and skillsets. Encryption is computationally expensive to decrypt so only sensitive content is encrypted.
+Encryption is performed over the following content:
+All content within indexes and synonym lists.
+All content within indexes and synonym lists.
+Sensitive content in indexers, data sources, skillsets, and vectorizers. Sensitive content refers to connection strings, descriptions, identities, keys, and user inputs. For example, skillsets have Azure AI services keys, and some skills accept user inputs, such as custom entities. In both cases, keys and user inputs are encrypted. Any references to external resources (such as Azure data sources or Azure OpenAI models) are also encrypted.
+Sensitive content in indexers, data sources, skillsets, and vectorizers. Sensitive content refers to connection strings, descriptions, identities, keys, and user inputs. For example, skillsets have Azure AI services keys, and some skills accept user inputs, such as custom entities. In both cases, keys and user inputs are encrypted. Any references to external resources (such as Azure data sources or Azure OpenAI models) are also encrypted.
+If you require CMK across your search service,set an enforcement policy.
+Prerequisites
+Azure AI Searchon abillable tier(Basic or higher, in any region).
+Azure AI Searchon abillable tier(Basic or higher, in any region).
+Azure Key Vaultand a key vault withsoft-deleteandpurge protectionenabled. Or,Azure Key Vault Managed HSM. This resource can be in any subscription, but it must be in the same tenant as Azure AI Search.
+Azure Key Vaultand a key vault withsoft-deleteandpurge protectionenabled. Or,Azure Key Vault Managed HSM. This resource can be in any subscription, but it must be in the same tenant as Azure AI Search.
+Ability to set up permissions for key access and to assign roles. To create keys, you must beKey Vault Crypto Officerin Azure Key Vault orManaged HSM Crypto Officerin Azure Key Vault Managed HSM.To assign roles, you must be subscriptionOwner,User Access Administrator,Role-based Access Control Administrator, or be assigned to a custom role withMicrosoft.Authorization/roleAssignments/writepermissions.
+Ability to set up permissions for key access and to assign roles. To create keys, you must beKey Vault Crypto Officerin Azure Key Vault orManaged HSM Crypto Officerin Azure Key Vault Managed HSM.
+To assign roles, you must be subscriptionOwner,User Access Administrator,Role-based Access Control Administrator, or be assigned to a custom role withMicrosoft.Authorization/roleAssignments/writepermissions.
+Step 1: Create an encryption key
+Use either Azure Key Vault or Azure Key Vault Managed HSM to create a key. Azure AI Search encryption supports RSA keys of sizes 2048, 3072 and 4096. For more information about supported key types, seeAbout keys.
+We recommend reviewingthese tipsbefore you start.
+Required operations areWrap,Unwrap,Encrypt, andDecrypt.
+Azure Key Vault
+Managed HSM
+You cancreate a key vault using the Azure portal,Azure CLI, orAzure PowerShell.
+Sign in to theAzure portaland open your key vault overview page.
+Sign in to theAzure portaland open your key vault overview page.
+SelectObjects>Keyson the left, and then selectGenerate/Import.
+SelectObjects>Keyson the left, and then selectGenerate/Import.
+In theCreate a keypane, from the list ofOptions, chooseGenerateto create a new key.
+In theCreate a keypane, from the list ofOptions, chooseGenerateto create a new key.
+Enter aNamefor your key, and accept the defaults for other key properties.
+Enter aNamefor your key, and accept the defaults for other key properties.
+Optionally, set a key rotation policy toenable auto rotation.
+Optionally, set a key rotation policy toenable auto rotation.
+SelectCreateto start the deployment.
+SelectCreateto start the deployment.
+After the key is created, get its key identifier. Select the key, select the current version, and then copy the key identifier. It's composed of thekey value Uri, thekey name, and thekey version. You need the identifier to define an encrypted index in Azure AI Search. Recall that required operations areWrap,Unwrap,Encrypt, andDecrypt.
+After the key is created, get its key identifier. Select the key, select the current version, and then copy the key identifier. It's composed of thekey value Uri, thekey name, and thekey version. You need the identifier to define an encrypted index in Azure AI Search. Recall that required operations areWrap,Unwrap,Encrypt, andDecrypt.
+
+You can create and activate a Managed HSM in the Azure portal,Azure CLI, orAzure PowerShell.
+To generate or import a key, use theAzure CLI.
+Step 2: Create a security principal
+Create a security principal that your search service uses to access to the encryption key. You can use a managed identity and role assignment, or you can register an application and have the search service provide the application ID on requests.
+We recommend using a managed identity and roles. You can use either a system-managed identity or user-managed identity. A managed identity enables your search service to authenticate through Microsoft Entra ID, without storing credentials (ApplicationID or ApplicationSecret) in code. The lifecycle of this type of managed identity is tied to the lifecycle of your search service, which can only have one system assigned managed identity. For more information about how managed identities work, seeWhat are managed identities for Azure resources.
+System-managed identity
+User-managed identity (preview)
+Register an app
+Enable the system assigned managed identity for your search service. It's a two-click operation, enable and save.
+
+Important
+User-managed identity support for CMK is in public preview undersupplemental terms of use.
+2021-04-01-Preview of theManagement REST APIintroduced this feature.
+Sign in to theAzure portal.
+Sign in to theAzure portal.
+SelectCreate a new resource.
+SelectCreate a new resource.
+In the "Search services and marketplace" search bar, search for "User Assigned Managed Identity" and then selectCreate.
+In the "Search services and marketplace" search bar, search for "User Assigned Managed Identity" and then selectCreate.
+Give the identity a descriptive name.
+Give the identity a descriptive name.
+Next, assign the user-managed identity to the search service. This can be done using the latest preview2025-05-01-previewmanagement API or the previous preview.The identity property takes a type and one or more fully qualified user-assigned identities:typeis the type of identity used for the resource. The type 'SystemAssigned, UserAssigned' includes both an identity created by the system and a set of user assigned identities. The type 'None' removes all identities from the service.userAssignedIdentitiesincludes the details of the user-managed identity.User-managed identity format:/subscriptions/subscription ID/resourcegroups/resource group name/providers/Microsoft.ManagedIdentity/userAssignedIdentities/managed identity nameExample of how to assign a user-managed identity to a search service:PUT https://management.azure.com/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Search/searchServices/[search service name]?api-version=2025-05-01-preview
+Content-Type: application/json
+
+{
+  "location": "<your-region>",
+  "sku": {
+    "name": "<your-sku>"
+  },
+  "properties": {
+    "replicaCount": <your-replica-count>,
+    "partitionCount": <your-partition count>,
+    "hostingMode": "default"
+  },
+  "identity": {
+    "type": "UserAssigned",
+    "userAssignedIdentities": {
+      "/subscriptions/<your-subscription-ID>/resourcegroups/<your-resource-group-name>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<your-managed-identity-name>": {}
+    }
+  }
+}
+Next, assign the user-managed identity to the search service. This can be done using the latest preview2025-05-01-previewmanagement API or the previous preview.
+The identity property takes a type and one or more fully qualified user-assigned identities:
+typeis the type of identity used for the resource. The type 'SystemAssigned, UserAssigned' includes both an identity created by the system and a set of user assigned identities. The type 'None' removes all identities from the service.
+userAssignedIdentitiesincludes the details of the user-managed identity.User-managed identity format:/subscriptions/subscription ID/resourcegroups/resource group name/providers/Microsoft.ManagedIdentity/userAssignedIdentities/managed identity name
+User-managed identity format:/subscriptions/subscription ID/resourcegroups/resource group name/providers/Microsoft.ManagedIdentity/userAssignedIdentities/managed identity name
+/subscriptions/subscription ID/resourcegroups/resource group name/providers/Microsoft.ManagedIdentity/userAssignedIdentities/managed identity name
+Example of how to assign a user-managed identity to a search service:
+PUT https://management.azure.com/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Search/searchServices/[search service name]?api-version=2025-05-01-preview
+Content-Type: application/json
+
+{
+  "location": "<your-region>",
+  "sku": {
+    "name": "<your-sku>"
+  },
+  "properties": {
+    "replicaCount": <your-replica-count>,
+    "partitionCount": <your-partition count>,
+    "hostingMode": "default"
+  },
+  "identity": {
+    "type": "UserAssigned",
+    "userAssignedIdentities": {
+      "/subscriptions/<your-subscription-ID>/resourcegroups/<your-resource-group-name>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<your-managed-identity-name>": {}
+    }
+  }
+}
+PUT https://management.azure.com/subscriptions/subid/resourceGroups/rg1/providers/Microsoft.Search/searchServices/[search service name]?api-version=2025-05-01-preview
+Content-Type: application/json
+
+{
+  "location": "<your-region>",
+  "sku": {
+    "name": "<your-sku>"
+  },
+  "properties": {
+    "replicaCount": <your-replica-count>,
+    "partitionCount": <your-partition count>,
+    "hostingMode": "default"
+  },
+  "identity": {
+    "type": "UserAssigned",
+    "userAssignedIdentities": {
+      "/subscriptions/<your-subscription-ID>/resourcegroups/<your-resource-group-name>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<your-managed-identity-name>": {}
+    }
+  }
+}
+Follow these instructions if you can't use role assignments for search service access to encryption keys.
+In theAzure portal, find the Microsoft Entra resource for your subscription.
+In theAzure portal, find the Microsoft Entra resource for your subscription.
+On the left, underManage, selectApp registrations, and then selectNew registration.
+On the left, underManage, selectApp registrations, and then selectNew registration.
+Give the registration a name, perhaps a name that is similar to the search application name. SelectRegister.
+Give the registration a name, perhaps a name that is similar to the search application name. SelectRegister.
+Once the app registration is created, copy the Application ID. You need to provide this string to your application.If you're stepping through theDotNetHowToEncryptionUsingCMK, paste this value into theappsettings.jsonfile.
+Once the app registration is created, copy the Application ID. You need to provide this string to your application.
+If you're stepping through theDotNetHowToEncryptionUsingCMK, paste this value into theappsettings.jsonfile.
+
+Next, selectCertificates & secrets.
+Next, selectCertificates & secrets.
+SelectNew client secret. Give the secret a display name and selectAdd.
+SelectNew client secret. Give the secret a display name and selectAdd.
+Copy the application secret. If you're stepping through the sample, paste this value into theappsettings.jsonfile.
+Copy the application secret. If you're stepping through the sample, paste this value into theappsettings.jsonfile.
+
+Step 3: Grant permissions
+If you configured your search service to use a managed identity, assign roles that give it access to the encryption key.
+Role-based access control is recommended over the Access Policy permission model. For more information or migration steps, start withAzure role-based access control (Azure RBAC) vs. access policies (legacy).
+Sign in to theAzure portaland find your key vault.
+Sign in to theAzure portaland find your key vault.
+SelectAccess control (IAM)and selectAdd role assignment.
+SelectAccess control (IAM)and selectAdd role assignment.
+Select a role:On Azure Key Vault, selectKey Vault Crypto Service Encryption User.On Managed HSM, selectManaged HSM Crypto Service Encryption User.
+Select a role:
+On Azure Key Vault, selectKey Vault Crypto Service Encryption User.
+On Managed HSM, selectManaged HSM Crypto Service Encryption User.
+Select managed identities, select members, and then select the managed identity of your search service. If you're testing locally, assign this role to yourself as well.
+Select managed identities, select members, and then select the managed identity of your search service. If you're testing locally, assign this role to yourself as well.
+SelectReview + Assign.
+SelectReview + Assign.
+Wait a few minutes for the role assignment to become operational.
+Step 4: Encrypt content
+Encryption occurs when you create or update an object. You can use the Azure portal for selected objects. For any object, use theSearch REST APIor an Azure SDK. Review thePython examplein this article to see how content is encrypted programmatically.
+Azure portal
+REST APIs
+When you create a new object in the Azure portal, you can specify a predefined customer-managed key in a key vault. The Azure portal lets you enable CMK encryption for:
+Indexes
+Data sources
+Indexers
+Requirements for using the Azure portal are that the key vault and key must exist, and you completed the previous steps for authorized access to the key.
+In the Azure portal, skillsets are defined in JSON view. Use the JSON shown in the REST API examples to provide a customer-managed key on a skillset.
+Sign in to theAzure portaland open your search service page.
+Sign in to theAzure portaland open your search service page.
+UnderSearch management, selectIndexes,Indexers, orData Sources.
+UnderSearch management, selectIndexes,Indexers, orData Sources.
+Add a new object. In the object definition, selectMicrosoft-managed encryption.
+Add a new object. In the object definition, selectMicrosoft-managed encryption.
+SelectCustomer-managed keysand choose your subscription, vault, key, and version.
+SelectCustomer-managed keysand choose your subscription, vault, key, and version.
+
+Call the creation APIs to specify theencryptionKeyproperty:Create IndexCreate Synonym MapCreate IndexerCreate Data SourceCreate Skillset
+Call the creation APIs to specify theencryptionKeyproperty:
+Create Index
+Create Synonym Map
+Create Indexer
+Create Data Source
+Create Skillset
+Insert the encryptionKey construct into the object definition. This property is a first-level property, on the same level as name and description. If you're using the same vault, key, and version, you can paste in the same encryptionKey construct into each object definition.If your key identifier ishttps://contoso-keyvault.vault.azure.net/keys/contoso-cmk/aaaaaaaa-0b0b-1c1c-2d2d-333333333333, then the URI ishttps://contoso-keyvault.vault.azure.net, the key name iscontoso-cmk, and the version isaaaaaaaa-0b0b-1c1c-2d2d-333333333333.{
+  "encryptionKey": {
+    "keyVaultUri": "<YOUR-KEY-VAULT-URI>",
+    "keyVaultKeyName": "<YOUR-ENCRYPTION-KEY-NAME>",
+    "keyVaultKeyVersion": "<YOUR-ENCRYPTION-KEY-VERSION>",
+    "identity" : { 
+        "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+        "userAssignedIdentity" : "/subscriptions/<your-subscription-ID>/resourceGroups/<your-resource-group-name>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<your-managed-identity-name>"
+    }
+  }
+}The first example shows an encryptionKey for a search service that connects using a managed identity:{
+  "encryptionKey": {
+    "keyVaultUri": "<YOUR-KEY-VAULT-URI>",
+    "keyVaultKeyName": "<YOUR-ENCRYPTION-KEY-NAME>",
+    "keyVaultKeyVersion": "<YOUR-ENCRYPTION-KEY-VERSION>"
+  }
+}The second example includes accessCredentials, necessary if you registered an application in Microsoft Entra ID:{
+  "encryptionKey": {
+    "keyVaultUri": "<YOUR-KEY-VAULT-URI>",
+    "keyVaultKeyName": "<YOUR-ENCRYPTION-KEY-NAME>",
+    "keyVaultKeyVersion": "<YOUR-ENCRYPTION-KEY-VERSION>",
+    "accessCredentials": {
+      "applicationId": "<YOUR-APPLICATION-ID>",
+      "applicationSecret": "<YOUR-APPLICATION-SECRET>"
+    }
+  }
+}
+Insert the encryptionKey construct into the object definition. This property is a first-level property, on the same level as name and description. If you're using the same vault, key, and version, you can paste in the same encryptionKey construct into each object definition.
+If your key identifier ishttps://contoso-keyvault.vault.azure.net/keys/contoso-cmk/aaaaaaaa-0b0b-1c1c-2d2d-333333333333, then the URI ishttps://contoso-keyvault.vault.azure.net, the key name iscontoso-cmk, and the version isaaaaaaaa-0b0b-1c1c-2d2d-333333333333.
+https://contoso-keyvault.vault.azure.net/keys/contoso-cmk/aaaaaaaa-0b0b-1c1c-2d2d-333333333333
+https://contoso-keyvault.vault.azure.net
+contoso-cmk
+aaaaaaaa-0b0b-1c1c-2d2d-333333333333
+{
+  "encryptionKey": {
+    "keyVaultUri": "<YOUR-KEY-VAULT-URI>",
+    "keyVaultKeyName": "<YOUR-ENCRYPTION-KEY-NAME>",
+    "keyVaultKeyVersion": "<YOUR-ENCRYPTION-KEY-VERSION>",
+    "identity" : { 
+        "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+        "userAssignedIdentity" : "/subscriptions/<your-subscription-ID>/resourceGroups/<your-resource-group-name>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<your-managed-identity-name>"
+    }
+  }
+}
+{
+  "encryptionKey": {
+    "keyVaultUri": "<YOUR-KEY-VAULT-URI>",
+    "keyVaultKeyName": "<YOUR-ENCRYPTION-KEY-NAME>",
+    "keyVaultKeyVersion": "<YOUR-ENCRYPTION-KEY-VERSION>",
+    "identity" : { 
+        "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+        "userAssignedIdentity" : "/subscriptions/<your-subscription-ID>/resourceGroups/<your-resource-group-name>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<your-managed-identity-name>"
+    }
+  }
+}
+The first example shows an encryptionKey for a search service that connects using a managed identity:
+{
+  "encryptionKey": {
+    "keyVaultUri": "<YOUR-KEY-VAULT-URI>",
+    "keyVaultKeyName": "<YOUR-ENCRYPTION-KEY-NAME>",
+    "keyVaultKeyVersion": "<YOUR-ENCRYPTION-KEY-VERSION>"
+  }
+}
+{
+  "encryptionKey": {
+    "keyVaultUri": "<YOUR-KEY-VAULT-URI>",
+    "keyVaultKeyName": "<YOUR-ENCRYPTION-KEY-NAME>",
+    "keyVaultKeyVersion": "<YOUR-ENCRYPTION-KEY-VERSION>"
+  }
+}
+The second example includes accessCredentials, necessary if you registered an application in Microsoft Entra ID:
+{
+  "encryptionKey": {
+    "keyVaultUri": "<YOUR-KEY-VAULT-URI>",
+    "keyVaultKeyName": "<YOUR-ENCRYPTION-KEY-NAME>",
+    "keyVaultKeyVersion": "<YOUR-ENCRYPTION-KEY-VERSION>",
+    "accessCredentials": {
+      "applicationId": "<YOUR-APPLICATION-ID>",
+      "applicationSecret": "<YOUR-APPLICATION-SECRET>"
+    }
+  }
+}
+{
+  "encryptionKey": {
+    "keyVaultUri": "<YOUR-KEY-VAULT-URI>",
+    "keyVaultKeyName": "<YOUR-ENCRYPTION-KEY-NAME>",
+    "keyVaultKeyVersion": "<YOUR-ENCRYPTION-KEY-VERSION>",
+    "accessCredentials": {
+      "applicationId": "<YOUR-APPLICATION-ID>",
+      "applicationSecret": "<YOUR-APPLICATION-SECRET>"
+    }
+  }
+}
+Verify the encryption key exists by issuing a GET on the object.GET IndexGET Synonym MapGET IndexerGET Data SourceGET Skillset
+Verify the encryption key exists by issuing a GET on the object.
+GET Index
+GET Synonym Map
+GET Indexer
+GET Data Source
+GET Skillset
+Verify the object is operational by performing a task, such as query an index that's encrypted.
+Verify the object is operational by performing a task, such as query an index that's encrypted.
+Once you create the encrypted object on the search service, you can use it as you would any other object of its type. Encryption is transparent to the user and developer.
+None of these key vault details are considered secret and could be easily retrieved by browsing to the relevant Azure Key Vault page in Azure portal.
+Important
+Encrypted content in Azure AI Search is configured to use a specific key with a specificversion. If you change the key or version, the object must be updated to use itbeforeyou delete the previous one. Failing to do so renders the object unusable. You won't be able to decrypt the content if the key is lost.
+Step 5: Test encryption
+To verify encryption is working, revoke the encryption key, query the index (it should be unusable), and then reinstate the encryption key.
+Use the Azure portal for this task. Make sure you have a role assignment that grants read access to the key.
+On the Azure Key Vault page, selectObjects>Keys.
+On the Azure Key Vault page, selectObjects>Keys.
+Select the key you created, and then selectDelete.
+Select the key you created, and then selectDelete.
+On the Azure AI Search page, selectSearch management>Indexes.
+On the Azure AI Search page, selectSearch management>Indexes.
+Select your index and use Search Explorer to run a query. You should get an error.
+Select your index and use Search Explorer to run a query. You should get an error.
+Return to the Azure Key VaultObjects>Keyspage.
+Return to the Azure Key VaultObjects>Keyspage.
+SelectManage deleted keys.
+SelectManage deleted keys.
+Select your key, and then selectRecover.
+Select your key, and then selectRecover.
+Return to your index in Azure AI Search and rerun the query. You should see search results. If you don't see immediate results, wait a minute and try again.
+Return to your index in Azure AI Search and rerun the query. You should see search results. If you don't see immediate results, wait a minute and try again.
+Set up a policy to enforce CMK compliance
+Azure policies help to enforce organizational standards and to assess compliance at-scale. Azure AI Search has two optional built-in policies related to CMK. These policies apply to new and existing search services.
+Enabled
+Assign a policy
+In the Azure portal, navigate to a built-in policy and then selectAssign.AuditIfExistsDenyHere's an example of theAuditIfExistspolicy in the Azure portal:
+In the Azure portal, navigate to a built-in policy and then selectAssign.
+AuditIfExists
+AuditIfExists
+Deny
+Deny
+Here's an example of theAuditIfExistspolicy in the Azure portal:
+
+Setpolicy scopeby selecting the subscription and resource group. Exclude any search services for which the policy shouldn't apply.
+Setpolicy scopeby selecting the subscription and resource group. Exclude any search services for which the policy shouldn't apply.
+Accept or modify the defaults. SelectReview +create, followed byCreate.
+Accept or modify the defaults. SelectReview +create, followed byCreate.
+Enable CMK policy enforcement
+A policy that's assigned to a resource group in your subscription is effective immediately. Audit policies flag non-compliant resources, but Deny policies prevent the creation and update of non-compliant search services. This section explains how to create a compliant search service or update a service to make it compliant. To bring objects into compliance, start atstep oneof this article.
+For new search services, create them withSearchEncryptionWithCmkset toEnabled.
+Enabled
+Neither the Azure portal nor the command line tools (the Azure CLI and Azure PowerShell) provide this property natively, but you can useManagement REST APIto provision a search service with a CMK policy definition.
+Management REST API
+This example is fromManage your Azure AI Search service with REST APIs, modified to include theSearchEncryptionWithCmkproperty.
+### Create a search service (provide an existing resource group)
+@resource-group = my-rg
+@search-service-name = my-search
+PUT https://management.azure.com/subscriptions/{{subscriptionId}}/resourceGroups/{{resource-group}}/providers/Microsoft.Search/searchServices/{{search-service-name}}?api-version=2023-11-01 HTTP/1.1
+     Content-type: application/json
+     Authorization: Bearer {{token}}
+
+    {
+        "location": "North Central US",
+        "sku": {
+            "name": "basic"
+        },
+        "properties": {
+            "replicaCount": 1,
+            "partitionCount": 1,
+            "hostingMode": "default",
+            "encryptionWithCmk": {
+                "enforcement": "Enabled"
+        }
+      }
+    }
+### Create a search service (provide an existing resource group)
+@resource-group = my-rg
+@search-service-name = my-search
+PUT https://management.azure.com/subscriptions/{{subscriptionId}}/resourceGroups/{{resource-group}}/providers/Microsoft.Search/searchServices/{{search-service-name}}?api-version=2023-11-01 HTTP/1.1
+     Content-type: application/json
+     Authorization: Bearer {{token}}
+
+    {
+        "location": "North Central US",
+        "sku": {
+            "name": "basic"
+        },
+        "properties": {
+            "replicaCount": 1,
+            "partitionCount": 1,
+            "hostingMode": "default",
+            "encryptionWithCmk": {
+                "enforcement": "Enabled"
+        }
+      }
+    }
+For existing search services that are now non-compliant, patch them usingServices - Update APIor the Azure CLIaz resource updatecommand. Patching the services restores the ability to update search service properties.
+Management REST API
+Azure CLI
+PATCH https://management.azure.com/subscriptions/<your-subscription-Id>/resourceGroups/<your-resource-group-name>/providers/Microsoft.Search/searchServices/<your-search-service-name>?api-version=2023-11-01
+
+{
+  "properties": {
+      "encryptionWithCmk": {
+          "enforcement": "Enabled"
+      }
+  }
+}
+PATCH https://management.azure.com/subscriptions/<your-subscription-Id>/resourceGroups/<your-resource-group-name>/providers/Microsoft.Search/searchServices/<your-search-service-name>?api-version=2023-11-01
+
+{
+  "properties": {
+      "encryptionWithCmk": {
+          "enforcement": "Enabled"
+      }
+  }
+}
+Run the following command, substituting valid values for the search service and resource group.
+az resource update --name SEARCH-SERVICE-PLACEHOLDER --resource-group RESOURCE-GROUP-PLACEHOLDER --resource-type searchServices --namespace Microsoft.Search --set properties.encryptionWithCmk.enforcement=Enabled
+az resource update --name SEARCH-SERVICE-PLACEHOLDER --resource-group RESOURCE-GROUP-PLACEHOLDER --resource-type searchServices --namespace Microsoft.Search --set properties.encryptionWithCmk.enforcement=Enabled
+The response should include the following statement:
+"encryptionWithCmk": {
+      "encryptionComplianceStatus": "NonCompliant",
+      "enforcement": "Enabled"
+    }
+...
+"encryptionWithCmk": {
+      "encryptionComplianceStatus": "NonCompliant",
+      "enforcement": "Enabled"
+    }
+...
+"Non-compliant" means the search service has existing objects that aren't CMK encrypted. To achieve compliance, recreate each object, specifying an encryption key.
+Rotate or update encryption keys
+Use the following instructions to rotate keys or to migrate from Azure Key Vault to the Hardware Security Model (HSM).
+For key rotation, we recommend using theautorotation capabilities of Azure Key Vault. If you use autorotation, omit the key version in object definitions. The latest key is used, rather than a specific version.
+When you change a key or its version, any object that uses the key must first be updated to use the new valuesbeforeyou delete the old values. Otherwise, the object becomes unusable because it can't be decrypted.
+Recall that keys are cached for 60 minutes. Remember this when testing and rotating keys.
+Determine the key used by an index or synonym map.
+Determine the key used by an index or synonym map.
+Create a new key in key vault, but leave the original key available. In this step, you can switch from key vault to HSM.
+Create a new key in key vault, but leave the original key available. In this step, you can switch from key vault to HSM.
+Update the encryptionKey propertieson an index or synonym map to use the new values. Only objects that were originally created with this property can be updated to use a different value.
+Update the encryptionKey propertieson an index or synonym map to use the new values. Only objects that were originally created with this property can be updated to use a different value.
+Disable or delete the previous key in the key vault. Monitor key access to verify the new key is being used.
+Disable or delete the previous key in the key vault. Monitor key access to verify the new key is being used.
+For performance reasons, the search service caches the key for up to several hours. If you disable or delete the key without providing a new one, queries continue to work on a temporary basis until the cache expires. However, once the search service can no longer decrypt content, you get this message:"Access forbidden. The query key used might have been revoked - please retry."
+"Access forbidden. The query key used might have been revoked - please retry."
+Key Vault tips
+If you're new to Azure Key Vault, review this quickstart to learn about basic tasks:Set and retrieve a secret from Azure Key Vault using PowerShell.
+If you're new to Azure Key Vault, review this quickstart to learn about basic tasks:Set and retrieve a secret from Azure Key Vault using PowerShell.
+Use as many key vaults as you need. Managed keys can be in different key vaults. A search service can have multiple encrypted objects, each one encrypted with a different customer-managed encryption key, stored in different key vaults.
+Use as many key vaults as you need. Managed keys can be in different key vaults. A search service can have multiple encrypted objects, each one encrypted with a different customer-managed encryption key, stored in different key vaults.
+Use the sameAzure tenantso that you can retrieve your managed key through role assignments and by connecting through a system or user-managed identity. For more information about creating a tenant, seeSet up a new tenant.
+Use the sameAzure tenantso that you can retrieve your managed key through role assignments and by connecting through a system or user-managed identity. For more information about creating a tenant, seeSet up a new tenant.
+Enable purge protectionandsoft-deleteon a key vault. Due to the nature of encryption with customer-managed keys, no one can retrieve your data if your Azure Key Vault key is deleted. To prevent data loss caused by accidental Key Vault key deletions, soft-delete and purge protection must be enabled on the key vault. Soft-delete is enabled by default, so you'll only encounter issues if you purposely disable it. Purge protection isn't enabled by default, but it's required for CMK encryption in Azure AI Search.
+Enable purge protectionandsoft-deleteon a key vault. Due to the nature of encryption with customer-managed keys, no one can retrieve your data if your Azure Key Vault key is deleted. To prevent data loss caused by accidental Key Vault key deletions, soft-delete and purge protection must be enabled on the key vault. Soft-delete is enabled by default, so you'll only encounter issues if you purposely disable it. Purge protection isn't enabled by default, but it's required for CMK encryption in Azure AI Search.
+Enable loggingon the key vault so that you can monitor key usage.
+Enable loggingon the key vault so that you can monitor key usage.
+Enable autorotation of keysor follow strict procedures during routine rotation of key vault keys and application secrets and registration. Always update allencrypted contentto use new secrets and keys before deleting the old ones. If you miss this step, your content can't be decrypted.
+Enable autorotation of keysor follow strict procedures during routine rotation of key vault keys and application secrets and registration. Always update allencrypted contentto use new secrets and keys before deleting the old ones. If you miss this step, your content can't be decrypted.
+Work with encrypted content
+With CMK encryption, you might notice latency for both indexing and queries due to the extra encrypt/decrypt work. Azure AI Search doesn't log encryption activity, but you can monitor key access through key vault logging.
+We recommend that youenable loggingas part of key vault configuration.
+Create a log analytics workspace.
+Create a log analytics workspace.
+Add a diagnostic setting in key vaultthat uses the workspace for data retention.
+Add a diagnostic setting in key vaultthat uses the workspace for data retention.
+SelectauditorallLogsfor the category, give the diagnostic setting a name, and then save it.
+SelectauditorallLogsfor the category, give the diagnostic setting a name, and then save it.
+Python example of an encryption key configuration
+This section shows the Python representation of anencryptionKeyin an object definition. The same definition applies to indexes, data sources, skillets, indexers, and synonym maps. To try this example on your search service and key vault, download the notebook fromazure-search-python-samples.
+encryptionKey
+Install some packages.
+! pip install python-dotenv
+! pip install azure-core
+! pip install azure-search-documents==11.5.1
+! pip install azure-identity
+! pip install python-dotenv
+! pip install azure-core
+! pip install azure-search-documents==11.5.1
+! pip install azure-identity
+Create an index that has an encryption key.
+from azure.search.documents.indexes import SearchIndexClient
+from azure.search.documents.indexes.models import (
+    SimpleField,
+    SearchFieldDataType,
+    SearchableField,
+    SearchIndex,
+    SearchResourceEncryptionKey
+)
+from azure.identity import DefaultAzureCredential
+
+endpoint="<PUT YOUR AZURE SEARCH SERVICE ENDPOINT HERE>"
+credential = DefaultAzureCredential()
+
+index_name = "test-cmk-index"
+index_client = SearchIndexClient(endpoint=endpoint, credential=credential)  
+fields = [
+        SimpleField(name="Id", type=SearchFieldDataType.String, key=True),
+        SearchableField(name="Description", type=SearchFieldDataType.String)
+    ]
+
+scoring_profiles = []
+suggester = []
+encryption_key = SearchResourceEncryptionKey(
+    key_name="<PUT YOUR KEY VAULT NAME HERE>",
+    key_version="<PUT YOUR ALPHANUMERIC KEY VERSION HERE>",
+    vault_uri="<PUT YOUR KEY VAULT ENDPOINT HERE>"
+)
+
+index = SearchIndex(name=index_name, fields=fields, encryption_key=encryption_key)
+result = index_client.create_or_update_index(index)
+print(f' {result.name} created')
+from azure.search.documents.indexes import SearchIndexClient
+from azure.search.documents.indexes.models import (
+    SimpleField,
+    SearchFieldDataType,
+    SearchableField,
+    SearchIndex,
+    SearchResourceEncryptionKey
+)
+from azure.identity import DefaultAzureCredential
+
+endpoint="<PUT YOUR AZURE SEARCH SERVICE ENDPOINT HERE>"
+credential = DefaultAzureCredential()
+
+index_name = "test-cmk-index"
+index_client = SearchIndexClient(endpoint=endpoint, credential=credential)  
+fields = [
+        SimpleField(name="Id", type=SearchFieldDataType.String, key=True),
+        SearchableField(name="Description", type=SearchFieldDataType.String)
+    ]
+
+scoring_profiles = []
+suggester = []
+encryption_key = SearchResourceEncryptionKey(
+    key_name="<PUT YOUR KEY VAULT NAME HERE>",
+    key_version="<PUT YOUR ALPHANUMERIC KEY VERSION HERE>",
+    vault_uri="<PUT YOUR KEY VAULT ENDPOINT HERE>"
+)
+
+index = SearchIndex(name=index_name, fields=fields, encryption_key=encryption_key)
+result = index_client.create_or_update_index(index)
+print(f' {result.name} created')
+Get the index definition to verify encryption key configuration exists.
+index_name = "test-cmk-index-qs"
+index_client = SearchIndexClient(endpoint=AZURE_SEARCH_SERVICE, credential=credential)  
+
+result = index_client.get_index(index_name)  
+print(f"{result}")
+index_name = "test-cmk-index-qs"
+index_client = SearchIndexClient(endpoint=AZURE_SEARCH_SERVICE, credential=credential)  
+
+result = index_client.get_index(index_name)  
+print(f"{result}")
+Load the index with a few documents. All field content is considered sensitive and is encrypted on disk using your customer managed key.
+from azure.search.documents import SearchClient
+
+# Create a documents payload
+documents = [
+    {
+    "@search.action": "upload",
+    "Id": "1",
+    "Description": "The hotel is ideally located on the main commercial artery of the city in the heart of New York. A few minutes away is Time's Square and the historic centre of the city, as well as other places of interest that make New York one of America's most attractive and cosmopolitan cities."
+    },
+    {
+    "@search.action": "upload",
+    "Id": "2",
+    "Description": "The hotel is situated in a  nineteenth century plaza, which has been expanded and renovated to the highest architectural standards to create a modern, functional and first-class hotel in which art and unique historical elements coexist with the most modern comforts."
+    },
+    {
+    "@search.action": "upload",
+    "Id": "3",
+    "Description": "The hotel stands out for its gastronomic excellence under the management of William Dough, who advises on and oversees all of the Hotel's restaurant services."
+    },
+    {
+    "@search.action": "upload",
+    "Id": "4",
+    "Description": "The hotel is located in the heart of the historic center of Sublime in an extremely vibrant and lively area within short walking distance to the sites and landmarks of the city and is surrounded by the extraordinary beauty of churches, buildings, shops and monuments. Sublime Palace is part of a lovingly restored 1800 palace."
+    }
+]
+
+search_client = SearchClient(endpoint=AZURE_SEARCH_SERVICE, index_name=index_name, credential=credential)
+try:
+    result = search_client.upload_documents(documents=documents)
+    print("Upload of new document succeeded: {}".format(result[0].succeeded))
+except Exception as ex:
+    print (ex.message)
+
+    index_client = SearchClient(endpoint=AZURE_SEARCH_SERVICE, credential=credential)
+from azure.search.documents import SearchClient
+
+# Create a documents payload
+documents = [
+    {
+    "@search.action": "upload",
+    "Id": "1",
+    "Description": "The hotel is ideally located on the main commercial artery of the city in the heart of New York. A few minutes away is Time's Square and the historic centre of the city, as well as other places of interest that make New York one of America's most attractive and cosmopolitan cities."
+    },
+    {
+    "@search.action": "upload",
+    "Id": "2",
+    "Description": "The hotel is situated in a  nineteenth century plaza, which has been expanded and renovated to the highest architectural standards to create a modern, functional and first-class hotel in which art and unique historical elements coexist with the most modern comforts."
+    },
+    {
+    "@search.action": "upload",
+    "Id": "3",
+    "Description": "The hotel stands out for its gastronomic excellence under the management of William Dough, who advises on and oversees all of the Hotel's restaurant services."
+    },
+    {
+    "@search.action": "upload",
+    "Id": "4",
+    "Description": "The hotel is located in the heart of the historic center of Sublime in an extremely vibrant and lively area within short walking distance to the sites and landmarks of the city and is surrounded by the extraordinary beauty of churches, buildings, shops and monuments. Sublime Palace is part of a lovingly restored 1800 palace."
+    }
+]
+
+search_client = SearchClient(endpoint=AZURE_SEARCH_SERVICE, index_name=index_name, credential=credential)
+try:
+    result = search_client.upload_documents(documents=documents)
+    print("Upload of new document succeeded: {}".format(result[0].succeeded))
+except Exception as ex:
+    print (ex.message)
+
+    index_client = SearchClient(endpoint=AZURE_SEARCH_SERVICE, credential=credential)
+Run a query to confirm the index is operational.
+from azure.search.documents import SearchClient
+
+query = "historic"  
+
+search_client = SearchClient(endpoint=AZURE_SEARCH_SERVICE, credential=credential, index_name=index_name)
+  
+results = search_client.search(  
+    query_type='simple',
+    search_text=query, 
+    select=["Id", "Description"],
+    include_total_count=True
+    )
+  
+for result in results:  
+    print(f"Score: {result['@search.score']}")
+    print(f"Id: {result['Id']}")
+    print(f"Description: {result['Description']}")
+from azure.search.documents import SearchClient
+
+query = "historic"  
+
+search_client = SearchClient(endpoint=AZURE_SEARCH_SERVICE, credential=credential, index_name=index_name)
+  
+results = search_client.search(  
+    query_type='simple',
+    search_text=query, 
+    select=["Id", "Description"],
+    include_total_count=True
+    )
+  
+for result in results:  
+    print(f"Score: {result['@search.score']}")
+    print(f"Id: {result['Id']}")
+    print(f"Description: {result['Description']}")
+Output from the query should produce results similar to the following example.
+Score: 0.6130029
+Id: 4
+Description: The hotel is located in the heart of the historic center of Sublime in an extremely vibrant and lively area within short walking distance to the sites and landmarks of the city and is surrounded by the extraordinary beauty of churches, buildings, shops and monuments. Sublime Palace is part of a lovingly restored 1800 palace.
+Score: 0.26286605
+Id: 1
+Description: The hotel is ideally located on the main commercial artery of the city in the heart of New York. A few minutes away is Time's Square and the historic centre of the city, as well as other places of interest that make New York one of America's most attractive and cosmopolitan cities.
+Score: 0.6130029
+Id: 4
+Description: The hotel is located in the heart of the historic center of Sublime in an extremely vibrant and lively area within short walking distance to the sites and landmarks of the city and is surrounded by the extraordinary beauty of churches, buildings, shops and monuments. Sublime Palace is part of a lovingly restored 1800 palace.
+Score: 0.26286605
+Id: 1
+Description: The hotel is ideally located on the main commercial artery of the city in the heart of New York. A few minutes away is Time's Square and the historic centre of the city, as well as other places of interest that make New York one of America's most attractive and cosmopolitan cities.
+Since encrypted content is decrypted prior to data refresh or queries, you won't see visual evidence of encryption. To verify encryption is working, check the resource logs.
+Next steps
+If you're unfamiliar with Azure security architecture, review theAzure Security documentation, and in particular, this article:
+Data encryption-at-rest
+Feedback
+Was this page helpful?
+Additional resources

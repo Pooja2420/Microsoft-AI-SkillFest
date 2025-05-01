@@ -1,0 +1,396 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Diagnose and troubleshoot high CPU on Azure SQL Database and SQL database in Microsoft Fabric
+Article
+2024-01-16
+8 contributors
+In this article
+Applies to:Azure SQL DatabaseSQL database in Fabric
+Azure SQL DatabaseandSQL database in Fabricprovide built-in tools to identify the causes of high CPU usage and to optimize workload performance. You can use these tools to troubleshoot high CPU usage while it's occurring, or reactively after the incident has completed. You can also enableautomatic tuningto proactively reduce CPU usage over time for your database. This article teaches you to diagnose and troubleshoot high CPU with built-in tools in Azure SQL Database and explainswhen to add CPU resources.
+Understand vCore count
+It's helpful to understand the number of virtual cores (vCores) available to your database when diagnosing a high CPU incident. A vCore is equivalent to a logical CPU. The number of vCores helps you understand the CPU resources available to your database.
+Identify vCore count in the Azure portal
+You can quickly identify the vCore count for a database in the Azure portal if you're using avCore-based service tierwith the provisioned compute tier. In this case, thepricing tierlisted for the database on itsOverviewpage will contain the vCore count. For example, a database's pricing tier might be 'General Purpose: Standard-series (Gen5), 16 vCores'.
+For databases in theserverlesscompute tier, vCore count will always be equivalent to the max vCore setting for the database. VCore count will show in thepricing tierlisted for the database on itsOverviewpage. For example, a database's pricing tier might be 'General Purpose: Serverless, standard-series (Gen5), 16 vCores'.
+If you're using a database under theDTU-based purchasing model, you will need to use Transact-SQL to query the database's vCore count.
+Identify vCore count with Transact-SQL
+You can identify the current vCore count for any database with Transact-SQL. You can run Transact-SQL against Azure SQL Database withSQL Server Management Studio (SSMS),Azure Data Studio, orthe Azure portal query editor.
+Connect to your database and run the following query:
+SELECT 
+    COUNT(*) as vCores
+FROM sys.dm_os_schedulers
+WHERE status = N'VISIBLE ONLINE';
+GO
+SELECT 
+    COUNT(*) as vCores
+FROM sys.dm_os_schedulers
+WHERE status = N'VISIBLE ONLINE';
+GO
+Identify the causes of high CPU
+You can measure and analyze CPU utilization using the Azure portal, Query Store interactive tools in SSMS, and Transact-SQL queries in SSMS and Azure Data Studio.
+The Azure portal and Query Store show execution statistics, such as CPU metrics, for completed queries. If you are experiencing a current high CPU incident that might be caused by one or more ongoing long-running queries,identify currently running queries with Transact-SQL.
+Common causes of new and unusual high CPU utilization are:
+New queries in the workload that use a large amount of CPU.
+An increase in the frequency of regularly running queries.
+Query plan regression, including regression due toparameter sensitive plan (PSP) problems, resulting in one or more queries consuming more CPU.
+A significant increase in compilation or recompilation of query plans.
+Databases where queries useexcessive parallelism.
+To understand what is causing your high CPU incident, identify when high CPU utilization is occurring against your database and the top queries using CPU at that time.
+Examine:
+Are new queries using significant CPU appearing in the workload, or are you seeing an increase in frequency of regularly running queries? Use any of the following methods to investigate. Look for queries with limited history (new queries), and at the frequency of execution for queries with longer history.Review CPU metrics and related top queries in the Azure portalQuery the top recent 15 queries by CPU usagewith Transact-SQL.Use interactive Query Store tools in SSMS to identify top queries by CPU time
+Review CPU metrics and related top queries in the Azure portal
+Query the top recent 15 queries by CPU usagewith Transact-SQL.
+Use interactive Query Store tools in SSMS to identify top queries by CPU time
+Are some queries in the workload using more CPU per execution than they did in the past? If so, has the query execution plan changed? These queries mighthave parameter sensitive plan (PSP) problems. Use either of the following techniques to investigate. Look for queries with multiple query execution plans with significant variation in CPU usage:Query the top recent 15 queries by CPU usagewith Transact-SQL.Use interactive Query Store tools in SSMS to identify top queries by CPU time
+Query the top recent 15 queries by CPU usagewith Transact-SQL.
+Use interactive Query Store tools in SSMS to identify top queries by CPU time
+Is there evidence of a large amount of compilation or recompilation occurring? Query themost frequently compiled queries by query hashand review how frequently they compile.
+Are queries using excessive parallelism? Query yourMAXDOP database scoped configurationand review yourvCore count. Excessive parallelism often occurs in databases where MAXDOP is set to0with a vCore count higher than eight.
+0
+Note
+Azure SQL Database requires compute resources to implement core service features such as high availability and disaster recovery, database backup and restore, monitoring, Query Store, automatic tuning, etc. Use of these compute resources might be particularly noticeable on databases with low vCore counts or databases in denseelastic pools. Learn more inResource management in Azure SQL Database.
+Review CPU usage metrics and related top queries in the Azure portal
+Use the Azure portal to track various CPU metrics, including the percentage of available CPU used by your database over time. The Azure portal combines CPU metrics with information from your database's Query Store, which allows you to identify which queries consumed CPU in your database at a given time.
+Follow these steps to find CPU percentage metrics.
+Navigate to the database in the Azure portal.
+UnderIntelligent Performancein the left menu, selectQuery Performance Insight.
+The default view of Query Performance Insight shows 24 hours of data. CPU usage is shown as a percentage of total available CPU used for the database.
+The top five queries running in that period are displayed in vertical bars above the CPU usage graph. Select a band of time on the chart or use theCustomizemenu to explore specific time periods. You might also increase the number of queries shown.
+
+Select each query ID exhibiting high CPU to open details for the query. Details include query text along with performance history for the query. Examine if CPU has increased for the query recently.
+Take note of the query ID to further investigate the query plan using Query Store in the following section.
+Review query plans for top queries identified in the Azure portal
+Follow these steps to use a query ID in SSMS's interactive Query Store tools to examine the query's execution plan over time.
+Open SSMS.
+Connect to your Azure SQL Database in Object Explorer.
+Expand the database node in Object Explorer.
+Expand theQuery Storefolder.
+Open theTracked Queriespane.
+Enter the query ID in theTracking querybox at the top left of the screen and press enter.
+If necessary, selectConfigureto adjust the time interval to match the time when high CPU utilization was occurring.
+The page will show the execution plan(s) and related metrics for the query over the most recent 24 hours.
+Identify currently running queries with Transact-SQL
+Transact-SQL allows you to identify currently running queries with CPU time they have used so far. You can also use Transact-SQL to query recent CPU usage in your database, top queries by CPU, and queries that compiled the most often.
+You can query CPU metrics withSQL Server Management Studio (SSMS),Azure Data Studio, orthe Azure portal query editor. When using SSMS or Azure Data Studio, open a new query window and connect it to your database (not themasterdatabase).
+master
+Find currently running queries with CPU usage and execution plans by executing the following query. CPU time is returned in milliseconds.
+SELECT
+    req.session_id,
+    req.status,
+    req.start_time,
+    req.cpu_time AS 'cpu_time_ms',
+    req.logical_reads,
+    req.dop,
+    s.login_name,
+    s.host_name,
+    s.program_name,
+    object_name(st.objectid,st.dbid) 'ObjectName',
+    REPLACE (REPLACE (SUBSTRING (st.text,(req.statement_start_offset/2) + 1,
+        ((CASE req.statement_end_offset    WHEN -1    THEN DATALENGTH(st.text) 
+        ELSE req.statement_end_offset END - req.statement_start_offset)/2) + 1),
+        CHAR(10), ' '), CHAR(13), ' ') AS statement_text,
+    qp.query_plan,
+    qsx.query_plan as query_plan_with_in_flight_statistics
+FROM sys.dm_exec_requests as req  
+JOIN sys.dm_exec_sessions as s on req.session_id=s.session_id
+CROSS APPLY sys.dm_exec_sql_text(req.sql_handle) as st
+OUTER APPLY sys.dm_exec_query_plan(req.plan_handle) as qp
+OUTER APPLY sys.dm_exec_query_statistics_xml(req.session_id) as qsx
+ORDER BY req.cpu_time desc;
+GO
+SELECT
+    req.session_id,
+    req.status,
+    req.start_time,
+    req.cpu_time AS 'cpu_time_ms',
+    req.logical_reads,
+    req.dop,
+    s.login_name,
+    s.host_name,
+    s.program_name,
+    object_name(st.objectid,st.dbid) 'ObjectName',
+    REPLACE (REPLACE (SUBSTRING (st.text,(req.statement_start_offset/2) + 1,
+        ((CASE req.statement_end_offset    WHEN -1    THEN DATALENGTH(st.text) 
+        ELSE req.statement_end_offset END - req.statement_start_offset)/2) + 1),
+        CHAR(10), ' '), CHAR(13), ' ') AS statement_text,
+    qp.query_plan,
+    qsx.query_plan as query_plan_with_in_flight_statistics
+FROM sys.dm_exec_requests as req  
+JOIN sys.dm_exec_sessions as s on req.session_id=s.session_id
+CROSS APPLY sys.dm_exec_sql_text(req.sql_handle) as st
+OUTER APPLY sys.dm_exec_query_plan(req.plan_handle) as qp
+OUTER APPLY sys.dm_exec_query_statistics_xml(req.session_id) as qsx
+ORDER BY req.cpu_time desc;
+GO
+This query returns two copies of the execution plan. The columnquery_plancontains the execution plan fromsys.dm_exec_query_plan. This version of the query plan contains only estimates of row counts and does not contain any execution statistics.
+query_plan
+If the columnquery_plan_with_in_flight_statisticsreturns an execution plan, this plan provides more information. Thequery_plan_with_in_flight_statisticscolumn returns data fromsys.dm_exec_query_statistics_xml, which includes "in flight" execution statistics such as the actual number of rows returned so far by a currently running query.
+query_plan_with_in_flight_statistics
+query_plan_with_in_flight_statistics
+Review CPU usage metrics for the last hour
+The following query againstsys.dm_db_resource_statsreturns the average CPU usage over 15-second intervals for approximately the last hour.
+sys.dm_db_resource_stats
+SELECT
+    end_time,
+    avg_cpu_percent,
+    avg_instance_cpu_percent
+FROM sys.dm_db_resource_stats
+ORDER BY end_time DESC; 
+GO
+SELECT
+    end_time,
+    avg_cpu_percent,
+    avg_instance_cpu_percent
+FROM sys.dm_db_resource_stats
+ORDER BY end_time DESC; 
+GO
+It is important to not focus only on theavg_cpu_percentcolumn. Theavg_instance_cpu_percentcolumn includes CPU used by both user and internal workloads. Ifavg_instance_cpu_percentis close to 100%, CPU resources are saturated. In this case, you should troubleshoot high CPU if app throughput is insufficient or query latency is high.
+avg_cpu_percent
+avg_instance_cpu_percent
+avg_instance_cpu_percent
+Learn more inResource management in Azure SQL Database.
+Review the examples insys.dm_db_resource_statsfor more queries.
+Query the top recent 15 queries by CPU usage
+Query Store tracks execution statistics, including CPU usage, for queries. The following query returns the top 15 queries that have run in the last 2 hours, sorted by CPU usage. CPU time is returned in milliseconds.
+WITH AggregatedCPU AS 
+    (SELECT
+        q.query_hash, 
+        SUM(count_executions * avg_cpu_time / 1000.0) AS total_cpu_ms, 
+        SUM(count_executions * avg_cpu_time / 1000.0)/ SUM(count_executions) AS avg_cpu_ms, 
+        MAX(rs.max_cpu_time / 1000.00) AS max_cpu_ms, 
+        MAX(max_logical_io_reads) max_logical_reads, 
+        COUNT(DISTINCT p.plan_id) AS number_of_distinct_plans, 
+        COUNT(DISTINCT p.query_id) AS number_of_distinct_query_ids, 
+        SUM(CASE WHEN rs.execution_type_desc='Aborted' THEN count_executions ELSE 0 END) AS aborted_execution_count, 
+        SUM(CASE WHEN rs.execution_type_desc='Regular' THEN count_executions ELSE 0 END) AS regular_execution_count, 
+        SUM(CASE WHEN rs.execution_type_desc='Exception' THEN count_executions ELSE 0 END) AS exception_execution_count, 
+        SUM(count_executions) AS total_executions, 
+        MIN(qt.query_sql_text) AS sampled_query_text
+    FROM sys.query_store_query_text AS qt
+    JOIN sys.query_store_query AS q ON qt.query_text_id=q.query_text_id
+    JOIN sys.query_store_plan AS p ON q.query_id=p.query_id
+    JOIN sys.query_store_runtime_stats AS rs ON rs.plan_id=p.plan_id
+    JOIN sys.query_store_runtime_stats_interval AS rsi ON rsi.runtime_stats_interval_id=rs.runtime_stats_interval_id
+    WHERE 
+            rs.execution_type_desc IN ('Regular', 'Aborted', 'Exception') AND 
+        rsi.start_time>=DATEADD(HOUR, -2, GETUTCDATE())
+     GROUP BY q.query_hash), 
+OrderedCPU AS 
+    (SELECT *, 
+    ROW_NUMBER() OVER (ORDER BY total_cpu_ms DESC, query_hash ASC) AS RN
+    FROM AggregatedCPU)
+SELECT *
+FROM OrderedCPU AS OD
+WHERE OD.RN<=15
+ORDER BY total_cpu_ms DESC;
+GO
+WITH AggregatedCPU AS 
+    (SELECT
+        q.query_hash, 
+        SUM(count_executions * avg_cpu_time / 1000.0) AS total_cpu_ms, 
+        SUM(count_executions * avg_cpu_time / 1000.0)/ SUM(count_executions) AS avg_cpu_ms, 
+        MAX(rs.max_cpu_time / 1000.00) AS max_cpu_ms, 
+        MAX(max_logical_io_reads) max_logical_reads, 
+        COUNT(DISTINCT p.plan_id) AS number_of_distinct_plans, 
+        COUNT(DISTINCT p.query_id) AS number_of_distinct_query_ids, 
+        SUM(CASE WHEN rs.execution_type_desc='Aborted' THEN count_executions ELSE 0 END) AS aborted_execution_count, 
+        SUM(CASE WHEN rs.execution_type_desc='Regular' THEN count_executions ELSE 0 END) AS regular_execution_count, 
+        SUM(CASE WHEN rs.execution_type_desc='Exception' THEN count_executions ELSE 0 END) AS exception_execution_count, 
+        SUM(count_executions) AS total_executions, 
+        MIN(qt.query_sql_text) AS sampled_query_text
+    FROM sys.query_store_query_text AS qt
+    JOIN sys.query_store_query AS q ON qt.query_text_id=q.query_text_id
+    JOIN sys.query_store_plan AS p ON q.query_id=p.query_id
+    JOIN sys.query_store_runtime_stats AS rs ON rs.plan_id=p.plan_id
+    JOIN sys.query_store_runtime_stats_interval AS rsi ON rsi.runtime_stats_interval_id=rs.runtime_stats_interval_id
+    WHERE 
+            rs.execution_type_desc IN ('Regular', 'Aborted', 'Exception') AND 
+        rsi.start_time>=DATEADD(HOUR, -2, GETUTCDATE())
+     GROUP BY q.query_hash), 
+OrderedCPU AS 
+    (SELECT *, 
+    ROW_NUMBER() OVER (ORDER BY total_cpu_ms DESC, query_hash ASC) AS RN
+    FROM AggregatedCPU)
+SELECT *
+FROM OrderedCPU AS OD
+WHERE OD.RN<=15
+ORDER BY total_cpu_ms DESC;
+GO
+This query groups by a hashed value of the query. If you find a high value in thenumber_of_distinct_query_idscolumn, investigate if a frequently run query isn't properly parameterized. Non-parameterized queries might be compiled on each execution, which consumes significant CPU andaffect the performance of Query Store.
+number_of_distinct_query_ids
+To learn more about an individual query, note the query hash and use it toIdentify the CPU usage and query plan for a given query hash.
+Query the most frequently compiled queries by query hash
+Compiling a query plan is a CPU-intensive process. Azure SQL Databasecache plans in memory for reuse. Some queries might be frequently compiled if they are not parameterized or ifRECOMPILE hintsforce recompilation.
+Query Store tracks the number of times queries are compiled. Run the following query to identify the top 20 queries in Query Store by compilation count, along with the average number of compilations per minute:
+SELECT TOP (20)
+    query_hash,
+    MIN(initial_compile_start_time) as initial_compile_start_time,
+    MAX(last_compile_start_time) as last_compile_start_time,
+    CASE WHEN DATEDIFF(mi,MIN(initial_compile_start_time), MAX(last_compile_start_time)) > 0
+        THEN 1.* SUM(count_compiles) / DATEDIFF(mi,MIN(initial_compile_start_time), 
+            MAX(last_compile_start_time)) 
+        ELSE 0 
+        END as avg_compiles_minute,
+    SUM(count_compiles) as count_compiles
+FROM sys.query_store_query AS q
+GROUP BY query_hash
+ORDER BY count_compiles DESC;
+GO
+SELECT TOP (20)
+    query_hash,
+    MIN(initial_compile_start_time) as initial_compile_start_time,
+    MAX(last_compile_start_time) as last_compile_start_time,
+    CASE WHEN DATEDIFF(mi,MIN(initial_compile_start_time), MAX(last_compile_start_time)) > 0
+        THEN 1.* SUM(count_compiles) / DATEDIFF(mi,MIN(initial_compile_start_time), 
+            MAX(last_compile_start_time)) 
+        ELSE 0 
+        END as avg_compiles_minute,
+    SUM(count_compiles) as count_compiles
+FROM sys.query_store_query AS q
+GROUP BY query_hash
+ORDER BY count_compiles DESC;
+GO
+To learn more about an individual query, note the query hash and use it toIdentify the CPU usage and query plan for a given query hash.
+Identify the CPU usage and query plan for a given query hash
+Run the following query to find the individual query ID, query text, and query execution plans for a givenquery_hash. CPU time is returned in milliseconds.
+query_hash
+Replace the value for the@query_hashvariable with a validquery_hashfor your workload.
+@query_hash
+query_hash
+declare @query_hash binary(8);
+
+SET @query_hash = 0x6557BE7936AA2E91;
+
+with query_ids as (
+    SELECT
+        q.query_hash,
+        q.query_id,
+        p.query_plan_hash,
+        SUM(qrs.count_executions) * AVG(qrs.avg_cpu_time)/1000. as total_cpu_time_ms,
+        SUM(qrs.count_executions) AS sum_executions,
+        AVG(qrs.avg_cpu_time)/1000. AS avg_cpu_time_ms
+    FROM sys.query_store_query q
+    JOIN sys.query_store_plan p on q.query_id=p.query_id
+    JOIN sys.query_store_runtime_stats qrs on p.plan_id = qrs.plan_id
+    WHERE q.query_hash = @query_hash
+    GROUP BY q.query_id, q.query_hash, p.query_plan_hash)
+SELECT qid.*,
+    qt.query_sql_text,
+    p.count_compiles,
+    TRY_CAST(p.query_plan as XML) as query_plan
+FROM query_ids as qid
+JOIN sys.query_store_query AS q ON qid.query_id=q.query_id
+JOIN sys.query_store_query_text AS qt on q.query_text_id = qt.query_text_id
+JOIN sys.query_store_plan AS p ON qid.query_id=p.query_id and qid.query_plan_hash=p.query_plan_hash
+ORDER BY total_cpu_time_ms DESC;
+GO
+declare @query_hash binary(8);
+
+SET @query_hash = 0x6557BE7936AA2E91;
+
+with query_ids as (
+    SELECT
+        q.query_hash,
+        q.query_id,
+        p.query_plan_hash,
+        SUM(qrs.count_executions) * AVG(qrs.avg_cpu_time)/1000. as total_cpu_time_ms,
+        SUM(qrs.count_executions) AS sum_executions,
+        AVG(qrs.avg_cpu_time)/1000. AS avg_cpu_time_ms
+    FROM sys.query_store_query q
+    JOIN sys.query_store_plan p on q.query_id=p.query_id
+    JOIN sys.query_store_runtime_stats qrs on p.plan_id = qrs.plan_id
+    WHERE q.query_hash = @query_hash
+    GROUP BY q.query_id, q.query_hash, p.query_plan_hash)
+SELECT qid.*,
+    qt.query_sql_text,
+    p.count_compiles,
+    TRY_CAST(p.query_plan as XML) as query_plan
+FROM query_ids as qid
+JOIN sys.query_store_query AS q ON qid.query_id=q.query_id
+JOIN sys.query_store_query_text AS qt on q.query_text_id = qt.query_text_id
+JOIN sys.query_store_plan AS p ON qid.query_id=p.query_id and qid.query_plan_hash=p.query_plan_hash
+ORDER BY total_cpu_time_ms DESC;
+GO
+This query returns one row for each variation of an execution plan for thequery_hashacross the entire history of your Query Store. The results are sorted by total CPU time.
+query_hash
+Use interactive Query Store tools to track historic CPU utilization
+If you prefer to use graphic tools, follow these steps to use the interactive Query Store tools in SSMS.
+Open SSMS and connect to your database in Object Explorer.
+Expand the database node in Object Explorer
+Expand theQuery Storefolder.
+Open theOverall Resource Consumptionpane.
+Total CPU time for your database over the last month in milliseconds is shown in the bottom-left portion of the pane. In the default view, CPU time is aggregated by day.
+
+SelectConfigurein the top right of the pane to select a different time period. You can also change the unit of aggregation. For example, you can choose to see data for a specific date range and aggregate the data by hour.
+Use interactive Query Store tools to identify top queries by CPU time
+Select a bar in the chart to drill in and see queries running in a specific time period. TheTop Resource Consuming Queriespane will open. Alternately, you can openTop Resource Consuming Queriesfrom the Query Store node under your database in Object Explorer directly.
+
+In the default view, theTop Resource Consuming Queriespane shows queries byDuration (ms). Duration might sometimes be lower than CPU time: queries using parallelism might use much more CPU time than their overall duration. Duration might also be higher than CPU time if wait times are significant. To see queries by CPU time, select theMetricdrop-down at the top left of the pane and selectCPU Time(ms).
+Each bar in the top-left quadrant represents a query. Select a bar to see details for that query. The top-right quadrant of the screen shows how many execution plans are in Query Store for that query and maps them according to when they were executed and how much of your selected metric was used. Select eachPlan IDto control which query execution plan is displayed in the bottom half of the screen.
+Note
+For a guide to interpreting Query Store views and the shapes which appear in the Top Resource Consumers view, seeBest practices with Query Store
+Reduce CPU usage
+Part of your troubleshooting should include learning more about the queries identified in the previous section. You can reduce CPU usage by tuning indexes, modifying your application patterns, tuning queries, and adjusting CPU-related settings for your database.
+If you found new queries using significant CPU appearing in the workload, validate that indexes have been optimized for those queries. You cantune indexes manuallyorreduce CPU usage with automatic index tuning. Evaluate if yourmax degree of parallelismsetting is correct for your increased workload.
+If you found that the overall execution count of queries is higher than it used to be,tune indexes for your highest CPU consuming queriesand considerautomatic index tuning. Evaluate if yourmax degree of parallelismsetting is correct for your increased workload.
+If you found queries in the workload withparameter sensitive plan (PSP) problems, considerautomatic plan correction (force plan). You can alsomanually force a plan in Query Storeor tune the Transact-SQL for the query to result in a consistently high-performing query plan.
+If you found evidence that a large amount of compilation or recompilation is occurring,tune the queries so that they are properly parameterized or do not require recompile hints.
+If you found that queries are using excessive parallelism,tune the max degree of parallelism.
+Consider the following strategies in this section.
+Reduce CPU usage with automatic index tuning
+Effective index tuning reduces CPU usage for many queries. Optimized indexes reduce the logical and physical reads for a query, which often results in the query needing to do less work.
+Azure SQL Database offersautomatic index managementfor workloads on primary replicas. Automatic index management uses machine learning to monitor your workload and optimize rowstore disk-based nonclustered indexes for your database.
+Review performance recommendations, including index recommendations, in the Azure portal. You can apply these recommendations manually orenable the CREATE INDEX automatic tuning optionto create and verify the performance of new indexes in your database.
+Reduce CPU usage with automatic plan correction (force plan)
+Another common cause of high CPU incidents isexecution plan choice regression. Azure SQL Database offers theforce planautomatic tuning option to identify regressions in query execution plans in workloads on primary replicas. With this automatic tuning feature enabled, Azure SQL Database will test if forcing a query execution plan results in reliable improved performance for queries with execution plan regression.
+If your database was created after March 2020, theforce planautomatic tuning option was automatically enabled. If your database was created prior to this time, you might wish toenable the force plan automatic tuning option.
+Tune indexes manually
+Use the methods described inIdentify the causes of high CPUto identify query plans for your top CPU consuming queries. These execution plans will aid you inidentifying and adding nonclustered indexesto speed up your queries.
+Each disk basednonclustered indexin your database requires storage space and must be maintained by the SQL engine. Modify existing indexes instead of adding new indexes when possible and ensure that new indexes successfully reduce CPU usage. For an overview of nonclustered indexes, seeNonclustered Index Design Guidelines.
+For some workloads, columnstore indexes might be the best choice to reduce CPU of frequent read queries. SeeColumnstore indexes - Design guidancefor high-level recommendations on scenarios when columnstore indexes might be appropriate.
+Tune your application, queries, and database settings
+In examining your top queries, you might findapplication antipatternssuch as "chatty" behavior, workloads that would benefit from sharding, and suboptimal database access design. For read-heavy workloads, considerread-only replicas to offload read-only query workloadsandapplication-tier cachingas long-term strategies to scale out frequently read data.
+You might also choose to manually tune the top CPU using queries identified in your workload. Manual tuning options include rewriting Transact-SQL statements,forcing plansin Query Store, and applyingquery hints.
+If you identify cases where queries sometimes use an execution plan that is not optimal for performance, review the solutions inqueries that parameter sensitive plan (PSP) problems
+If you identify non-parameterized queries with a high number of plans, consider parameterizing these queries, making sure to fully declare parameter data types, including length and precision. This might be done by modifying the queries, creating aplan guide to force parameterizationof a specific query, or by enablingforced parameterizationat the database level.
+If you identify queries with high compilation rates, identify what causes the frequent compilation. The most common cause of frequent compilation isRECOMPILE hints. Whenever possible, identify when theRECOMPILEhint was added and what problem it was meant to solve. Investigate whether an alternate performance tuning solution can be implemented to provide consistent performance for frequently running queries without aRECOMPILEhint.
+RECOMPILE
+RECOMPILE
+Reduce CPU usage by tuning the max degree of parallelism
+Themax degree of parallelism (MAXDOP)setting controls intra-query parallelism in the database engine. Higher MAXDOP values generally result in more parallel threads per query, and faster query execution.
+In some cases, a large number of parallel queries running concurrently can slow down a workload and cause high CPU usage. Excessive parallelism is most likely to occur in databases with a large number of vCores where MAXDOP is set to a high number or to zero. When MAXDOP is set to zero, the database engine sets the number ofschedulersto be used by parallel threads to the total number of logical cores or 64, whichever is smaller.
+You can identify the max degree of parallelism setting for your database with Transact-SQL. Connect to your database with SSMS or Azure Data Studio and run the following query:
+SELECT 
+    name, 
+    value, 
+    value_for_secondary, 
+    is_value_default 
+FROM sys.database_scoped_configurations
+WHERE name=N'MAXDOP';
+GO
+SELECT 
+    name, 
+    value, 
+    value_for_secondary, 
+    is_value_default 
+FROM sys.database_scoped_configurations
+WHERE name=N'MAXDOP';
+GO
+Consider experimenting with small changes in the MAXDOP configuration at the database level, or modifying individual problematic queries to use a nondefault MAXDOP using a query hint. For more information, see the examples inconfigure max degree of parallelism.
+When to add CPU resources
+You might find that your workload's queries and indexes are properly tuned, or that performance tuning requires changes that you cannot make in the short term due to internal processes or other reasons. Adding more CPU resources might be beneficial for these databases. You canscale database resources with minimal downtime.
+You can add more CPU resources to your Azure SQL Database by configuring the vCore count or thehardware configurationfor databases using thevCore purchasing model.
+Under theDTU-based purchasing model, you can raise your service tier and increase the number of database transaction units (DTUs). A DTU represents a blended measure of CPU, memory, reads, and writes.  One benefit of the vCore purchasing model is that it allows more granular control over the hardware in use and the number of vCores. You canmigrate Azure SQL Database from the DTU-based model to the vCore-based modelto transition between purchasing models.
+Related content
+Learn more about monitoring and performance tuning Azure SQL Database in the following articles:
+Monitoring Azure SQL Database and Azure SQL Managed Instance performance using dynamic management views
+SQL Server index architecture and design guide
+Enable automatic tuning in the Azure portal to monitor queries and improve workload performance
+Query processing architecture guide
+Best practices with Query Store
+Detectable types of query performance bottlenecks in Azure SQL Database
+Analyze and prevent deadlocks in Azure SQL Database
+Feedback
+Was this page helpful?
+Additional resources

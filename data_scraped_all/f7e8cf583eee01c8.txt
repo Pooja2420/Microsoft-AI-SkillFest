@@ -1,0 +1,495 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Enable Azure Private Link back-end and front-end connections
+Article
+2024-08-29
+2 contributors
+In this article
+This article summarizes the use ofAzure Private Linkto enable private connectivity between users and their Databricks workspaces, and also between clusters on the classic compute plane and the core services on the control plane within the Databricks workspace infrastructure.
+To change network access for serverless SQL warehouses, seeConfigure private connectivity from serverless compute.
+Overview
+Private Link provides private connectivity from Azure VNets and on-premises networks to Azure services without exposing the traffic to the public network. Azure Databricks supports the following Private Link connection types:
+Front-end Private Link, also known asuser to workspace: A front-end Private Link connection allows users to connect to the Azure Databricks web application, REST API, and Databricks Connect API over a VNet interface endpoint. The front-end connection is also used by JDBC/ODBC and Power BI integrations. The network traffic for a front-end Private Link connection between a transit VNet and the workspaceâs Azure Databricks control plane traverses the Microsoft backbone network.
+Back-end Private Link, also known ascompute plane to control plane: Databricks Runtime clusters in a customer-managed VNet (thecompute plane) connect to an Azure Databricks workspaceâs core services (thecontrol plane) in the Azure Databricks cloud account. This enables private connectivity from the clusters to thesecure cluster connectivity relayendpoint and REST API endpoint.
+Browser authentication private endpoint: To support private front-end connections to the Azure Databricks web application for clients that have no public internet connectivity, you must add a browser authentication private endpoint to support single sign-on (SSO) login callbacks to the Azure Databricks web application from Microsoft Entra ID. If you allow connections from your network to the public internet, adding a browser authentication private endpoint isrecommended but not required. A browser authentication private endpoint is a private connection with sub-resource typebrowser_authentication.
+browser_authentication
+If you implement Private Link forbothfront-end and back-end connections, you can optionally mandate private connectivity for the workspace, which means Azure Databricks rejects any connections over the public network. If you decline to implement both front-end or back-end connection types, you cannot enforce this requirement.
+Sample Unity Catalog datasets and Azure Databricks datasets are not available when back-end Private Link is configured. SeeSample datasets.
+Most of this article is about creating a new workspace, but you can enable or disable Private Link on an existing workspace. SeeEnable or disable Azure Private Link on an existing workspace.
+Terminology
+The following table describes important terminology.
+For general information about private endpoints, see the Microsoft articleWhat is a private endpoint?.
+Choose standard or simplified deployment
+There are two types of Private Link deployment that Azure Databricks supports, and you must choose one:
+Standard deployment (recommended): For improved security, Databricks recommends you use a separate private endpoint for your front-end connection from a separatetransit VNet. You can implement both front-end and back-end Private Link connections or just the back-end connection. Use a separate VNet to encapsulate user access, separate from the VNet that you use for your compute resources in the classic compute plane. Create separate Private Link endpoints for back-end and front-end access. Follow the instructions inEnable Azure Private Link as a standard deployment.
+Simplified deployment: Some organizations cannot use the standard deployment for various network policy reasons, such as disallowing more than one private endpoint or discouraging separate transit VNets. You can alternatively use the Private Linksimplified deployment. No separate VNet separates user access from the VNet you use for your compute resources in the classic compute plane. Instead, atransit subnetin the compute plane VNet is used for user access. There is only a single Private Link endpoint. Typically, both front-end and back-end connectivity are configured. You can optionally configure only the back-end connection. You cannot choose to use only the front-end connections in this deployment type. Follow the instructions inEnable Azure Private Link as a simplified deployment.
+Requirements
+Azure subscription
+Your Azure Databricks workspace must be on thePremium plan.
+Azure Databricks workspace network architecture
+Your Azure Databricks workspace must useVNet injectionto add any Private Link connection (even a front-end-only connection).
+If you implement the back-end Private Link connection, your Azure Databricks workspace must usesecure cluster connectivity (SCC / No Public IP / NPIP).
+You need a VNet that satisfies the requirements ofVNet injection.You must define two subnets (referred to in the UI as the public subnet and the private subnet). The VNet and subnet IP ranges that you use for Azure Databricks defines the maximum number of cluster nodes that you can use at one time.To implement front-end Private Link, back-end Private Link, or both, your workspace VNet needs a third subnet that contains the Private Link endpoint and its IP address range must not overlap with the range of your other workspace subnets. This article refers to this third subnet as the private endpoint subnet. Examples and screenshots assume the subnet nameprivate-link. This can be as small as CIDR range/27. Do not define any NSG rules for a subnet that contains private endpoints.If you use the UI to create objects, you need to create the network and subnets manuallybeforecreating the Azure Databricks workspace. If you want to use a template, the template that Azure Databricks provides creates a VNet and appropriate subnets for you, including the two regular subnets plus another for private endpoints.
+You must define two subnets (referred to in the UI as the public subnet and the private subnet). The VNet and subnet IP ranges that you use for Azure Databricks defines the maximum number of cluster nodes that you can use at one time.
+To implement front-end Private Link, back-end Private Link, or both, your workspace VNet needs a third subnet that contains the Private Link endpoint and its IP address range must not overlap with the range of your other workspace subnets. This article refers to this third subnet as the private endpoint subnet. Examples and screenshots assume the subnet nameprivate-link. This can be as small as CIDR range/27. Do not define any NSG rules for a subnet that contains private endpoints.
+private-link
+/27
+If you use the UI to create objects, you need to create the network and subnets manuallybeforecreating the Azure Databricks workspace. If you want to use a template, the template that Azure Databricks provides creates a VNet and appropriate subnets for you, including the two regular subnets plus another for private endpoints.
+If you have aNetwork Security Groups policyenabled on the private endpoint, you must allow ports 443, 6666, 3306, and 8443-8451 forInbound Security Rulesin the network security group on the subnet where the private endpoint is deployed.
+To connect between your network and the Azure portal and its services, you might need to add Azure portal URLs to your allowlist. SeeAllow the Azure portal URLs on your firewall or proxy server
+Front-end connection network architecture
+For front-end Private Link only, for users to access the workspace from your on-premises network, you must add private connectivity from that network to your Azure network. Add this connectivity before configuring Private Link. The details vary based on whether you choose the Private Link standard deployment or the simplified deployment.
+For thestandard deployment, you would create or use an existingtransit VNet, sometimes called abastion VNetorhub VNet. This VNet must be reachable from the on-premises user environment using Expressroute or a VPN gateway connection. For front-end Private Link, Databricks recommends creating a separate VNet for your connectivity to the control plane, rather than sharing the workspace VNet. Note that the transit VNet and its subnet can be in the same region, zone, and resource group as your workspace VNet and its subnets, but they do not have to match. Create a resource group for the separate transit VNet and use a different private DNS zone for that private endpoint. If you use two separate private endpoints, you cannot share the DNS zone.
+For thesimplified deployment, you create a transit subnet in your workspace VNet. In this deployment, the transit subnet does not have a separate private endpoint. The transit subnet in the workspace VNet uses a single private endpoint for both back-end and front-end connections.
+Azure user permissions
+As Azure user, you must have read/write permissions sufficient to:
+Provision a new Azure Databricks workspace.
+Create Azure Private Link endpoints in your workspace VNet and also (for front-end usage) your transit VNet.
+If the user who created the private endpoint for the transit VNet does not have owner/contributor permissions for the workspace, then a separate user with owner/contributor permissions for the workspace must manually approve the private endpoint creation request.
+Enable or disable Azure Private Link on an existing workspace
+You can enable Private Link on an existing workspace. The upgrade requires that the workspace usesVNet Injection,secure cluster connectivity, and Premium pricing tier. You can update to secure cluster connectivity and to the Premium pricing tier during the update.
+You can use an ARM template orazurermTerraform provider version 3.41.0+. You can use the Azure portal to apply a custom template and modify the parameter in the UI. However, there is no Azure Portal user interface support for this upgrade on the Azure Databricks workspace instance itself.
+azurerm
+If something goes wrong with the upgrade and you can repeat theworkspace update stepbut instead set the fields to disable Private Link.
+Although the focus of this section is enabling Private Link on an existing workspace, you can disable it on an existing workspace by using the same workspace update call with the ARM template or a Terraform update. See to the stepStep 4: Apply the workspace updatefor details.
+Step 1: Read the requirements and documentation on this page
+Before you attempt an upgrade to Private Link there are important concepts and requirements that you should read:
+Read this article including concepts and requirements before proceeding.
+Determine whether you want to use thestandard deployment or the simplified deployment.
+On the page forstandard deploymentor thesimplified deployment(whichever approach you use), carefully review the page including the various scenarios. Find the scenario that matches your use case. Write down which values you intend to use forpublicNetworkAccessandrequiredNsgRules. For the recommended configuration of both front-end and back-end Private Link with front-end connectivity locked down, use the settingspublicNetworkAccess=DisabledandrequiredNsgRules=NoAzureDatabricksRules
+publicNetworkAccess
+requiredNsgRules
+publicNetworkAccess=Disabled
+requiredNsgRules=NoAzureDatabricksRules
+Step 2: Stop all compute resources
+Before attempting this upgrade, you must stop all compute resources such as clusters, pools, or classic SQL warehouses. No workspace compute resources can be running or the upgrade attempt fails. Databricks recommends planning the timing of the upgrade for down time.
+Important
+Do not attempt to start any compute resources during the update. If Azure Databricks determines that compute resources were started (or are still starting), Azure Databricks terminates them after the update.
+Step 3: Create subnet and private endpoints
+Add a subnet to your workspace VNet for your back-end private endpoints.
+Add a subnet to your workspace VNet for your back-end private endpoints.
+Open the article forstandard deploymentor thesimplified deployment(whichever approach you use).Follow the instructions on that page to create the private endpoints that match your type of deployment.
+Open the article forstandard deploymentor thesimplified deployment(whichever approach you use).
+Follow the instructions on that page to create the private endpoints that match your type of deployment.
+Create all your private endpoints for back-end support before doing the workspace update.
+Create all your private endpoints for back-end support before doing the workspace update.
+For UI access, create a private endpoint with subresourcedatabricks_ui_apito support SSO from your transit VNet. If you have more than one transit VNet that accesses the workspace for front-end access, create multiple private endpoint with subresourcedatabricks_ui_api.
+For UI access, create a private endpoint with subresourcedatabricks_ui_apito support SSO from your transit VNet. If you have more than one transit VNet that accesses the workspace for front-end access, create multiple private endpoint with subresourcedatabricks_ui_api.
+databricks_ui_api
+databricks_ui_api
+Step 4: Apply the workspace update
+Instead of creating a new workspace, you need to apply the workspace update.
+You must update thepublicNetworkAccessandrequiredNsgRulesparameters to the values that you chose in a previous step.
+publicNetworkAccess
+requiredNsgRules
+Use one of these methods:
+Use Azure portal UI (with no template)
+Use Azure portal UI (with no template)
+Apply an updated ARM template using Azure portal
+Apply an updated ARM template using Azure portal
+Apply an update using TerraformUse Azure portal UI (with no template)Go to your Azure Databricks Service instance in the Azure portal.In the left navigation underSettings, clickNetworking.SetAllow Public Network AccessandRequired NSG Rulesto the appropriate values based on your use case. SeeStep 1: Read the requirements and documentation on this page.NoteTo enable Azure Private Link, the workspace must enable secure cluster connectivity (sometimes called No Public IP). If itâs not yet enabled, at the same time as the Private Link update, you can choose to enablesecure cluster connectivityby settingNo Public IPtoTrue. However, Azure Databricks recommends enabling secure cluster connectivity as a separate step before enabling Private Link so you can separately validate success.ClickSave.The network update might take over 15 minutes to complete.
+Apply an update using Terraform
+Go to your Azure Databricks Service instance in the Azure portal.
+Go to your Azure Databricks Service instance in the Azure portal.
+In the left navigation underSettings, clickNetworking.
+In the left navigation underSettings, clickNetworking.
+SetAllow Public Network AccessandRequired NSG Rulesto the appropriate values based on your use case. SeeStep 1: Read the requirements and documentation on this page.NoteTo enable Azure Private Link, the workspace must enable secure cluster connectivity (sometimes called No Public IP). If itâs not yet enabled, at the same time as the Private Link update, you can choose to enablesecure cluster connectivityby settingNo Public IPtoTrue. However, Azure Databricks recommends enabling secure cluster connectivity as a separate step before enabling Private Link so you can separately validate success.
+SetAllow Public Network AccessandRequired NSG Rulesto the appropriate values based on your use case. SeeStep 1: Read the requirements and documentation on this page.
+Note
+To enable Azure Private Link, the workspace must enable secure cluster connectivity (sometimes called No Public IP). If itâs not yet enabled, at the same time as the Private Link update, you can choose to enablesecure cluster connectivityby settingNo Public IPtoTrue. However, Azure Databricks recommends enabling secure cluster connectivity as a separate step before enabling Private Link so you can separately validate success.
+ClickSave.
+ClickSave.
+The network update might take over 15 minutes to complete.
+Note
+If your managed resource group has a custom name, you must modify the template accordingly. Contact your Azure Databricks account team for more information.
+Copy the following upgrade ARM template JSON:{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "defaultValue": "[resourceGroup().location]",
+      "type": "String",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "workspaceName": {
+      "type": "String",
+      "metadata": {
+        "description": "The name of the Azure Databricks workspace to create."
+      }
+    },
+    "apiVersion": {
+      "defaultValue": "2023-02-01",
+      "allowedValues": ["2018-04-01", "2020-02-15", "2022-04-01-preview", "2023-02-01"],
+      "type": "String",
+      "metadata": {
+        "description": "2018-03-15 for 'full region isolation control plane' and 2020-02-15 for 'FedRAMP certified' regions"
+      }
+    },
+    "publicNetworkAccess": {
+      "defaultValue": "Enabled",
+      "allowedValues": ["Enabled", "Disabled"],
+      "type": "String",
+      "metadata": {
+        "description": "Whether the workspace allows access from the public Internet"
+      }
+    },
+    "requiredNsgRules": {
+      "defaultValue": "AllRules",
+      "allowedValues": ["AllRules", "NoAzureDatabricksRules"],
+      "type": "String",
+      "metadata": {
+        "description": "The security rules that are applied to the security group of the Vnet"
+      }
+    },
+    "enableNoPublicIp": {
+      "defaultValue": true,
+      "type": "Bool"
+    },
+    "pricingTier": {
+      "defaultValue": "premium",
+      "allowedValues": ["premium", "standard", "trial"],
+      "type": "String",
+      "metadata": {
+        "description": "The pricing tier of workspace."
+      }
+    },
+    "privateSubnetName": {
+      "defaultValue": "private-subnet",
+      "type": "String",
+      "metadata": {
+        "description": "The name of the private subnet."
+      }
+    },
+    "publicSubnetName": {
+      "defaultValue": "public-subnet",
+      "type": "String",
+      "metadata": {
+        "description": "The name of the public subnet."
+      }
+    },
+    "vnetId": {
+      "type": "String",
+      "metadata": {
+        "description": "The virtual network Resource ID."
+      }
+    }
+  },
+  "variables": {
+    "managedResourceGroupName": "[concat('databricks-rg-', parameters('workspaceName'), '-', uniqueString(parameters('workspaceName'), resourceGroup().id))]",
+    "managedResourceGroupId": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('managedResourceGroupName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Databricks/workspaces",
+      "apiVersion": "[parameters('apiVersion')]",
+      "name": "[parameters('workspaceName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('pricingTier')]"
+      },
+      "properties": {
+        "ManagedResourceGroupId": "[variables('managedResourceGroupId')]",
+        "publicNetworkAccess": "[parameters('publicNetworkAccess')]",
+        "requiredNsgRules": "[parameters('requiredNsgRules')]",
+        "parameters": {
+          "enableNoPublicIp": {
+            "value": "[parameters('enableNoPublicIp')]"
+          },
+          "customVirtualNetworkId": {
+            "value": "[parameters('vnetId')]"
+          },
+          "customPublicSubnetName": {
+            "value": "[parameters('publicSubnetName')]"
+          },
+          "customPrivateSubnetName": {
+            "value": "[parameters('privateSubnetName')]"
+          }
+        }
+      }
+    }
+  ]
+}Go to the Azure portalCustom deploymentpage.ClickBuild your own template in the editor.Paste in the JSON for the template that you copied.ClickSave.To enable Private Link, setpublicNetworkAccessandrequiredNsgRulesparameters according to your use case.To disable Private Link, setpublicNetworkAccesstotrueand setrequiredNsgRulestoAllRules.For other fields, use the same parameters that you used to create the workspace, such as subscription, region, workspace name, subnet names, resource ID of the existing VNet.ImportantThe resource group name, workspace name, and subnet names must be identical to your existing workspace so that this command updates the existing workspace rather than creating a new workspace.ClickReview + Create.If there are no validation issues, clickCreate.The network update might take over 15 minutes to complete.
+Copy the following upgrade ARM template JSON:
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "defaultValue": "[resourceGroup().location]",
+      "type": "String",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "workspaceName": {
+      "type": "String",
+      "metadata": {
+        "description": "The name of the Azure Databricks workspace to create."
+      }
+    },
+    "apiVersion": {
+      "defaultValue": "2023-02-01",
+      "allowedValues": ["2018-04-01", "2020-02-15", "2022-04-01-preview", "2023-02-01"],
+      "type": "String",
+      "metadata": {
+        "description": "2018-03-15 for 'full region isolation control plane' and 2020-02-15 for 'FedRAMP certified' regions"
+      }
+    },
+    "publicNetworkAccess": {
+      "defaultValue": "Enabled",
+      "allowedValues": ["Enabled", "Disabled"],
+      "type": "String",
+      "metadata": {
+        "description": "Whether the workspace allows access from the public Internet"
+      }
+    },
+    "requiredNsgRules": {
+      "defaultValue": "AllRules",
+      "allowedValues": ["AllRules", "NoAzureDatabricksRules"],
+      "type": "String",
+      "metadata": {
+        "description": "The security rules that are applied to the security group of the Vnet"
+      }
+    },
+    "enableNoPublicIp": {
+      "defaultValue": true,
+      "type": "Bool"
+    },
+    "pricingTier": {
+      "defaultValue": "premium",
+      "allowedValues": ["premium", "standard", "trial"],
+      "type": "String",
+      "metadata": {
+        "description": "The pricing tier of workspace."
+      }
+    },
+    "privateSubnetName": {
+      "defaultValue": "private-subnet",
+      "type": "String",
+      "metadata": {
+        "description": "The name of the private subnet."
+      }
+    },
+    "publicSubnetName": {
+      "defaultValue": "public-subnet",
+      "type": "String",
+      "metadata": {
+        "description": "The name of the public subnet."
+      }
+    },
+    "vnetId": {
+      "type": "String",
+      "metadata": {
+        "description": "The virtual network Resource ID."
+      }
+    }
+  },
+  "variables": {
+    "managedResourceGroupName": "[concat('databricks-rg-', parameters('workspaceName'), '-', uniqueString(parameters('workspaceName'), resourceGroup().id))]",
+    "managedResourceGroupId": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('managedResourceGroupName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Databricks/workspaces",
+      "apiVersion": "[parameters('apiVersion')]",
+      "name": "[parameters('workspaceName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('pricingTier')]"
+      },
+      "properties": {
+        "ManagedResourceGroupId": "[variables('managedResourceGroupId')]",
+        "publicNetworkAccess": "[parameters('publicNetworkAccess')]",
+        "requiredNsgRules": "[parameters('requiredNsgRules')]",
+        "parameters": {
+          "enableNoPublicIp": {
+            "value": "[parameters('enableNoPublicIp')]"
+          },
+          "customVirtualNetworkId": {
+            "value": "[parameters('vnetId')]"
+          },
+          "customPublicSubnetName": {
+            "value": "[parameters('publicSubnetName')]"
+          },
+          "customPrivateSubnetName": {
+            "value": "[parameters('privateSubnetName')]"
+          }
+        }
+      }
+    }
+  ]
+}
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "defaultValue": "[resourceGroup().location]",
+      "type": "String",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "workspaceName": {
+      "type": "String",
+      "metadata": {
+        "description": "The name of the Azure Databricks workspace to create."
+      }
+    },
+    "apiVersion": {
+      "defaultValue": "2023-02-01",
+      "allowedValues": ["2018-04-01", "2020-02-15", "2022-04-01-preview", "2023-02-01"],
+      "type": "String",
+      "metadata": {
+        "description": "2018-03-15 for 'full region isolation control plane' and 2020-02-15 for 'FedRAMP certified' regions"
+      }
+    },
+    "publicNetworkAccess": {
+      "defaultValue": "Enabled",
+      "allowedValues": ["Enabled", "Disabled"],
+      "type": "String",
+      "metadata": {
+        "description": "Whether the workspace allows access from the public Internet"
+      }
+    },
+    "requiredNsgRules": {
+      "defaultValue": "AllRules",
+      "allowedValues": ["AllRules", "NoAzureDatabricksRules"],
+      "type": "String",
+      "metadata": {
+        "description": "The security rules that are applied to the security group of the Vnet"
+      }
+    },
+    "enableNoPublicIp": {
+      "defaultValue": true,
+      "type": "Bool"
+    },
+    "pricingTier": {
+      "defaultValue": "premium",
+      "allowedValues": ["premium", "standard", "trial"],
+      "type": "String",
+      "metadata": {
+        "description": "The pricing tier of workspace."
+      }
+    },
+    "privateSubnetName": {
+      "defaultValue": "private-subnet",
+      "type": "String",
+      "metadata": {
+        "description": "The name of the private subnet."
+      }
+    },
+    "publicSubnetName": {
+      "defaultValue": "public-subnet",
+      "type": "String",
+      "metadata": {
+        "description": "The name of the public subnet."
+      }
+    },
+    "vnetId": {
+      "type": "String",
+      "metadata": {
+        "description": "The virtual network Resource ID."
+      }
+    }
+  },
+  "variables": {
+    "managedResourceGroupName": "[concat('databricks-rg-', parameters('workspaceName'), '-', uniqueString(parameters('workspaceName'), resourceGroup().id))]",
+    "managedResourceGroupId": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('managedResourceGroupName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Databricks/workspaces",
+      "apiVersion": "[parameters('apiVersion')]",
+      "name": "[parameters('workspaceName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('pricingTier')]"
+      },
+      "properties": {
+        "ManagedResourceGroupId": "[variables('managedResourceGroupId')]",
+        "publicNetworkAccess": "[parameters('publicNetworkAccess')]",
+        "requiredNsgRules": "[parameters('requiredNsgRules')]",
+        "parameters": {
+          "enableNoPublicIp": {
+            "value": "[parameters('enableNoPublicIp')]"
+          },
+          "customVirtualNetworkId": {
+            "value": "[parameters('vnetId')]"
+          },
+          "customPublicSubnetName": {
+            "value": "[parameters('publicSubnetName')]"
+          },
+          "customPrivateSubnetName": {
+            "value": "[parameters('privateSubnetName')]"
+          }
+        }
+      }
+    }
+  ]
+}
+Go to the Azure portalCustom deploymentpage.
+Go to the Azure portalCustom deploymentpage.
+ClickBuild your own template in the editor.
+ClickBuild your own template in the editor.
+Paste in the JSON for the template that you copied.
+Paste in the JSON for the template that you copied.
+ClickSave.
+ClickSave.
+To enable Private Link, setpublicNetworkAccessandrequiredNsgRulesparameters according to your use case.To disable Private Link, setpublicNetworkAccesstotrueand setrequiredNsgRulestoAllRules.
+To enable Private Link, setpublicNetworkAccessandrequiredNsgRulesparameters according to your use case.
+publicNetworkAccess
+requiredNsgRules
+To disable Private Link, setpublicNetworkAccesstotrueand setrequiredNsgRulestoAllRules.
+publicNetworkAccess
+true
+requiredNsgRules
+AllRules
+For other fields, use the same parameters that you used to create the workspace, such as subscription, region, workspace name, subnet names, resource ID of the existing VNet.ImportantThe resource group name, workspace name, and subnet names must be identical to your existing workspace so that this command updates the existing workspace rather than creating a new workspace.
+For other fields, use the same parameters that you used to create the workspace, such as subscription, region, workspace name, subnet names, resource ID of the existing VNet.
+Important
+The resource group name, workspace name, and subnet names must be identical to your existing workspace so that this command updates the existing workspace rather than creating a new workspace.
+ClickReview + Create.
+ClickReview + Create.
+If there are no validation issues, clickCreate.
+If there are no validation issues, clickCreate.
+The network update might take over 15 minutes to complete.
+For workspaces created with Terraform, you can update the workspace to use Private Link.
+Important
+You must useterraform-provider-azurermversion 3.41.0 or later, so upgrade your Terraform provider version as needed. Earlier versions attempt to recreate the workspace if you change any of these settings.
+terraform-provider-azurerm
+The high-level steps are:
+Change the following workspace settings:public_network_access_enabled: Set totrue(Enabled) orfalse(Disabled)network_security_group_rules_required: Set toAllRulesorNoAzureDatabricksRules.The network update might take over 15 minutes to complete.
+Change the following workspace settings:
+public_network_access_enabled: Set totrue(Enabled) orfalse(Disabled)
+public_network_access_enabled
+true
+false
+network_security_group_rules_required: Set toAllRulesorNoAzureDatabricksRules.
+network_security_group_rules_required
+AllRules
+NoAzureDatabricksRules
+The network update might take over 15 minutes to complete.
+Create your private endpoints.
+Create your private endpoints.
+For a detailed guide for how to enable Private Link and create the private endpoints:
+For a standard deployment, see theTerraform guide for Azure Private Link standard deployment
+For a simplified deployment, see theTerraform guide for Azure Private Link simplified deployment
+The network update might take over 15 minutes to complete.
+Step 5: Test user SSO authentication and back-end connectivity
+Follow your main deployment page for details on how to:
+Test user SSO authentication to your workspace.
+Test back-end Private Link connection (required for a back-end connection)
+Step 6: Validate the update
+Go to your Azure Databricks Service instance in the Azure portal.
+In the left navigation underSettings, clickNetworking.
+Confirm that the value forAllow Public Network Accessmatches the value that you set.
+Confirm that the value forRequired NSG Rulesmatches the value that you set.
+Failure recovery
+If a workspace update fails, the workspace might be marked as aFailedstate, which means that the workspace is unable to perform compute operations. To restore a failed workspace back toActivestate, review the instructions in the status message of the update operation. Once you fix any issues, redo the update on the failed workspace. Repeat the steps until the update successfully completes. If you have questions, contact your Azure Databricks account team.
+Feedback
+Was this page helpful?
+Additional resources

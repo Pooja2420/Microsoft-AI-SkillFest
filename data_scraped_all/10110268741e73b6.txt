@@ -1,0 +1,561 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Configure an availability group across Azure regions - SQL Server on Azure VMs
+Article
+2024-06-18
+17 contributors
+In this article
+Applies to:SQL Server on Azure VM
+This tutorial explains how to configure an Always On availability group replica for SQL Server on Azure virtual machines (VMs) in an Azure region that is remote to the primary replica. You can use this configuration for the purpose of disaster recovery (DR).
+You can also use the steps in this article to extend an existing on-premises availability group to Azure.
+This tutorial builds on thetutorial to manually deploy an availability group in a single subnet in a single region. Mentions of the local region in this article refer to the virtual machines and availability group already configured in the first region. The remote region is the new infrastructure that's being added in this tutorial.
+Overview
+The following image shows a common deployment of an availability group on Azure virtual machines:
+
+In the deployment shown in the diagram, all virtual machines are in one Azure region. The availability group replicas can have synchronous commit with automatic failover on SQL-1 and SQL-2. To build this architecture, see theavailability group template or tutorial.
+This architecture is vulnerable to downtime if the Azure region becomes inaccessible. To overcome this vulnerability, add a replica in a different Azure region. The following diagram shows how the new architecture looks:
+
+The diagram shows a new virtual machine called SQL-3. SQL-3 is in a different Azure region. It's added to the Windows Server failover cluster and can host an availability group replica.
+The Azure region for SQL-3 has a new Azure load balancer. In this architecture, the replica in the remote region is normally configured with asynchronous commit availability mode and manual failover mode.
+Note
+An Azure availability set is required when more than one virtual machine is in the same region. If only one virtual machine is in the region, the availability set is not required.
+You can place a virtual machine in an availability set only at creation time. If the virtual machine is already in an availability set, you can add a virtual machine for an additional replica later.
+When availability group replicas are on Azure virtual machines in different Azure regions, you can connect the virtual networks by usingvirtual network peeringor asite-to-site VPN gateway.
+Important
+This architecture incurs outbound data charges for data replicated between Azure regions. SeeBandwidth pricing.
+Create the network and subnet
+Before you create avirtual network and subnet in a new region, decide on the address space, subnet network, cluster IP, and availability group listener IP addresses that you'll use for the remote region.
+The following table lists details for the local (current) region and what will be set up in the new remote region.
+To create a virtual network and subnet in the new region in the Azure portal:
+Go to your resource group in theAzure portaland select+ Create.
+Go to your resource group in theAzure portaland select+ Create.
+Search forvirtual networkin theMarketplacesearch box, and then select thevirtual networktile from Microsoft.
+Search forvirtual networkin theMarketplacesearch box, and then select thevirtual networktile from Microsoft.
+On theCreate virtual networkpage, selectCreate. Then enter the following information on theBasicstab:UnderProject details, forSubscription, select the appropriate Azure subscription. ForResource group, select the resource group that you created previously, such asSQL-HA-RG.UnderInstance details, provide a name for your virtual network, such asremote_HAVNET. Then choose a new remote region.
+On theCreate virtual networkpage, selectCreate. Then enter the following information on theBasicstab:
+UnderProject details, forSubscription, select the appropriate Azure subscription. ForResource group, select the resource group that you created previously, such asSQL-HA-RG.
+UnderInstance details, provide a name for your virtual network, such asremote_HAVNET. Then choose a new remote region.
+
+On theIP addressestab, select the ellipsis (...) next to+ Add a subnet. SelectDelete address spaceto remove the existing address space, if you need a different address range.
+On theIP addressestab, select the ellipsis (...) next to+ Add a subnet. SelectDelete address spaceto remove the existing address space, if you need a different address range.
+
+SelectAdd an IP address spaceto open the pane to create the address space that you need. This tutorial uses the address space of the remote region: 10.36.0.0/16. SelectAdd.
+SelectAdd an IP address spaceto open the pane to create the address space that you need. This tutorial uses the address space of the remote region: 10.36.0.0/16. SelectAdd.
+
+Select+ Add a subnet, and then:Provide a value for theSubnet name, such asadmin.Provide a unique subnet address range within the virtual network address space.For example, if your address range is 10.36.0.0/16, enter these values for theadminsubnet:10.36.1.0forStarting addressand/24forSubnet size.SelectAddto add your new subnet.
+Select+ Add a subnet, and then:
+Provide a value for theSubnet name, such asadmin.
+Provide a value for theSubnet name, such asadmin.
+Provide a unique subnet address range within the virtual network address space.For example, if your address range is 10.36.0.0/16, enter these values for theadminsubnet:10.36.1.0forStarting addressand/24forSubnet size.
+Provide a unique subnet address range within the virtual network address space.
+For example, if your address range is 10.36.0.0/16, enter these values for theadminsubnet:10.36.1.0forStarting addressand/24forSubnet size.
+SelectAddto add your new subnet.
+SelectAddto add your new subnet.
+
+Connect the virtual networks in the two Azure regions
+After you create the new virtual network and subnet, you're ready to connect the two regions so they can communicate with each other. There are two methods to do this:
+Connect virtual networks with virtual network peering by using the Azure portal(recommended)In some cases, you might have to use PowerShell to create the connection between virtual networks. For example, if you use different Azure accounts, you can't configure the connection in the portal. In this case, reviewConfigure a network-to-network connection by using the Azure portal.
+Connect virtual networks with virtual network peering by using the Azure portal(recommended)
+In some cases, you might have to use PowerShell to create the connection between virtual networks. For example, if you use different Azure accounts, you can't configure the connection in the portal. In this case, reviewConfigure a network-to-network connection by using the Azure portal.
+Configure a site-to-site VPN gateway connection by using the Azure portal
+Configure a site-to-site VPN gateway connection by using the Azure portal
+This tutorial uses virtual network peering. To configure virtual network peering:
+In the search box at the top of the Azure portal, typeautoHAVNET, which is the virtual network in your local region. WhenautoHAVNETappears in the search results, select it.
+In the search box at the top of the Azure portal, typeautoHAVNET, which is the virtual network in your local region. WhenautoHAVNETappears in the search results, select it.
+UnderSettings, selectPeerings, and then select+ Add.
+UnderSettings, selectPeerings, and then select+ Add.
+
+Enter or select the following information, accept the defaults for the remaining settings, and then selectAdd.SettingValueThis virtual networkPeering link nameEnterautoHAVNET-remote_HAVNETfor the name of the peering fromautoHAVNETto the remote virtual network.Remote virtual networkPeering link nameEnterremote_HAVNET-autoHAVNETfor the name of the peering from the remote virtual network toautoHAVNET.SubscriptionSelect your subscription for the remote virtual network.Virtual networkSelectremote_HAVNETfor the name of the remote virtual network. The remote virtual network can be in the same region ofautoHAVNETor in a different region.
+Enter or select the following information, accept the defaults for the remaining settings, and then selectAdd.
+
+On thePeeringspage,Peering statusisConnected.If you don't see aConnectedstatus, select theRefreshbutton.
+On thePeeringspage,Peering statusisConnected.
+
+If you don't see aConnectedstatus, select theRefreshbutton.
+Create a domain controller
+Adomain controller in the new regionis necessary to provide authentication if the primary site is not available. To create the domain controller in the new region:
+Return to theSQL-HA-RGresource group.
+Select+ Create.
+TypeWindows Server 2016 Datacenter, and then select theWindows Server 2016 Datacenterresult.
+InWindows Server 2016 Datacenter, verify that the deployment model isResource Manager, and then selectCreate.
+The following table shows the settings for the two machines:
+Azure creates the virtual machines.
+Configure the domain controller
+In the following steps, configure thead-remote-dcmachine as a domain controller forcorp.contoso.com:
+The preferred DNS server addressshould not be updateddirectly within a VM, it should be edited from theAzure portal, or PowerShell, or Azure CLI. The steps below are to make the change inside of the Azure portal:
+Sign-in to theAzure portal.
+Sign-in to theAzure portal.
+In the search box at the top of the portal, enterNetwork interface. SelectNetwork interfacesin the search results.
+In the search box at the top of the portal, enterNetwork interface. SelectNetwork interfacesin the search results.
+Select the network interface for the second domain controller that you want to view or change settings for from the list.
+Select the network interface for the second domain controller that you want to view or change settings for from the list.
+InSettings, selectDNS servers.
+InSettings, selectDNS servers.
+Since this domain controller is not in the same virtual network as the primary domain controller selectCustomand input the IP address of the primary domain controller, such as192.168.15.4. The DNS server address you specify is assigned only to this network interface and overrides any DNS setting for the virtual network the network interface is assigned to.
+Since this domain controller is not in the same virtual network as the primary domain controller selectCustomand input the IP address of the primary domain controller, such as192.168.15.4. The DNS server address you specify is assigned only to this network interface and overrides any DNS setting for the virtual network the network interface is assigned to.
+192.168.15.4
+SelectSave.
+SelectSave.
+Return to the virtual machine in the Azure portal and restart the VM. Once the virtual machine has restarted, you can join the VM to the domain.
+Return to the virtual machine in the Azure portal and restart the VM. Once the virtual machine has restarted, you can join the VM to the domain.
+Join the domain
+Next, join thecorp.contoso.comdomain. To do so, follow these steps:
+Remotely connect to the virtual machine withBastionby using theBUILTIN\DomainAdminaccount.
+OpenServer Manager, and selectLocal Server.
+SelectWORKGROUP.
+In theComputer Namesection, selectChange.
+Select theDomaincheckbox and typecorp.contoso.comin the text box. SelectOK.
+In theWindows Securitypopup dialog, specify the credentials for the default domain administrator account (CORP\DomainAdmin) and the password (Contoso!0000).
+When you see the "Welcome to the corp.contoso.com domain" message, selectOK.
+SelectClose, and then selectRestart Nowin the popup dialog.
+Once your server has joined the domain, you can configure it as the second domain controller. To do so, follow these steps:
+If you're not already connected, open aBastionsession to your secondary domain controller, and openServer Manager Dashboard(which may be open by default).
+If you're not already connected, open aBastionsession to your secondary domain controller, and openServer Manager Dashboard(which may be open by default).
+Select theAdd roles and featureslink on the dashboard.
+Select theAdd roles and featureslink on the dashboard.
+
+SelectNextuntil you get to theServer Rolessection.
+SelectNextuntil you get to theServer Rolessection.
+Select theActive Directory Domain ServicesandDNS Serverroles. When you're prompted, add any additional features that are required by these roles.
+Select theActive Directory Domain ServicesandDNS Serverroles. When you're prompted, add any additional features that are required by these roles.
+After the features finish installing, return to theServer Managerdashboard.
+After the features finish installing, return to theServer Managerdashboard.
+Select the newAD DSoption on the left-hand pane.
+Select the newAD DSoption on the left-hand pane.
+Select theMorelink on the yellow warning bar.
+Select theMorelink on the yellow warning bar.
+In theActioncolumn of theAll Server Task Detailsdialog, selectPromote this server to a domain controller.
+In theActioncolumn of theAll Server Task Detailsdialog, selectPromote this server to a domain controller.
+UnderDeployment Configuration, selectAdd a domain controller to an existing domain.
+UnderDeployment Configuration, selectAdd a domain controller to an existing domain.
+ClickSelect.
+ClickSelect.
+Connect by using the administrator account (CORP.CONTOSO.COM\domainadmin) and password (Contoso!0000).
+Connect by using the administrator account (CORP.CONTOSO.COM\domainadmin) and password (Contoso!0000).
+InSelect a domain from the forest, choose your domain and then selectOK.
+InSelect a domain from the forest, choose your domain and then selectOK.
+InDomain Controller Options, use the default values and set a DSRM password.NoteTheDNS Optionspage might warn you that a delegation for this DNS server can't be created. You can ignore this warning in non-production environments.
+InDomain Controller Options, use the default values and set a DSRM password.
+Note
+TheDNS Optionspage might warn you that a delegation for this DNS server can't be created. You can ignore this warning in non-production environments.
+SelectNextuntil the dialog reaches thePrerequisitescheck. Then selectInstall.
+SelectNextuntil the dialog reaches thePrerequisitescheck. Then selectInstall.
+After the server finishes the configuration changes, restart the server.
+Create a SQL Server VM
+After the domain controller restarts, the next step is tocreate a SQL Server virtual machine in the new region.
+Before you proceed, consider the following design decisions:
+Storage: Azure managed disksFor the virtual machine storage, use Azure managed disks. We recommend managed disks for SQL Server virtual machines. Managed disks handle storage behind the scenes. In addition, when virtual machines with managed disks are in the same availability set, Azure distributes the storage resources to provide appropriate redundancy.For more information, seeIntroduction to Azure managed disks. For specifics about managed disks in an availability set, seeUse managed disks for VMs in an availability set.
+Storage: Azure managed disks
+For the virtual machine storage, use Azure managed disks. We recommend managed disks for SQL Server virtual machines. Managed disks handle storage behind the scenes. In addition, when virtual machines with managed disks are in the same availability set, Azure distributes the storage resources to provide appropriate redundancy.
+For more information, seeIntroduction to Azure managed disks. For specifics about managed disks in an availability set, seeUse managed disks for VMs in an availability set.
+Network: Private IP addresses in productionFor the virtual machines, this tutorial uses public IP addresses. A public IP address enables remote connection directly to the virtual machine over the internet and makes configuration steps easier. In production environments, we recommend only private IP addresses. Private IP addresses reduce the vulnerability footprint of the SQL Server VM.
+Network: Private IP addresses in production
+For the virtual machines, this tutorial uses public IP addresses. A public IP address enables remote connection directly to the virtual machine over the internet and makes configuration steps easier. In production environments, we recommend only private IP addresses. Private IP addresses reduce the vulnerability footprint of the SQL Server VM.
+Network: Single NIC per serverUse a single network interface card (NIC) per server (cluster node) and a single subnet. Azure networking has physical redundancy, which makes additional NICs and subnets unnecessary on an Azure VM guest cluster. The cluster validation report will warn you that the nodes are reachable on only a single network. You can ignore this warning on Azure VM guest failover clusters.
+Network: Single NIC per server
+Use a single network interface card (NIC) per server (cluster node) and a single subnet. Azure networking has physical redundancy, which makes additional NICs and subnets unnecessary on an Azure VM guest cluster. The cluster validation report will warn you that the nodes are reachable on only a single network. You can ignore this warning on Azure VM guest failover clusters.
+Create and configure the SQL Server VM
+To create the SQL Server VM, go back to theSQL-HA-RGresource group, and then selectAdd. Search for the appropriate gallery item, selectVirtual Machine, and then selectFrom Gallery. Use the information in the following table to help you create the VMs:
+Note
+The machine size suggested here is meant for testing availability groups in Azure virtual machines. For the best performance on production workloads, see the recommendations for SQL Server machine sizes and configuration inChecklist: Best practices for SQL Server on Azure VMs.
+After the VM is fully provisioned, you need to join it to thecorp.contoso.comdomain and grantCORP\Installadministrative rights to the machines.
+Join the server to the domain
+To join the VM tocorp.contoso.com, use the following steps for the SQL Server VM:
+Remotely connect to the virtual machine withBastionby using theBUILTIN\DomainAdminaccount.
+InServer Manager, selectLocal Server.
+Select theWORKGROUPlink.
+In theComputer Namesection, selectChange.
+Select theDomaincheck box, and entercorp.contoso.comin the text box. Then selectOK.
+In theWindows Securitypop-up dialog, specify the credentials for the default domain administrator account (CORP\DomainAdmin) and the password (Contoso!0000).
+When you see the "Welcome to the corp.contoso.com domain" message, selectOK.
+SelectClose, and then selectRestart Nowin the pop-up dialog.
+Add accounts
+The next task is to add the installation account as an administrator on the SQL Server VM, and then grant permission to that account and to local accounts within SQL Server. You can then update the SQL Server service account.
+Add the CORP\Install user as an administrator on each cluster VM
+After the SQL Server virtual machine restarts as a member of the domain, addCORP\Installas a member of the local administrators group:
+Wait until the VM is restarted, and then open a Remote Desktop Protocol (RDP) connection from the primary domain controller. Sign in tosqlserver-2by using theCORP\DomainAdminaccount.TipIn earlier steps, you were using theBUILTINadministrator account. Now that the server is in the domain, make sure that you sign in with the domain administrator account. In your RDP session, specifyDOMAIN\username.
+Wait until the VM is restarted, and then open a Remote Desktop Protocol (RDP) connection from the primary domain controller. Sign in tosqlserver-2by using theCORP\DomainAdminaccount.
+Tip
+In earlier steps, you were using theBUILTINadministrator account. Now that the server is in the domain, make sure that you sign in with the domain administrator account. In your RDP session, specifyDOMAIN\username.
+InServer Manager, selectTools, and then selectComputer Management.
+InServer Manager, selectTools, and then selectComputer Management.
+In theComputer Managementwindow, expandLocal Users and Groups, and then selectGroups.
+In theComputer Managementwindow, expandLocal Users and Groups, and then selectGroups.
+Double-click theAdministratorsgroup.
+Double-click theAdministratorsgroup.
+In theAdministrator Propertiesdialog, select theAddbutton.
+In theAdministrator Propertiesdialog, select theAddbutton.
+Enter the user asCORP\Install, and then selectOK.
+Enter the user asCORP\Install, and then selectOK.
+SelectOKto close theAdministrator Propertiesdialog.
+SelectOKto close theAdministrator Propertiesdialog.
+Create a sign-in on each SQL Server VM for the installation account
+Use the installation account (CORP\Install) to configure the availability group. This account needs to be a member of thesysadminfixed server role on each SQL Server VM. The following steps create a sign-in for the installation account. Complete them on both SQL Server VMs.
+Connect to the server throughBastionby using the<MachineName>\DomainAdminaccount.
+Connect to the server throughBastionby using the<MachineName>\DomainAdminaccount.
+Open SQL Server Management Studio and connect to the local instance of SQL Server.
+Open SQL Server Management Studio and connect to the local instance of SQL Server.
+InObject Explorer, selectSecurity.
+InObject Explorer, selectSecurity.
+Right-clickLogins. SelectNew Login.
+Right-clickLogins. SelectNew Login.
+InLogin - New, selectSearch.
+InLogin - New, selectSearch.
+SelectLocations.
+SelectLocations.
+Enter the domain administrator's network credentials. Use the installation account (CORP\Install).
+Enter the domain administrator's network credentials. Use the installation account (CORP\Install).
+Set the sign-in to be a member of thesysadminfixed server role.
+Set the sign-in to be a member of thesysadminfixed server role.
+SelectOK.
+SelectOK.
+Configure system account permissions
+To create a system account and grant appropriate permissions, complete the following steps on each SQL Server instance:
+Use the following script to create an account for[NT AUTHORITY\SYSTEM]:USE [master]
+GO
+CREATE LOGIN [NT AUTHORITY\SYSTEM] FROM WINDOWS WITH DEFAULT_DATABASE=[master]
+GO
+Use the following script to create an account for[NT AUTHORITY\SYSTEM]:
+[NT AUTHORITY\SYSTEM]
+USE [master]
+GO
+CREATE LOGIN [NT AUTHORITY\SYSTEM] FROM WINDOWS WITH DEFAULT_DATABASE=[master]
+GO
+USE [master]
+GO
+CREATE LOGIN [NT AUTHORITY\SYSTEM] FROM WINDOWS WITH DEFAULT_DATABASE=[master]
+GO
+Grant the following permissions to[NT AUTHORITY\SYSTEM]:ALTER ANY AVAILABILITY GROUPCONNECT SQLVIEW SERVER STATEThe following script grants these permissions:GRANT ALTER ANY AVAILABILITY GROUP TO [NT AUTHORITY\SYSTEM]
+GO
+GRANT CONNECT SQL TO [NT AUTHORITY\SYSTEM]
+GO
+GRANT VIEW SERVER STATE TO [NT AUTHORITY\SYSTEM]
+GO
+Grant the following permissions to[NT AUTHORITY\SYSTEM]:
+[NT AUTHORITY\SYSTEM]
+ALTER ANY AVAILABILITY GROUP
+ALTER ANY AVAILABILITY GROUP
+CONNECT SQL
+CONNECT SQL
+VIEW SERVER STATE
+VIEW SERVER STATE
+The following script grants these permissions:
+GRANT ALTER ANY AVAILABILITY GROUP TO [NT AUTHORITY\SYSTEM]
+GO
+GRANT CONNECT SQL TO [NT AUTHORITY\SYSTEM]
+GO
+GRANT VIEW SERVER STATE TO [NT AUTHORITY\SYSTEM]
+GO
+GRANT ALTER ANY AVAILABILITY GROUP TO [NT AUTHORITY\SYSTEM]
+GO
+GRANT CONNECT SQL TO [NT AUTHORITY\SYSTEM]
+GO
+GRANT VIEW SERVER STATE TO [NT AUTHORITY\SYSTEM]
+GO
+Set the SQL Server service accounts
+On each SQL Server VM, complete the following steps to set the SQL Server service account. Use the accounts that you created when you configured the domain accounts.
+Open SQL Server Configuration Manager.
+Right-click the SQL Server service, and then selectProperties.
+Set the account and password.
+For SQL Server availability groups, each SQL Server VM needs to run as a domain account.
+Create an Azure load balancer
+A load balancer is required in the remote region to support the SQL Server availability group. The load balancer holds the IP addresses for the availability group listeners and the Windows Server failover cluster. This section summarizes how to create the load balancer in the Azure portal.
+The load balancer must:
+Be in the same network and subnet as the new virtual machine.
+Have a static IP address for the availability group listener.
+Include a backend pool that consists of only the virtual machines in the same region as the load balancer.
+Use a TCP port probe that's specific to the IP address.
+Have a load-balancing rule that's specific to the SQL Server instance in the same region.
+Be a standard load balancer if the virtual machines in the backend pool aren't part of either a single availability set or a virtual machine scale set. For more information, reviewWhat is Azure Load Balancer?.
+Be a standard load balancer if the two virtual networks in two different regions are peered over global virtual network peering. For more information, seeAzure Virtual Network frequently asked questions (FAQ).
+The steps tocreate the load balancerare:
+In the Azure portal, go to the resource group where your SQL Server instance is, and then select+ Add.
+In the Azure portal, go to the resource group where your SQL Server instance is, and then select+ Add.
+Search forLoad Balancer. Choose the load balancer that Microsoft publishes.
+Search forLoad Balancer. Choose the load balancer that Microsoft publishes.
+SelectCreate.
+SelectCreate.
+Configure the following parameters for the load balancer:SettingValueSubscriptionUse the same subscription as the virtual machine.Resource groupUse the same resource group as the virtual machine.NameUse a text name for the load balancer (for example,remoteLB).RegionUse the same region as the virtual machine.SKUSelectStandard.TypeSelectInternal.The Azure portal pane should look like this:
+Configure the following parameters for the load balancer:
+The Azure portal pane should look like this:
+
+SelectNext: Frontend IP Configuration.
+SelectNext: Frontend IP Configuration.
+SelectAdd a frontend IP configuration.
+SelectAdd a frontend IP configuration.
+
+Set up the frontend IP address by using the following values:Name: Use a name that identifies the frontend IP configuration.Virtual network: Use the same network as the virtual machines.Subnet: Use the same subnet as the virtual machines.Assignment: SelectStatic.IP address: Use an available address from the subnet.Use this address for your availability group listener. This address is different from your cluster IP address.Availability zone: Optionally, choose an availability zone to deploy your IP address to.
+Set up the frontend IP address by using the following values:
+Name: Use a name that identifies the frontend IP configuration.
+Virtual network: Use the same network as the virtual machines.
+Subnet: Use the same subnet as the virtual machines.
+Assignment: SelectStatic.
+IP address: Use an available address from the subnet.Use this address for your availability group listener. This address is different from your cluster IP address.
+Availability zone: Optionally, choose an availability zone to deploy your IP address to.
+
+SelectAdd.
+SelectAdd.
+SelectReview + Createto validate the configuration, and then selectCreateto create the load balancer and the frontend IP address.
+SelectReview + Createto validate the configuration, and then selectCreateto create the load balancer and the frontend IP address.
+To configure the load balancer, you need to create a backend pool, create a probe, and set the load-balancing rules.
+Add a backend pool for the availability group listener
+In the Azure portal, go to your availability group. You might need to refresh the view to see the newly created load balancer.
+In the Azure portal, go to your availability group. You might need to refresh the view to see the newly created load balancer.
+Select the load balancer, selectBackend pools, and then select+Add.
+Select the load balancer, selectBackend pools, and then select+Add.
+ForName, provide a name for the backend pool.
+ForName, provide a name for the backend pool.
+ForBackend Pool Configuration, selectNIC.
+ForBackend Pool Configuration, selectNIC.
+SelectAddto associate the backend pool with the newly created SQL Server VM.
+SelectAddto associate the backend pool with the newly created SQL Server VM.
+UnderVirtual machine, choose the virtual machine that will host the availability group replica.
+UnderVirtual machine, choose the virtual machine that will host the availability group replica.
+SelectAddto add the virtual machine to the backend pool.
+SelectAddto add the virtual machine to the backend pool.
+SelectSave.
+SelectSave.
+Set the probe
+In the Azure portal, select the load balancer, selectHealth probes, and then select+Add.
+In the Azure portal, select the load balancer, selectHealth probes, and then select+Add.
+Set the listener health probe as follows:SettingDescriptionExampleNameTextSQLAlwaysOnEndPointProbeProtocolChoose TCPTCPPortAny unused port59999IntervalThe amount of time between probe attempts, in seconds5
+Set the listener health probe as follows:
+SelectAdd.
+SelectAdd.
+Set the load-balancing rules
+In the Azure portal, select the load balancer, selectLoad balancing rules, and then select+Add.
+In the Azure portal, select the load balancer, selectLoad balancing rules, and then select+Add.
+Set the listener load-balancing rules as follows:SettingDescriptionExampleNameTextSQLAlwaysOnEndPointListenerFrontend IP addressChoose an addressUse the address that you created when you created the load balancer.Backend poolChoose the backend poolSelect the backend pool that contains the virtual machines targeted for the load balancer.ProtocolChoose TCPTCPPortUse the port for the availability group listener1433Backend PortThis field is not used when you set a floating IP for direct server return1433Health ProbeThe name that you specified for the probeSQLAlwaysOnEndPointProbeSession PersistenceDropdown listNoneIdle TimeoutMinutes to keep a TCP connection open4Floating IP (direct server return)Enable this setting.WarningDirect server return is set during creation. You can't change it.
+Set the listener load-balancing rules as follows:
+Warning
+Direct server return is set during creation. You can't change it.
+SelectSave.
+SelectSave.
+Add failover clustering to SQL Server VMs
+To add failover clustering features, complete the following steps on both SQL Server VMs:
+Connect to the SQL Server virtual machine throughBastionby using theCORP\Installaccount. Open theServer Managerdashboard.
+Connect to the SQL Server virtual machine throughBastionby using theCORP\Installaccount. Open theServer Managerdashboard.
+Select theAdd roles and featureslink on the dashboard.
+Select theAdd roles and featureslink on the dashboard.
+
+SelectNextuntil you get to theServer Featuressection.
+SelectNextuntil you get to theServer Featuressection.
+InFeatures, selectFailover Clustering.
+InFeatures, selectFailover Clustering.
+Add any required features.
+Add any required features.
+SelectInstall.
+SelectInstall.
+Note
+You can now automate this task, along with actually joining the SQL Server VMs to the failover cluster, by using theAzure CLIandAzure quickstart templates.
+Tune network thresholds for a failover cluster
+When you're running Windows failover cluster nodes in Azure VMs with SQL Server availability groups, change the cluster setting to a more relaxed monitoring state. This change will make the cluster more stable and reliable. For details, seeIaaS with SQL Server: Tuning failover cluster network thresholds.
+Configure the firewall on each SQL Server VM
+The solution requires the following TCP ports to be open in the firewall:
+SQL Server VM: Port 1433 for a default instance of SQL Server.
+Azure load balancer probe:Any available port. Examples frequently use 59999.
+Cluster core load balancer IP address health probe:Any available port. Examples frequently use 58888.
+Database mirroring endpoint:Any available port. Examples frequently use 5022.
+The firewall ports need to be open on the new SQL Server VM. The method of opening the ports depends on the firewall solution that you use. The following steps show how to open the ports in Windows Firewall:
+On the SQL ServerStartscreen, openWindows Firewall with Advanced Security.
+On the SQL ServerStartscreen, openWindows Firewall with Advanced Security.
+On the left pane, selectInbound Rules. On the right pane, selectNew Rule.
+On the left pane, selectInbound Rules. On the right pane, selectNew Rule.
+ForRule Type, selectPort.
+ForRule Type, selectPort.
+For the port, specifyTCPand enter the appropriate port numbers. The following screenshot shows an example:
+For the port, specifyTCPand enter the appropriate port numbers. The following screenshot shows an example:
+
+SelectNext.
+SelectNext.
+On theActionpage, keepAllow the connectionselected and selectNext.
+On theActionpage, keepAllow the connectionselected and selectNext.
+On theProfilepage, accept the default settings and selectNext.
+On theProfilepage, accept the default settings and selectNext.
+On theNamepage, specify a rule name (such asAzure LB Probe) in theNamebox, and then selectFinish.
+On theNamepage, specify a rule name (such asAzure LB Probe) in theNamebox, and then selectFinish.
+Add SQL Server to the Windows Server failover cluster
+The new SQL Server VM needs to beadded to the Windows Server failover clusterthat exists in your local region.
+To add the SQL Server VM to the cluster:
+UseBastionto connect to a SQL Server VM in the existing cluster. Use a domain account that's an administrator on both SQL Server VMs and the witness server.
+UseBastionto connect to a SQL Server VM in the existing cluster. Use a domain account that's an administrator on both SQL Server VMs and the witness server.
+On theServer Managerdashboard, selectTools, and then selectFailover Cluster Manager.
+On theServer Managerdashboard, selectTools, and then selectFailover Cluster Manager.
+On the left pane, right-clickFailover Cluster Manager, and then selectConnect to Cluster.
+On the left pane, right-clickFailover Cluster Manager, and then selectConnect to Cluster.
+In theSelect Clusterwindow, underCluster name, choose<Cluster on this server>. Then selectOK.
+In theSelect Clusterwindow, underCluster name, choose<Cluster on this server>. Then selectOK.
+In the browser tree, right-click the cluster and selectAdd Node.
+In the browser tree, right-click the cluster and selectAdd Node.
+In theAdd Node Wizard, selectNext.
+In theAdd Node Wizard, selectNext.
+On theSelect Serverspage, add the name of the new SQL Server instance. Enter the server name inEnter server name, selectAdd, and then selectNext.
+On theSelect Serverspage, add the name of the new SQL Server instance. Enter the server name inEnter server name, selectAdd, and then selectNext.
+On theValidation Warningpage, selectNo. (In a production scenario, you should perform the validation tests). Then, selectNext.
+On theValidation Warningpage, selectNo. (In a production scenario, you should perform the validation tests). Then, selectNext.
+On theConfirmationpage, if you're using Storage Spaces, clear theAdd all eligible storage to the clustercheckbox.WarningIf you don't clearAdd all eligible storage to the cluster, Windows detaches the virtual disks during the clustering process. As a result, they don't appear in Disk Manager or Explorer until the storage is removed from the cluster and reattached via PowerShell.
+On theConfirmationpage, if you're using Storage Spaces, clear theAdd all eligible storage to the clustercheckbox.
+Warning
+If you don't clearAdd all eligible storage to the cluster, Windows detaches the virtual disks during the clustering process. As a result, they don't appear in Disk Manager or Explorer until the storage is removed from the cluster and reattached via PowerShell.
+SelectNext.
+SelectNext.
+SelectFinish.Failover Cluster Managershows that your cluster has a new node and lists it in theNodescontainer.
+SelectFinish.
+Failover Cluster Managershows that your cluster has a new node and lists it in theNodescontainer.
+Add the IP address for the Windows Server failover cluster
+Note
+On Windows Server 2019, the cluster creates adistributed server nameinstead of acluster network name. If you're using Windows Server 2019, skip toAdd an IP address for the availability group listener. You can create a cluster network name by usingPowerShell. For more information, review the blog postFailover Cluster: Cluster Network Object.
+Next, create the IP address resource and add it to the cluster for the new SQL Server VM:
+InFailover Cluster Manager, select the name of the cluster. Right-click the cluster name underCluster Core Resources, and then selectProperties:
+InFailover Cluster Manager, select the name of the cluster. Right-click the cluster name underCluster Core Resources, and then selectProperties:
+
+In theCluster Propertiesdialog, selectAddunderIP Addresses, and then add the IP address of the cluster name from the remote network region. SelectOKin theIP Addressdialog, and then selectOKin theCluster Propertiesdialog to save the new IP address.
+In theCluster Propertiesdialog, selectAddunderIP Addresses, and then add the IP address of the cluster name from the remote network region. SelectOKin theIP Addressdialog, and then selectOKin theCluster Propertiesdialog to save the new IP address.
+
+Add the IP address as a dependency for the cluster core name.Open theCluster Propertiesdialog once more, and select theDependenciestab. Configure anORdependency for the two IP addresses.
+Add the IP address as a dependency for the cluster core name.
+Open theCluster Propertiesdialog once more, and select theDependenciestab. Configure anORdependency for the two IP addresses.
+
+Add an IP address for the availability group listener
+The IP address for the listener in the remote region needs to be added to the cluster. To add the IP address:
+InFailover Cluster Manager, right-click the availability group role. Point toAdd Resource, point toMore Resources, and then selectIP Address.
+InFailover Cluster Manager, right-click the availability group role. Point toAdd Resource, point toMore Resources, and then selectIP Address.
+
+To configure this IP address, right-click the resource underOther Resources, and then selectProperties.
+To configure this IP address, right-click the resource underOther Resources, and then selectProperties.
+
+ForName, enter a name for the new resource. ForNetwork, select the network from the remote datacenter. SelectStatic IP Address, and then in theAddressbox, assign the static IP address from the new Azure load balancer.
+ForName, enter a name for the new resource. ForNetwork, select the network from the remote datacenter. SelectStatic IP Address, and then in theAddressbox, assign the static IP address from the new Azure load balancer.
+
+SelectApply, and then selectOK.
+SelectApply, and then selectOK.
+Add the IP address resource as a dependency for the listener client access point (network name) cluster.Right-click the listener client access point, and then selectProperties. Browse to theDependenciestab and add the new IP address resource to the listener client access point. The following screenshot shows a properly configured IP address cluster resource:ImportantThe cluster resource group includes both IP addresses. Both IP addresses are dependencies for the listener client access point. Use theORoperator in the cluster dependency configuration.
+Add the IP address resource as a dependency for the listener client access point (network name) cluster.
+Right-click the listener client access point, and then selectProperties. Browse to theDependenciestab and add the new IP address resource to the listener client access point. The following screenshot shows a properly configured IP address cluster resource:
+
+Important
+The cluster resource group includes both IP addresses. Both IP addresses are dependencies for the listener client access point. Use theORoperator in the cluster dependency configuration.
+Set the cluster parameters in PowerShell.Run the PowerShell script with the cluster network name, IP address, and probe port that you configured on the load balancer in the new region:$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster name for the network in the new region (Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.)
+$IPResourceName = "<IPResourceName>" # The cluster name for the new IP address resource.
+$ILBIP = "<n.n.n.n>" # The IP address of the internal load balancer in the new region. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ProbePort = <nnnnn> # The probe port that you set on the internal load balancer.
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ILBIP";"ProbePort"=$ProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+Set the cluster parameters in PowerShell.
+Run the PowerShell script with the cluster network name, IP address, and probe port that you configured on the load balancer in the new region:
+$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster name for the network in the new region (Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.)
+$IPResourceName = "<IPResourceName>" # The cluster name for the new IP address resource.
+$ILBIP = "<n.n.n.n>" # The IP address of the internal load balancer in the new region. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ProbePort = <nnnnn> # The probe port that you set on the internal load balancer.
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ILBIP";"ProbePort"=$ProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+$ClusterNetworkName = "<MyClusterNetworkName>" # The cluster name for the network in the new region (Use Get-ClusterNetwork on Windows Server 2012 or later to find the name.)
+$IPResourceName = "<IPResourceName>" # The cluster name for the new IP address resource.
+$ILBIP = "<n.n.n.n>" # The IP address of the internal load balancer in the new region. This is the static IP address for the load balancer that you configured in the Azure portal.
+[int]$ProbePort = <nnnnn> # The probe port that you set on the internal load balancer.
+
+Import-Module FailoverClusters
+
+Get-ClusterResource $IPResourceName | Set-ClusterParameter -Multiple @{"Address"="$ILBIP";"ProbePort"=$ProbePort;"SubnetMask"="255.255.255.255";"Network"="$ClusterNetworkName";"EnableDhcp"=0}
+Enable availability groups
+Next, enable the Always On availability groups feature. Complete these steps on the new SQL Server VM:
+From theStartscreen, openSQL Server Configuration Manager.
+From theStartscreen, openSQL Server Configuration Manager.
+In the browser tree, selectSQL Server Services. Right-click theSQL Server (MSSQLSERVER)service, and then selectProperties.
+In the browser tree, selectSQL Server Services. Right-click theSQL Server (MSSQLSERVER)service, and then selectProperties.
+Select theAlwaysOn High Availabilitytab, and then selectEnable AlwaysOn Availability Groups.
+Select theAlwaysOn High Availabilitytab, and then selectEnable AlwaysOn Availability Groups.
+
+SelectApply. SelectOKin the pop-up dialog.
+SelectApply. SelectOKin the pop-up dialog.
+Restart the SQL Server service.
+Restart the SQL Server service.
+Add a replica to the availability group
+After SQL Server has restarted on the newly created virtual machine, you can add it as areplica to the availability group:
+Open a remote desktop session to the primary SQL Server instance in the availability group, and then open SQL Server Management Studio (SSMS).
+Open a remote desktop session to the primary SQL Server instance in the availability group, and then open SQL Server Management Studio (SSMS).
+InObject Explorerin SSMS, openAlways On High Availability>Availability Groups. Right-click your availability group name, and then selectAdd Replica.
+InObject Explorerin SSMS, openAlways On High Availability>Availability Groups. Right-click your availability group name, and then selectAdd Replica.
+Connect to the existing replica, and then selectNext.
+Connect to the existing replica, and then selectNext.
+SelectAdd Replicaand connect to the new SQL Server VM.ImportantA replica in a remote Azure region should be set to asynchronous replication with manual failover.
+SelectAdd Replicaand connect to the new SQL Server VM.
+Important
+A replica in a remote Azure region should be set to asynchronous replication with manual failover.
+On theSelect Initial Data Synchronizationpage, selectFulland specify a shared network location. For the location, use thebackup share that you created. In the example, it was\\<First SQL Server>\Backup\. Then selectNext.NoteFull synchronization takes a full backup of the database on the first instance of SQL Server and restores it to the second instance. For large databases, we don't recommend full synchronization because it might take a long time.You can reduce this time by manually backing up the database and restoring it withNO RECOVERY. If the database is already restored withNO RECOVERYon the second SQL Server instance before you configure the availability group, selectJoin only. If you want to take the backup after you configure the availability group, selectSkip initial data synchronization.
+On theSelect Initial Data Synchronizationpage, selectFulland specify a shared network location. For the location, use thebackup share that you created. In the example, it was\\<First SQL Server>\Backup\. Then selectNext.
+Note
+Full synchronization takes a full backup of the database on the first instance of SQL Server and restores it to the second instance. For large databases, we don't recommend full synchronization because it might take a long time.
+You can reduce this time by manually backing up the database and restoring it withNO RECOVERY. If the database is already restored withNO RECOVERYon the second SQL Server instance before you configure the availability group, selectJoin only. If you want to take the backup after you configure the availability group, selectSkip initial data synchronization.
+NO RECOVERY
+NO RECOVERY
+
+On theValidationpage, selectNext. This page should look similar to the following image:NoteA warning for the listener configuration says you haven't configured an availability group listener. You can ignore this warning because the listener is already set up. It was created after you created the Azure load balancer in the local region.
+On theValidationpage, selectNext. This page should look similar to the following image:
+
+Note
+A warning for the listener configuration says you haven't configured an availability group listener. You can ignore this warning because the listener is already set up. It was created after you created the Azure load balancer in the local region.
+On theSummarypage, selectFinish, and then wait while the wizard configures the new availability group. On theProgresspage, you can selectMore detailsto view the detailed progress.After the wizard finishes the configuration, inspect theResultspage to verify that the availability group is successfully created.
+On theSummarypage, selectFinish, and then wait while the wizard configures the new availability group. On theProgresspage, you can selectMore detailsto view the detailed progress.
+After the wizard finishes the configuration, inspect theResultspage to verify that the availability group is successfully created.
+SelectCloseto close the wizard.
+SelectCloseto close the wizard.
+Check the availability group
+InObject Explorer, expandAlways On High Availability, and then expandAvailability Groups. Right-click the availability group and selectShow Dashboard.
+
+Your availability group dashboard should look similar to the following screenshot, now with another replica:
+
+The dashboard shows the replicas, the failover mode of each replica, and the synchronization state.
+Check the availability group listener
+InObject Explorer, expandAlways On High Availability, expandAvailability Groups, and then expandAvailability Group Listener.
+InObject Explorer, expandAlways On High Availability, expandAvailability Groups, and then expandAvailability Group Listener.
+Right-click the listener name and selectProperties. Both IP addresses should now appear for the listener (one in each region).
+Right-click the listener name and selectProperties. Both IP addresses should now appear for the listener (one in each region).
+
+Set the connection for multiple subnets
+The replica in the remote datacenter is part of the availability group, but it's in a different subnet. If this replica becomes the primary replica, application connection time-outs might occur. This behavior is the same as an on-premises availability group in a multiple-subnet deployment. To allow connections from client applications, either update the client connection or configure name resolution caching on the cluster network name resource.
+Preferably, update the cluster configuration to setRegisterAllProvidersIP=1and the client connection strings to setMultiSubnetFailover=Yes. SeeConnecting with MultiSubnetFailover.
+RegisterAllProvidersIP=1
+MultiSubnetFailover=Yes
+If you can't modify the connection strings, you can configure name resolution caching. SeeTimeout occurs when you connect to an Always On listener in a multi-subnet environment.
+Fail over to the remote region
+To test listener connectivity to the remote region, you can fail the replica over to the remote region. While the replica is asynchronous, failover is vulnerable to potential data loss. To fail over without data loss, change the availability mode to synchronous and set the failover mode to automatic. Use the following steps:
+InObject Explorer, connect to the instance of SQL Server that hosts the primary replica.
+InObject Explorer, connect to the instance of SQL Server that hosts the primary replica.
+UnderAlways On Availability Groups, right-click your availability group and selectProperties.
+UnderAlways On Availability Groups, right-click your availability group and selectProperties.
+On theGeneralpage, underAvailability Replicas, set the secondary replica on the disaster recovery (DR) site to useSynchronous Commitavailability mode andAutomaticfailover mode.If you have a secondary replica in same site as your primary replica for high availability, set this replica toAsynchronous CommitandManual.
+On theGeneralpage, underAvailability Replicas, set the secondary replica on the disaster recovery (DR) site to useSynchronous Commitavailability mode andAutomaticfailover mode.
+If you have a secondary replica in same site as your primary replica for high availability, set this replica toAsynchronous CommitandManual.
+SelectOK.
+SelectOK.
+InObject Explorer, right-click the availability group and selectShow Dashboard.
+InObject Explorer, right-click the availability group and selectShow Dashboard.
+On the dashboard, verify that the replica on the DR site is synchronized.
+On the dashboard, verify that the replica on the DR site is synchronized.
+InObject Explorer, right-click the availability group and selectFailover. SQL Server Management Studio opens a wizard to fail over SQL Server.
+InObject Explorer, right-click the availability group and selectFailover. SQL Server Management Studio opens a wizard to fail over SQL Server.
+SelectNext, and select the SQL Server instance on the DR site. SelectNextagain.
+SelectNext, and select the SQL Server instance on the DR site. SelectNextagain.
+Connect to the SQL Server instance on the DR site, and then selectNext.
+Connect to the SQL Server instance on the DR site, and then selectNext.
+On theSummarypage, verify the settings and selectFinish.
+On theSummarypage, verify the settings and selectFinish.
+After you test connectivity, move the primary replica back to your primary datacenter and set the availability mode back to its normal operating settings. The following table shows the normal operating settings for the architecture described in this article:
+For more information about planned and forced manual failover, see the following articles:
+Perform a planned manual failover of an availability group (SQL Server)
+Perform a forced manual failover of an availability group (SQL Server)
+Next steps
+To learn more, see:
+Windows Server failover cluster with SQL Server on Azure VMs
+Always On availability groups with SQL Server on Azure VMs
+Overview of Always On availability groups
+HADR settings for SQL Server on Azure VMs
+Feedback
+Was this page helpful?
+Additional resources

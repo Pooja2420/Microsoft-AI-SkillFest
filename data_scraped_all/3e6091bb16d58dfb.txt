@@ -1,0 +1,211 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Encrypt traffic between cluster worker nodes
+Article
+2024-04-01
+4 contributors
+In this article
+Important
+Theexample init scriptthat is referenced in this article derives its shared encryption secret from the hash of the keystore stored in DBFS. If you rotate the secret by updating the keystore file in DBFS, all running clusters must be restarted. Otherwise, Spark workers may to fail to authenticate with the Spark driver due to inconsistent shared secret, causing jobs to slow down. Furthermore, since the shared secret is stored in DBFS, any user with DBFS access can retrieve the secret using a notebook.
+Requirements
+This feature requires thePremium plan. Contact your Databricks account team for more information.
+How the init script works
+Important
+Theexample init scriptthat is referenced in this article derives its shared encryption secret from the hash of the keystore stored in DBFS. If you rotate the secret by updating the keystore file in DBFS, all running clusters must be restarted. Otherwise, Spark workers may to fail to authenticate with the Spark driver due to inconsistent shared secret, causing jobs to slow down. Furthermore, since the shared secret is stored in DBFS, any user with DBFS access can retrieve the secret using a notebook.
+User queries and transformations are typically sent to your clusters over an encrypted channel. By default, however, the data exchanged between worker nodes in a cluster is not encrypted. If your environment requires that data be encrypted at all times, whether at rest or in transit, you can create an init script that configures your clusters to encrypt traffic between worker nodes, using AES 256-bit encryption over a TLS 1.3 connection.
+Note
+Although AES enables cryptographic routines to take advantage of hardware acceleration, thereâs a performance penalty compared to unencrypted traffic. This penalty can result in queries taking longer on an encrypted cluster, depending on the amount of data shuffled between nodes.
+Enabling encryption of traffic between worker nodes requires setting Spark configuration parameters through an init script. You can use acluster-scoped init scriptfor a single cluster or add a cluster-scoped init script to your cluster policies if you want all clusters in your workspace to use worker-to-worker encryption.
+One time, copy the keystore file to a directory in DBFS. Then create the init script that applies the encryption settings.
+The init script must perform the following tasks:
+Get the JKS keystore file and password.
+Set the Spark executor configuration.
+Set the Spark driver configuration.
+Note
+The JKS keystore file used for enabling SSL/HTTPS is dynamically generated for each workspace. The JKS keystore fileâs password is hardcoded and not intended to protect the confidentiality of the keystore.
+The following is an example init script that implements these three tasks to generate the cluster encryption configuration.
+Example init script
+#!/bin/bash
+
+set -euo pipefail
+
+keystore_dbfs_file="/dbfs/<keystore-directory>/jetty_ssl_driver_keystore.jks"
+
+## Wait till keystore file is available via Fuse
+
+max_attempts=30
+while [ ! -f ${keystore_dbfs_file} ];
+do
+  if [ "$max_attempts" == 0 ]; then
+    echo "ERROR: Unable to find the file : $keystore_dbfs_file .Failing the script."
+    exit 1
+  fi
+  sleep 2s
+  ((max_attempts--))
+done
+## Derive shared internode encryption secret from the hash of the keystore file
+sasl_secret=$(sha256sum $keystore_dbfs_file | cut -d' ' -f1)
+
+if [ -z "${sasl_secret}" ]; then
+  echo "ERROR: Unable to derive the secret.Failing the script."
+  exit 1
+fi
+
+# The JKS keystore file used for enabling SSL/HTTPS
+local_keystore_file="$DB_HOME/keys/jetty_ssl_driver_keystore.jks"
+# Password of the JKS keystore file. This jks password is hardcoded and is not intended to protect the confidentiality
+# of the keystore. Do not assume the keystore file itself is protected.
+local_keystore_password="gb1gQqZ9ZIHS"
+
+## Updating spark-branch.conf is only needed for driver
+
+if [[ $DB_IS_DRIVER = "TRUE" ]]; then
+  driver_conf=${DB_HOME}/driver/conf/spark-branch.conf
+  echo "Configuring driver conf at $driver_conf"
+
+  if [ ! -e $driver_conf ] ; then
+    touch $driver_conf
+  fi
+
+cat << EOF >>  $driver_conf
+  [driver] {
+    // Configure inter-node authentication
+  "spark.authenticate" = true
+  "spark.authenticate.secret" = "$sasl_secret"
+  // Configure AES encryption
+  "spark.network.crypto.enabled" = true
+  "spark.network.crypto.saslFallback" = false
+  // Configure SSL
+  "spark.ssl.enabled" = true
+  "spark.ssl.keyPassword" = "$local_keystore_password"
+  "spark.ssl.keyStore" = "$local_keystore_file"
+  "spark.ssl.keyStorePassword" = "$local_keystore_password"
+  "spark.ssl.protocol" ="TLSv1.3"
+  "spark.ssl.standalone.enabled" = true
+  "spark.ssl.ui.enabled" = true
+  }
+EOF
+  echo "Successfully configured driver conf at $driver_conf"
+fi
+
+# Setting configs in spark-defaults.conf for the spark master and worker
+
+spark_defaults_conf="$DB_HOME/spark/conf/spark-defaults.conf"
+echo "Configuring spark defaults conf at $spark_defaults_conf"
+if [ ! -e $spark_defaults_conf ] ; then
+  touch $spark_defaults_conf
+fi
+
+cat << EOF >>  $spark_defaults_conf
+spark.authenticate true
+spark.authenticate.secret $sasl_secret
+spark.network.crypto.enabled true
+spark.network.crypto.saslFallback false
+
+spark.ssl.enabled true
+spark.ssl.keyPassword $local_keystore_password
+spark.ssl.keyStore $local_keystore_file
+spark.ssl.keyStorePassword $local_keystore_password
+spark.ssl.protocol TLSv1.3
+spark.ssl.standalone.enabled true
+spark.ssl.ui.enabled true
+EOF
+
+echo "Successfully configured spark defaults conf at $spark_defaults_conf"
+#!/bin/bash
+
+set -euo pipefail
+
+keystore_dbfs_file="/dbfs/<keystore-directory>/jetty_ssl_driver_keystore.jks"
+
+## Wait till keystore file is available via Fuse
+
+max_attempts=30
+while [ ! -f ${keystore_dbfs_file} ];
+do
+  if [ "$max_attempts" == 0 ]; then
+    echo "ERROR: Unable to find the file : $keystore_dbfs_file .Failing the script."
+    exit 1
+  fi
+  sleep 2s
+  ((max_attempts--))
+done
+## Derive shared internode encryption secret from the hash of the keystore file
+sasl_secret=$(sha256sum $keystore_dbfs_file | cut -d' ' -f1)
+
+if [ -z "${sasl_secret}" ]; then
+  echo "ERROR: Unable to derive the secret.Failing the script."
+  exit 1
+fi
+
+# The JKS keystore file used for enabling SSL/HTTPS
+local_keystore_file="$DB_HOME/keys/jetty_ssl_driver_keystore.jks"
+# Password of the JKS keystore file. This jks password is hardcoded and is not intended to protect the confidentiality
+# of the keystore. Do not assume the keystore file itself is protected.
+local_keystore_password="gb1gQqZ9ZIHS"
+
+## Updating spark-branch.conf is only needed for driver
+
+if [[ $DB_IS_DRIVER = "TRUE" ]]; then
+  driver_conf=${DB_HOME}/driver/conf/spark-branch.conf
+  echo "Configuring driver conf at $driver_conf"
+
+  if [ ! -e $driver_conf ] ; then
+    touch $driver_conf
+  fi
+
+cat << EOF >>  $driver_conf
+  [driver] {
+    // Configure inter-node authentication
+  "spark.authenticate" = true
+  "spark.authenticate.secret" = "$sasl_secret"
+  // Configure AES encryption
+  "spark.network.crypto.enabled" = true
+  "spark.network.crypto.saslFallback" = false
+  // Configure SSL
+  "spark.ssl.enabled" = true
+  "spark.ssl.keyPassword" = "$local_keystore_password"
+  "spark.ssl.keyStore" = "$local_keystore_file"
+  "spark.ssl.keyStorePassword" = "$local_keystore_password"
+  "spark.ssl.protocol" ="TLSv1.3"
+  "spark.ssl.standalone.enabled" = true
+  "spark.ssl.ui.enabled" = true
+  }
+EOF
+  echo "Successfully configured driver conf at $driver_conf"
+fi
+
+# Setting configs in spark-defaults.conf for the spark master and worker
+
+spark_defaults_conf="$DB_HOME/spark/conf/spark-defaults.conf"
+echo "Configuring spark defaults conf at $spark_defaults_conf"
+if [ ! -e $spark_defaults_conf ] ; then
+  touch $spark_defaults_conf
+fi
+
+cat << EOF >>  $spark_defaults_conf
+spark.authenticate true
+spark.authenticate.secret $sasl_secret
+spark.network.crypto.enabled true
+spark.network.crypto.saslFallback false
+
+spark.ssl.enabled true
+spark.ssl.keyPassword $local_keystore_password
+spark.ssl.keyStore $local_keystore_file
+spark.ssl.keyStorePassword $local_keystore_password
+spark.ssl.protocol TLSv1.3
+spark.ssl.standalone.enabled true
+spark.ssl.ui.enabled true
+EOF
+
+echo "Successfully configured spark defaults conf at $spark_defaults_conf"
+Once the initialization of the driver and worker nodes is complete, all traffic between these nodes is encrypted using the keystore file.
+Notebook example: Install an encryption init script
+This following notebook copies the keystore file and generates the init script in DBFS. You can use the init script to create new clusters with encryption enabled.
+Get notebook
+Disable encryption between worker nodes
+To disable encryption between worker nodes, remove the init script from the cluster configuration, then restart the cluster.
+Feedback
+Was this page helpful?
+Additional resources

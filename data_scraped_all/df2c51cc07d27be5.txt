@@ -1,0 +1,245 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Deploy to Azure Stack Hub App Service using Azure Pipelines
+Article
+2024-03-25
+18 contributors
+In this article
+Azure DevOps Services | Azure DevOps Server 2022 - Azure DevOps Server 2019
+This article walks you through setting up a CI/CD pipeline for deploying an application to app services in an Azure Stack Hub instance using Azure Pipelines.
+In this article you can learn to create or validate:
+Azure Stack Hub service principal (SPN) credentials for the pipeline.
+A web app in your Azure Stack Hub instance.
+A service connection to your Azure Stack Hub instance.
+A repo with your app code to deploy to your app
+Prerequisites
+Access toAzure Stack Hubinstance with the App Service RP enabled.
+AnAzure DevOps solutionassociated with your Azure Stack Hub tenant.
+Create or validate your SPN
+An SPN provides role-based credentials so that processes outside of Azure can connect to and interact with resources. Youâll need an SPN with contributor access and the attributes specified in these instructions to use with your Azure DevOps pipeline.
+As a user of Azure Stack Hub you donât have the permission to create the SPN. Youâll need to request this principal from your cloud operator. The instructions are being provided here so you can create the SPN if youâre a cloud operator, or you can validate the SPN if youâre a developer using an SPN in your workflow provided by a cloud operator.
+The cloud operator will need to create the SPN using Azure CLI.
+The following code snippets are written for a Windows machine using the PowerShell prompt withAzure CLI for Azure Stack Hub. If youâre using CLI on a Linux machine and bash, either remove the line extension or replace them with a\.
+\
+Prepare the values of the following parameters used to create the SPN:ParameterExampleDescriptionendpoint-resource-manager"https://management.orlando.azurestack.corp.microsoft.com"The resource management endpoint.suffix-storage-endpoint"orlando.azurestack.corp.microsoft.com"The endpoint suffix for storage accounts.suffix-keyvault-dns".vault.orlando.azurestack.corp.microsoft.com"The Key Vault service dns suffix.endpoint-active-directory-graph-resource-id"https://graph.windows.net/"The Active Directory resource ID.endpoint-sql-managementhttps://notsupportedThe sql server management endpoint. Set this tohttps://notsupportedprofile2019-03-01-hybridProfile to use for this cloud.
+Prepare the values of the following parameters used to create the SPN:
+https://notsupported
+Open your command-line tool such as Windows PowerShell or Bash and sign in. Use the following command:az login
+Open your command-line tool such as Windows PowerShell or Bash and sign in. Use the following command:
+az login
+az login
+Use theregistercommand for a new environment or theupdatecommand if youâre using an existing environment. Use the following command.az cloud register `
+    -n "AzureStackUser" `
+    --endpoint-resource-manager "https://management.<local>.<FQDN>" `
+    --suffix-storage-endpoint ".<local>.<FQDN>" `
+    --suffix-keyvault-dns ".vault.<local>.<FQDN>" `
+    --endpoint-active-directory-graph-resource-id "https://graph.windows.net/" `
+    --endpoint-sql-management https://notsupported  `
+    --profile 2019-03-01-hybrid
+Use theregistercommand for a new environment or theupdatecommand if youâre using an existing environment. Use the following command.
+register
+update
+az cloud register `
+    -n "AzureStackUser" `
+    --endpoint-resource-manager "https://management.<local>.<FQDN>" `
+    --suffix-storage-endpoint ".<local>.<FQDN>" `
+    --suffix-keyvault-dns ".vault.<local>.<FQDN>" `
+    --endpoint-active-directory-graph-resource-id "https://graph.windows.net/" `
+    --endpoint-sql-management https://notsupported  `
+    --profile 2019-03-01-hybrid
+az cloud register `
+    -n "AzureStackUser" `
+    --endpoint-resource-manager "https://management.<local>.<FQDN>" `
+    --suffix-storage-endpoint ".<local>.<FQDN>" `
+    --suffix-keyvault-dns ".vault.<local>.<FQDN>" `
+    --endpoint-active-directory-graph-resource-id "https://graph.windows.net/" `
+    --endpoint-sql-management https://notsupported  `
+    --profile 2019-03-01-hybrid
+Get your subscription ID and resource group that you want to use for the SPN.
+Get your subscription ID and resource group that you want to use for the SPN.
+Create the SPN with the following command with the subscription ID and resource group:az ad sp create-for-rbac --name "myApp" --role contributor `
+    --scopes /subscriptions/{subscription-id}/resourceGroups/{resource-group} `
+    --sdk-authIf you donât have cloud operator privileges, you can also sign in with the SPN provided to you by your cloud operator. Youâll need the client ID, the secret, and your tenant ID. With these values, you can use the following Azure CLI commands to create the JSON object that contains the values youâll need to create your service connection.az login --service-principal -u "<client-id>" -p "<secret>" --tenant "<tenant-ID>" --allow-no-subscriptions
+az account show
+Create the SPN with the following command with the subscription ID and resource group:
+az ad sp create-for-rbac --name "myApp" --role contributor `
+    --scopes /subscriptions/{subscription-id}/resourceGroups/{resource-group} `
+    --sdk-auth
+az ad sp create-for-rbac --name "myApp" --role contributor `
+    --scopes /subscriptions/{subscription-id}/resourceGroups/{resource-group} `
+    --sdk-auth
+If you donât have cloud operator privileges, you can also sign in with the SPN provided to you by your cloud operator. Youâll need the client ID, the secret, and your tenant ID. With these values, you can use the following Azure CLI commands to create the JSON object that contains the values youâll need to create your service connection.
+az login --service-principal -u "<client-id>" -p "<secret>" --tenant "<tenant-ID>" --allow-no-subscriptions
+az account show
+az login --service-principal -u "<client-id>" -p "<secret>" --tenant "<tenant-ID>" --allow-no-subscriptions
+az account show
+Check the resulting JSON object. Youâll use the JSON object to create your service connection. The JSON object should have the following attributes:{
+  "environmentName": "<Environment name>",
+  "homeTenantId": "<Tenant ID for the SPN>",
+  "id": "<Application ID for the SPN>",
+  "isDefault": true,
+  "managedByTenants": [],
+  "name": "<Tenant name>",
+  "state": "Enabled",
+  "tenantId": "<Tenant ID for the SPN>",
+  "user": {
+    "name": "<User email address>",
+    "type": "user"
+  }
+}
+Check the resulting JSON object. Youâll use the JSON object to create your service connection. The JSON object should have the following attributes:
+{
+  "environmentName": "<Environment name>",
+  "homeTenantId": "<Tenant ID for the SPN>",
+  "id": "<Application ID for the SPN>",
+  "isDefault": true,
+  "managedByTenants": [],
+  "name": "<Tenant name>",
+  "state": "Enabled",
+  "tenantId": "<Tenant ID for the SPN>",
+  "user": {
+    "name": "<User email address>",
+    "type": "user"
+  }
+}
+{
+  "environmentName": "<Environment name>",
+  "homeTenantId": "<Tenant ID for the SPN>",
+  "id": "<Application ID for the SPN>",
+  "isDefault": true,
+  "managedByTenants": [],
+  "name": "<Tenant name>",
+  "state": "Enabled",
+  "tenantId": "<Tenant ID for the SPN>",
+  "user": {
+    "name": "<User email address>",
+    "type": "user"
+  }
+}
+Create the web app target
+Sign in to your Azure Stack Hub portal.
+SelectCreate a resource>Web + Mobile>Web App.
+Select yourSubscription.
+Create or select aResource Group.
+Type theNameof your app. The name of the app will appear in the URL for your app, for example,yourappname.appservice.<region>.<FQDN>
+yourappname.appservice.<region>.<FQDN>
+Select theRuntime stackfor your app. The runtime must match the code you plan to use for your web app.
+Select theOperating System(OS) that will host your runtime and app.
+Select or type theRegionfor your Azure Stack Hub instance.
+Select the plan based on your Azure Stack Hub instance, region, and app OS.
+SelectReview + Create.
+Review your web app. SelectCreate.
+SelectGo to resource.
+Make note of your app name. Youâll add the name to the yml document that defines your pipeline in your repository.
+Create a service connection
+Create a service connection. Youâll need the values from your SPN and the name of your Azure Stack Hub subscription.
+Sign in to yourAzure DevOps organization, and then navigate to your project.
+Sign in to yourAzure DevOps organization, and then navigate to your project.
+SelectProject settings, and then selectService connections.
+SelectProject settings, and then selectService connections.
+SelectService connections>New service connection.
+SelectService connections>New service connection.
+SelectAzure Resource Manager, and then selectNext.
+SelectAzure Resource Manager, and then selectNext.
+SelectService principal (manual).
+SelectService principal (manual).
+SelectAzure StackfromEnvironment.
+SelectAzure StackfromEnvironment.
+Fill out the form, and then selectVerify and save.
+Fill out the form, and then selectVerify and save.
+Give your service connection a name. (You will need the service connection name to create your yaml pipeline).
+Give your service connection a name. (You will need the service connection name to create your yaml pipeline).
+
+Create your repository and add pipeline
+If you havenât added your web app code to the repository, add it now.
+If you havenât added your web app code to the repository, add it now.
+Open the repository. Select the repo and selectBrowse.
+Open the repository. Select the repo and selectBrowse.
+SelectPipelines
+SelectPipelines
+SelectNew pipeline.
+SelectNew pipeline.
+SelectAzure Repos Git.
+SelectAzure Repos Git.
+Select your repository.
+Select your repository.
+SelectStarter pipeline.
+SelectStarter pipeline.
+Navigate back to the repo and open theazure-pipelines.yml.
+Navigate back to the repo and open theazure-pipelines.yml.
+azure-pipelines.yml
+Add the following yaml:# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+trigger:
+- main
+variables:
+  azureSubscription: '<your connection name>'
+  VSTS_ARM_REST_IGNORE_SSL_ERRORS: true
+steps:
+- task: AzureWebApp@1
+  displayName: Azure Web App Deploy
+  inputs:
+    azureSubscription: $(azureSubscription)
+    appName: <your-app-name>
+    package: '$(System.DefaultWorkingDirectory)'NoteTo ignore SSL errors, set a variable namedVSTS_ARM_REST_IGNORE_SSL_ERRORSto the valuetruein the build or release pipeline, as in this example.
+Add the following yaml:
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+trigger:
+- main
+variables:
+  azureSubscription: '<your connection name>'
+  VSTS_ARM_REST_IGNORE_SSL_ERRORS: true
+steps:
+- task: AzureWebApp@1
+  displayName: Azure Web App Deploy
+  inputs:
+    azureSubscription: $(azureSubscription)
+    appName: <your-app-name>
+    package: '$(System.DefaultWorkingDirectory)'
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+trigger:
+- main
+variables:
+  azureSubscription: '<your connection name>'
+  VSTS_ARM_REST_IGNORE_SSL_ERRORS: true
+steps:
+- task: AzureWebApp@1
+  displayName: Azure Web App Deploy
+  inputs:
+    azureSubscription: $(azureSubscription)
+    appName: <your-app-name>
+    package: '$(System.DefaultWorkingDirectory)'
+Note
+To ignore SSL errors, set a variable namedVSTS_ARM_REST_IGNORE_SSL_ERRORSto the valuetruein the build or release pipeline, as in this example.
+VSTS_ARM_REST_IGNORE_SSL_ERRORS
+true
+Update theazureSubscriptionvalue with the name of your service connection.
+Update theazureSubscriptionvalue with the name of your service connection.
+azureSubscription
+Update theappNamewith your app name. Youâre now ready to deploy.
+Update theappNamewith your app name. Youâre now ready to deploy.
+appName
+Notes about using Azure tasks with Azure Stack Hub
+The following Azure tasks are validated with Azure Stack Hub:
+Azure PowerShell
+Azure File Copy
+Azure Resource Group Deployment
+Azure App Service Deploy
+Azure App Service Manage
+Azure SQL Database Deployment
+Next steps
+Deploy an Azure Web App
+Troubleshoot Azure Resource Manager service connections
+Azure Stack Hub User Documentation
+Feedback
+Was this page helpful?
+Additional resources

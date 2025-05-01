@@ -1,0 +1,842 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Azure SQL trigger for Functions
+Article
+2025-04-23
+9 contributors
+In this article
+The Azure SQL trigger usesSQL change trackingfunctionality to monitor a SQL table for changes and trigger a function when a row is created, updated, or deleted. For configuration details for change tracking for use with the Azure SQL trigger, seeSet up change tracking. For information on setup details of the Azure SQL extension for Azure Functions, see theSQL binding overview.
+The Azure SQL trigger scaling decisions for theConsumption and Premium plansare done via target-based scaling. For more information, seeTarget-based scalingand review theAzure Functions hosting options.
+Note
+Support for Consumption plans requiresrelease v3.1.284 or laterof theAzure SQL bindings for Azure Functions.
+Functionality Overview
+The Azure SQL trigger binding uses a polling loop to check for changes, triggering the user function when changes are detected. At a high level, the loop looks like this:
+while (true) {
+    1. Get list of changes on table - up to a maximum number controlled by the Sql_Trigger_MaxBatchSize setting
+    2. Trigger function with list of changes
+    3. Wait for delay controlled by Sql_Trigger_PollingIntervalMs setting
+}
+while (true) {
+    1. Get list of changes on table - up to a maximum number controlled by the Sql_Trigger_MaxBatchSize setting
+    2. Trigger function with list of changes
+    3. Wait for delay controlled by Sql_Trigger_PollingIntervalMs setting
+}
+Changes are processed in the order that their changes were made, with the oldest changes being processed first. A couple notes about change processing:
+If changes to multiple rows are made at once the exact order that theyâre sent to the function is based on the order returned by the CHANGETABLE function
+Changes are "batched" together for a row. If multiple changes are made to a row between each iteration of the loop then only a single change entry exists for that row which will show the difference between the last processed state and the current state
+If changes are made to a set of rows, and then another set of changes are made to half of those same rows, then the half of the rows that weren't changed a second time are processed first. This processing logic is due to the above note with the changes being batched - the trigger will only see the "last" change made and use that for the order it processes them in
+For more information on change tracking and how it's used by applications such as Azure SQL triggers, seework with change tracking.
+Important
+For optimal security, you should use Microsoft Entra ID with managed identities for connections between Functions and Azure SQL Database. Managed identities make your app more secure by eliminating secrets from your application deployments, such as credentials in the connection strings, server names, and ports being used. You can learn how to use managed identities in this tutorial,Connect a function app to Azure SQL with managed identity and SQL bindings.
+Example usage
+
+Isolated worker model
+In-process model
+More samples for the Azure SQL trigger are available in theGitHub repository.
+The example refers to aToDoItemclass and a corresponding database table:
+ToDoItem
+namespace AzureSQL.ToDo
+{
+    public class ToDoItem
+    {
+        public Guid Id { get; set; }
+        public int? order { get; set; }
+        public string title { get; set; }
+        public string url { get; set; }
+        public bool? completed { get; set; }
+    }
+}
+namespace AzureSQL.ToDo
+{
+    public class ToDoItem
+    {
+        public Guid Id { get; set; }
+        public int? order { get; set; }
+        public string title { get; set; }
+        public string url { get; set; }
+        public bool? completed { get; set; }
+    }
+}
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+Change trackingis enabled on the database and on the table:
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+The SQL trigger binds to aIReadOnlyList<SqlChange<T>>, a list ofSqlChangeobjects each with two properties:
+IReadOnlyList<SqlChange<T>>
+SqlChange
+Item:the item that was changed. The type of the item should follow the table schema as seen in theToDoItemclass.
+ToDoItem
+Operation:a value fromSqlChangeOperationenum. The possible values areInsert,Update, andDelete.
+SqlChangeOperation
+Insert
+Update
+Delete
+The following example shows aC# functionthat is invoked when there are changes to theToDotable:
+ToDo
+using System;
+using System.Collections.Generic;
+using Microsoft.Azure.Functions.Worker;
+using Microsoft.Azure.Functions.Worker.Extensions.Sql;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
+
+
+namespace AzureSQL.ToDo
+{
+    public static class ToDoTrigger
+    {
+        [Function("ToDoTrigger")]
+        public static void Run(
+            [SqlTrigger("[dbo].[ToDo]", "SqlConnectionString")]
+            IReadOnlyList<SqlChange<ToDoItem>> changes,
+            FunctionContext context)
+        {
+            var logger = context.GetLogger("ToDoTrigger");
+            foreach (SqlChange<ToDoItem> change in changes)
+            {
+                ToDoItem toDoItem = change.Item;
+                logger.LogInformation($"Change operation: {change.Operation}");
+                logger.LogInformation($"Id: {toDoItem.Id}, Title: {toDoItem.title}, Url: {toDoItem.url}, Completed: {toDoItem.completed}");
+            }
+        }
+    }
+}
+using System;
+using System.Collections.Generic;
+using Microsoft.Azure.Functions.Worker;
+using Microsoft.Azure.Functions.Worker.Extensions.Sql;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
+
+
+namespace AzureSQL.ToDo
+{
+    public static class ToDoTrigger
+    {
+        [Function("ToDoTrigger")]
+        public static void Run(
+            [SqlTrigger("[dbo].[ToDo]", "SqlConnectionString")]
+            IReadOnlyList<SqlChange<ToDoItem>> changes,
+            FunctionContext context)
+        {
+            var logger = context.GetLogger("ToDoTrigger");
+            foreach (SqlChange<ToDoItem> change in changes)
+            {
+                ToDoItem toDoItem = change.Item;
+                logger.LogInformation($"Change operation: {change.Operation}");
+                logger.LogInformation($"Id: {toDoItem.Id}, Title: {toDoItem.title}, Url: {toDoItem.url}, Completed: {toDoItem.completed}");
+            }
+        }
+    }
+}
+Important
+Support will end for the in-process model on November 10, 2026. We highly recommend that youmigrate your apps to the isolated worker modelfor full support.
+More samples for the Azure SQL trigger are available in theGitHub repository.
+The example refers to aToDoItemclass and a corresponding database table:
+ToDoItem
+namespace AzureSQL.ToDo
+{
+    public class ToDoItem
+    {
+        public Guid Id { get; set; }
+        public int? order { get; set; }
+        public string title { get; set; }
+        public string url { get; set; }
+        public bool? completed { get; set; }
+    }
+}
+namespace AzureSQL.ToDo
+{
+    public class ToDoItem
+    {
+        public Guid Id { get; set; }
+        public int? order { get; set; }
+        public string title { get; set; }
+        public string url { get; set; }
+        public bool? completed { get; set; }
+    }
+}
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+Change trackingis enabled on the database and on the table:
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+The SQL trigger binds to aIReadOnlyList<SqlChange<T>>, a list ofSqlChangeobjects each with two properties:
+IReadOnlyList<SqlChange<T>>
+SqlChange
+Item:the item that was changed. The type of the item should follow the table schema as seen in theToDoItemclass.
+ToDoItem
+Operation:a value fromSqlChangeOperationenum. The possible values areInsert,Update, andDelete.
+SqlChangeOperation
+Insert
+Update
+Delete
+The following example shows aC# functionthat is invoked when there are changes to theToDotable:
+ToDo
+using System.Collections.Generic;
+using Microsoft.Azure.WebJobs;
+using Microsoft.Extensions.Logging;
+using Microsoft.Azure.WebJobs.Extensions.Sql;
+
+namespace AzureSQL.ToDo
+{
+    public static class ToDoTrigger
+    {
+        [FunctionName("ToDoTrigger")]
+        public static void Run(
+            [SqlTrigger("[dbo].[ToDo]", "SqlConnectionString")]
+            IReadOnlyList<SqlChange<ToDoItem>> changes,
+            ILogger logger)
+        {
+            foreach (SqlChange<ToDoItem> change in changes)
+            {
+                ToDoItem toDoItem = change.Item;
+                logger.LogInformation($"Change operation: {change.Operation}");
+                logger.LogInformation($"Id: {toDoItem.Id}, Title: {toDoItem.title}, Url: {toDoItem.url}, Completed: {toDoItem.completed}");
+            }
+        }
+    }
+}
+using System.Collections.Generic;
+using Microsoft.Azure.WebJobs;
+using Microsoft.Extensions.Logging;
+using Microsoft.Azure.WebJobs.Extensions.Sql;
+
+namespace AzureSQL.ToDo
+{
+    public static class ToDoTrigger
+    {
+        [FunctionName("ToDoTrigger")]
+        public static void Run(
+            [SqlTrigger("[dbo].[ToDo]", "SqlConnectionString")]
+            IReadOnlyList<SqlChange<ToDoItem>> changes,
+            ILogger logger)
+        {
+            foreach (SqlChange<ToDoItem> change in changes)
+            {
+                ToDoItem toDoItem = change.Item;
+                logger.LogInformation($"Change operation: {change.Operation}");
+                logger.LogInformation($"Id: {toDoItem.Id}, Title: {toDoItem.title}, Url: {toDoItem.url}, Completed: {toDoItem.completed}");
+            }
+        }
+    }
+}
+Example usage
+
+More samples for the Azure SQL trigger are available in theGitHub repository.
+The example refers to aToDoItemclass, aSqlChangeToDoItemclass, aSqlChangeOperationenum, and a corresponding database table:
+ToDoItem
+SqlChangeToDoItem
+SqlChangeOperation
+In a separate fileToDoItem.java:
+ToDoItem.java
+package com.function;
+import java.util.UUID;
+
+public class ToDoItem {
+    public UUID Id;
+    public int order;
+    public String title;
+    public String url;
+    public boolean completed;
+
+    public ToDoItem() {
+    }
+
+    public ToDoItem(UUID Id, int order, String title, String url, boolean completed) {
+        this.Id = Id;
+        this.order = order;
+        this.title = title;
+        this.url = url;
+        this.completed = completed;
+    }
+}
+package com.function;
+import java.util.UUID;
+
+public class ToDoItem {
+    public UUID Id;
+    public int order;
+    public String title;
+    public String url;
+    public boolean completed;
+
+    public ToDoItem() {
+    }
+
+    public ToDoItem(UUID Id, int order, String title, String url, boolean completed) {
+        this.Id = Id;
+        this.order = order;
+        this.title = title;
+        this.url = url;
+        this.completed = completed;
+    }
+}
+In a separate fileSqlChangeToDoItem.java:
+SqlChangeToDoItem.java
+package com.function;
+
+public class SqlChangeToDoItem {
+    public ToDoItem item;
+    public SqlChangeOperation operation;
+
+    public SqlChangeToDoItem() {
+    }
+
+    public SqlChangeToDoItem(ToDoItem Item, SqlChangeOperation Operation) {
+        this.Item = Item;
+        this.Operation = Operation;
+    }
+}
+package com.function;
+
+public class SqlChangeToDoItem {
+    public ToDoItem item;
+    public SqlChangeOperation operation;
+
+    public SqlChangeToDoItem() {
+    }
+
+    public SqlChangeToDoItem(ToDoItem Item, SqlChangeOperation Operation) {
+        this.Item = Item;
+        this.Operation = Operation;
+    }
+}
+In a separate fileSqlChangeOperation.java:
+SqlChangeOperation.java
+package com.function;
+
+import com.google.gson.annotations.SerializedName;
+
+public enum SqlChangeOperation {
+    @SerializedName("0")
+    Insert,
+    @SerializedName("1")
+    Update,
+    @SerializedName("2")
+    Delete;
+}
+package com.function;
+
+import com.google.gson.annotations.SerializedName;
+
+public enum SqlChangeOperation {
+    @SerializedName("0")
+    Insert,
+    @SerializedName("1")
+    Update,
+    @SerializedName("2")
+    Delete;
+}
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+Change trackingis enabled on the database and on the table:
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+The SQL trigger binds to aSqlChangeToDoItem[], an array ofSqlChangeToDoItemobjects each with two properties:
+SqlChangeToDoItem[]
+SqlChangeToDoItem
+item:the item that was changed. The type of the item should follow the table schema as seen in theToDoItemclass.
+ToDoItem
+operation:a value fromSqlChangeOperationenum. The possible values areInsert,Update, andDelete.
+SqlChangeOperation
+Insert
+Update
+Delete
+The following example shows a Java function that is invoked when there are changes to theToDotable:
+ToDo
+package com.function;
+
+import com.microsoft.azure.functions.ExecutionContext;
+import com.microsoft.azure.functions.annotation.FunctionName;
+import com.microsoft.azure.functions.sql.annotation.SQLTrigger;
+import com.function.Common.SqlChangeToDoItem;
+import com.google.gson.Gson;
+
+import java.util.logging.Level;
+
+public class ProductsTrigger {
+    @FunctionName("ToDoTrigger")
+    public void run(
+            @SQLTrigger(
+                name = "todoItems",
+                tableName = "[dbo].[ToDo]",
+                connectionStringSetting = "SqlConnectionString")
+                SqlChangeToDoItem[] todoItems,
+            ExecutionContext context) {
+
+        context.getLogger().log(Level.INFO, "SQL Changes: " + new Gson().toJson(changes));
+    }
+}
+package com.function;
+
+import com.microsoft.azure.functions.ExecutionContext;
+import com.microsoft.azure.functions.annotation.FunctionName;
+import com.microsoft.azure.functions.sql.annotation.SQLTrigger;
+import com.function.Common.SqlChangeToDoItem;
+import com.google.gson.Gson;
+
+import java.util.logging.Level;
+
+public class ProductsTrigger {
+    @FunctionName("ToDoTrigger")
+    public void run(
+            @SQLTrigger(
+                name = "todoItems",
+                tableName = "[dbo].[ToDo]",
+                connectionStringSetting = "SqlConnectionString")
+                SqlChangeToDoItem[] todoItems,
+            ExecutionContext context) {
+
+        context.getLogger().log(Level.INFO, "SQL Changes: " + new Gson().toJson(changes));
+    }
+}
+Example usage
+
+More samples for the Azure SQL trigger are available in theGitHub repository.
+The example refers to aToDoItemdatabase table:
+ToDoItem
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+Change trackingis enabled on the database and on the table:
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+The SQL trigger binds totodoChanges, a list of objects each with two properties:
+todoChanges
+item:the item that was changed. The structure of the item will follow the table schema.
+operation:the possible values areInsert,Update, andDelete.
+Insert
+Update
+Delete
+The following example shows a PowerShell function that is invoked when there are changes to theToDotable.
+ToDo
+The following is binding data in the function.json file:
+{
+    "name": "todoChanges",
+    "type": "sqlTrigger",
+    "direction": "in",
+    "tableName": "dbo.ToDo",
+    "connectionStringSetting": "SqlConnectionString"
+}
+{
+    "name": "todoChanges",
+    "type": "sqlTrigger",
+    "direction": "in",
+    "tableName": "dbo.ToDo",
+    "connectionStringSetting": "SqlConnectionString"
+}
+Theconfigurationsection explains these properties.
+The following is sample PowerShell code for the function in therun.ps1file:
+run.ps1
+using namespace System.Net
+
+param($todoChanges)
+# The output is used to inspect the trigger binding parameter in test methods.
+# Use -Compress to remove new lines and spaces for testing purposes.
+$changesJson = $todoChanges | ConvertTo-Json -Compress
+Write-Host "SQL Changes: $changesJson"
+using namespace System.Net
+
+param($todoChanges)
+# The output is used to inspect the trigger binding parameter in test methods.
+# Use -Compress to remove new lines and spaces for testing purposes.
+$changesJson = $todoChanges | ConvertTo-Json -Compress
+Write-Host "SQL Changes: $changesJson"
+Example usage
+
+More samples for the Azure SQL trigger are available in theGitHub repository.
+The example refers to aToDoItemdatabase table:
+ToDoItem
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+Change trackingis enabled on the database and on the table:
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+The SQL trigger bindstodoChanges, an array of objects each with two properties:
+todoChanges
+item:the item that was changed. The structure of the item will follow the table schema.
+operation:the possible values areInsert,Update, andDelete.
+Insert
+Update
+Delete
+The following example shows a JavaScript function that is invoked when there are changes to theToDotable.
+ToDo
+The following is binding data in the function.json file:
+{
+    "name": "todoChanges",
+    "type": "sqlTrigger",
+    "direction": "in",
+    "tableName": "dbo.ToDo",
+    "connectionStringSetting": "SqlConnectionString"
+}
+{
+    "name": "todoChanges",
+    "type": "sqlTrigger",
+    "direction": "in",
+    "tableName": "dbo.ToDo",
+    "connectionStringSetting": "SqlConnectionString"
+}
+Theconfigurationsection explains these properties.
+The following is sample JavaScript code for the function in theindex.jsfile:
+index.js
+module.exports = async function (context, todoChanges) {
+    context.log(`SQL Changes: ${JSON.stringify(todoChanges)}`)
+}
+module.exports = async function (context, todoChanges) {
+    context.log(`SQL Changes: ${JSON.stringify(todoChanges)}`)
+}
+Example usage
+
+More samples for the Azure SQL trigger are available in theGitHub repository.
+The example refers to aToDoItemdatabase table:
+ToDoItem
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+CREATE TABLE dbo.ToDo (
+    [Id] UNIQUEIDENTIFIER PRIMARY KEY,
+    [order] INT NULL,
+    [title] NVARCHAR(200) NOT NULL,
+    [url] NVARCHAR(200) NOT NULL,
+    [completed] BIT NOT NULL
+);
+Change trackingis enabled on the database and on the table:
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+ALTER DATABASE [SampleDatabase]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+ALTER TABLE [dbo].[ToDo]
+ENABLE CHANGE_TRACKING;
+The SQL trigger binds to a variabletodoChanges, a list of objects each with two properties:
+todoChanges
+item:the item that was changed. The structure of the item will follow the table schema.
+operation:the possible values areInsert,Update, andDelete.
+Insert
+Update
+Delete
+The following example shows a Python function that is invoked when there are changes to theToDotable.
+ToDo
+v2
+v1
+The following is sample python code for the function_app.py file:
+import json
+import logging
+import azure.functions as func
+from azure.functions.decorators.core import DataType
+
+app = func.FunctionApp()
+
+@app.function_name(name="ToDoTrigger")
+@app.sql_trigger(arg_name="todo",
+                        table_name="ToDo",
+                        connection_string_setting="SqlConnectionString")
+def todo_trigger(todo: str) -> None:
+    logging.info("SQL Changes: %s", json.loads(todo))
+import json
+import logging
+import azure.functions as func
+from azure.functions.decorators.core import DataType
+
+app = func.FunctionApp()
+
+@app.function_name(name="ToDoTrigger")
+@app.sql_trigger(arg_name="todo",
+                        table_name="ToDo",
+                        connection_string_setting="SqlConnectionString")
+def todo_trigger(todo: str) -> None:
+    logging.info("SQL Changes: %s", json.loads(todo))
+The following is binding data in the function.json file:
+{
+    "name": "todoChanges",
+    "type": "sqlTrigger",
+    "direction": "in",
+    "tableName": "dbo.ToDo",
+    "connectionStringSetting": "SqlConnectionString"
+}
+{
+    "name": "todoChanges",
+    "type": "sqlTrigger",
+    "direction": "in",
+    "tableName": "dbo.ToDo",
+    "connectionStringSetting": "SqlConnectionString"
+}
+Theconfigurationsection explains these properties.
+The following is sample Python code for the function in the__init__.pyfile:
+__init__.py
+import json
+import logging
+
+def main(changes):
+    logging.info("SQL Changes: %s", json.loads(changes))
+import json
+import logging
+
+def main(changes):
+    logging.info("SQL Changes: %s", json.loads(changes))
+Attributes
+TheC# libraryuses theSqlTriggerattribute to declare the SQL trigger on the function, which has the following properties:
+local.settings.json
+Annotations
+In theJava functions runtime library, use the@SQLTriggerannotation (com.microsoft.azure.functions.sql.annotation.SQLTrigger) on parameters whose value would come from Azure SQL. This annotation supports the following elements:
+@SQLTrigger
+com.microsoft.azure.functions.sql.annotation.SQLTrigger
+local.settings.json
+Configuration
+The following table explains the binding configuration properties that you set in the function.json file.
+sqlTrigger
+in
+local.settings.json
+Optional Configuration
+The following optional settings can be configured for the SQL trigger for local development or for cloud deployments.
+host.json
+This section describes the configuration settings available for this binding in version 2.x and later. Settings in the host.json file apply to all functions in a function app instance. The following example host.json file contains only the version 2.x+ settings for this binding. For more information about function app configuration settings in version 2.x and later, seehost.json reference for Azure Functions.
+Here is an example host.json file with the optional settings:
+{
+  "version": "2.0",
+  "extensions": {
+      "Sql": {
+        "MaxBatchSize": 300,
+        "PollingIntervalMs": 1000,
+        "MaxChangesPerWorker": 100
+      }
+  },
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        "excludedTypes": "Request"
+      }
+    },
+    "logLevel": {
+      "default": "Trace"
+    }
+  }
+}
+{
+  "version": "2.0",
+  "extensions": {
+      "Sql": {
+        "MaxBatchSize": 300,
+        "PollingIntervalMs": 1000,
+        "MaxChangesPerWorker": 100
+      }
+  },
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        "excludedTypes": "Request"
+      }
+    },
+    "logLevel": {
+      "default": "Trace"
+    }
+  }
+}
+local.setting.json
+The local.settings.json file stores app settings and settings used by local development tools. Settings in the local.settings.json file are used only when you're running your project locally. When you publish your project to Azure, be sure to also add any required settings to the app settings for the function app.
+Important
+Because the local.settings.json may contain secrets, such as connection strings, you should never store it in a remote repository. Tools that support Functions provide ways to synchronize settings in the local.settings.json file with theapp settingsin the function app to which your project is deployed.
+Here is an example local.settings.json file with the optional settings:
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet",
+    "SqlConnectionString": "",
+    "Sql_Trigger_MaxBatchSize": 300,
+    "Sql_Trigger_PollingIntervalMs": 1000,
+    "Sql_Trigger_MaxChangesPerWorker": 100
+  }
+}
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet",
+    "SqlConnectionString": "",
+    "Sql_Trigger_MaxBatchSize": 300,
+    "Sql_Trigger_PollingIntervalMs": 1000,
+    "Sql_Trigger_MaxChangesPerWorker": 100
+  }
+}
+Set up change tracking (required)
+Setting up change tracking for use with the Azure SQL trigger requires two steps.  These steps can be completed from any SQL tool that supports running queries, includingVisual Studio Code,Azure Data StudioorSQL Server Management Studio.
+Enable change tracking on the SQL database, substitutingyour database namewith the name of the database where the table to be monitored is located:ALTER DATABASE [your database name]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);TheCHANGE_RETENTIONoption specifies the time period for which change tracking information (change history) is kept.  The retention of change history by the SQL database might affect trigger functionality. For example, if the Azure Function is turned off for several days and then resumed, the database will contain the changes that occurred in past two days in the above setup example.TheAUTO_CLEANUPoption is used to enable or disable the clean-up task that removes old change tracking information. If a temporary problem that prevents the trigger from running, turning off auto cleanup can be useful to pause the removal of information older than the retention period until the problem is resolved.More information on change tracking options is available in theSQL documentation.
+Enable change tracking on the SQL database, substitutingyour database namewith the name of the database where the table to be monitored is located:
+your database name
+ALTER DATABASE [your database name]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+ALTER DATABASE [your database name]
+SET CHANGE_TRACKING = ON
+(CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+TheCHANGE_RETENTIONoption specifies the time period for which change tracking information (change history) is kept.  The retention of change history by the SQL database might affect trigger functionality. For example, if the Azure Function is turned off for several days and then resumed, the database will contain the changes that occurred in past two days in the above setup example.
+CHANGE_RETENTION
+TheAUTO_CLEANUPoption is used to enable or disable the clean-up task that removes old change tracking information. If a temporary problem that prevents the trigger from running, turning off auto cleanup can be useful to pause the removal of information older than the retention period until the problem is resolved.
+AUTO_CLEANUP
+More information on change tracking options is available in theSQL documentation.
+Enable change tracking on the table, substitutingyour table namewith the name of the table to be monitored (changing the schema if appropriate):ALTER TABLE [dbo].[your table name]
+ENABLE CHANGE_TRACKING;The trigger needs to have read access on the table being monitored for changes and to the change tracking system tables. Each function trigger has an associated change tracking table and leases table in a schemaaz_func. These tables are created by the trigger if they don't yet exist.  More information on these data structures is available in the Azure SQL binding librarydocumentation.
+Enable change tracking on the table, substitutingyour table namewith the name of the table to be monitored (changing the schema if appropriate):
+your table name
+ALTER TABLE [dbo].[your table name]
+ENABLE CHANGE_TRACKING;
+ALTER TABLE [dbo].[your table name]
+ENABLE CHANGE_TRACKING;
+The trigger needs to have read access on the table being monitored for changes and to the change tracking system tables. Each function trigger has an associated change tracking table and leases table in a schemaaz_func. These tables are created by the trigger if they don't yet exist.  More information on these data structures is available in the Azure SQL binding librarydocumentation.
+az_func
+Enable runtime-driven scaling
+Optionally, your functions can scale automatically based on the number of changes that are pending to be processed in the user table. To allow your functions to scale properly on the Premium plan when using SQL triggers, you need to enable runtime scale monitoring.
+Azure portal
+Azure CLI
+In the Azure portal, in your function app, selectConfiguration.
+In the Azure portal, in your function app, selectConfiguration.
+On theFunction runtime settingstab, forRuntime Scale Monitoring, selectOn.
+On theFunction runtime settingstab, forRuntime Scale Monitoring, selectOn.
+
+Use the following Azure CLI command to enable runtime scale monitoring:
+az resource update -g <RESOURCE_GROUP> -n <FUNCTION_APP_NAME>/config/web --set properties.functionsRuntimeScaleMonitoringEnabled=1 --resource-type Microsoft.Web/sites
+az resource update -g <RESOURCE_GROUP> -n <FUNCTION_APP_NAME>/config/web --set properties.functionsRuntimeScaleMonitoringEnabled=1 --resource-type Microsoft.Web/sites
+Retry support
+Further information on the SQL triggerretry supportandleases tablesis available in the GitHub repository.
+Startup retries
+If an exception occurs during startup then the host runtime automatically attempts to restart the trigger listener with an exponential backoff strategy. These retries continue until either the listener is successfully started or the startup is canceled.
+Broken connection retries
+If the function successfully starts but then an error causes the connection to break (such as the server going offline) then the function continues to try and reopen the connection until the function is either stopped or the connection succeeds. If the connection is successfully re-established then it picks up processing changes where it left off.
+Note that these retries are outside the built-in idle connection retry logic that SqlClient has which can be configured with theConnectRetryCountandConnectRetryIntervalconnection string options. The built-in idle connection retries are attempted first and if those fail to reconnect then the trigger binding attempts to re-establish the connection itself.
+ConnectRetryCount
+ConnectRetryInterval
+Function exception retries
+If an exception occurs in the user function when processing changes then the batch of rows currently being processed are retried again in 60 seconds. Other changes are processed as normal during this time, but the rows in the batch that caused the exception are ignored until the timeout period has elapsed.
+If the function execution fails five times in a row for a given row then that row is completely ignored for all future changes. Because the rows in a batch aren't deterministic, rows in a failed batch might end up in different batches in subsequent invocations. This means that not all rows in the failed batch will necessarily be ignored. If other rows in the batch were the ones causing the exception, the "good" rows might end up in a different batch that doesn't fail in future invocations.
+Next steps
+Read data from a database (Input binding)
+Save data to a database (Output binding)
+Feedback
+Was this page helpful?
+Additional resources

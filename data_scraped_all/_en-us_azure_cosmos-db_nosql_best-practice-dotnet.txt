@@ -1,0 +1,181 @@
+Note
+Access to this page requires authorization. You can trysigning inorchanging directories.
+Access to this page requires authorization. You can trychanging directories.
+Best practices for Azure Cosmos DB .NET SDK
+Article
+2024-08-14
+8 contributors
+In this article
+APPLIES TO:NoSQL
+This article walks through the best practices for using the Azure Cosmos DB .NET SDK. Following these practices, will help improve your latency, availability, and boost overall performance.
+Watch the video below to learn more about using the .NET SDK from an Azure Cosmos DB engineer!
+Checklist
+CosmosClient
+IdleConnectionTimeout
+PortReuseMode
+PrivatePortPool
+IdleConnectionTimeout
+PortReuseMode
+Task.Result
+Task.Wait
+Task.GetAwaiter().GetResult()
+RequestTimeout
+CancellationToken
+ReadDatabaseAsync
+ReadDocumentCollectionAsync
+CreateDatabaseQuery
+CreateDocumentCollectionQuery
+CreateIfNotExist
+MaxConcurrency
+QueryRequestsOptions
+int.MaxValue
+MaxBufferedItemCount
+RetryAfter
+Capture diagnostics
+All the responses in the SDK, includingCosmosException, have aDiagnosticsproperty. This property records all the information related to the single request, including if there were retries or any transient failures.
+CosmosException
+Diagnostics
+The diagnostics are returned as a string. The string changes with each version, as it's improved for troubleshooting different scenarios. With each version of the SDK, the string will have breaking changes to the formatting. Don't parse the string to avoid breaking changes. The following code sample shows how to read diagnostic logs by using the .NET SDK:
+try
+{
+    ItemResponse<Book> response = await this.Container.CreateItemAsync<Book>(item: testItem);
+    if (response.Diagnostics.GetClientElapsedTime() > ConfigurableSlowRequestTimeSpan)
+    {
+        // Log the response.Diagnostics.ToString() and add any additional info necessary to correlate to other logs 
+    }
+}
+catch (CosmosException cosmosException)
+{
+    // Log the full exception including the stack trace with: cosmosException.ToString()
+    
+    // The Diagnostics can be logged separately if required with: cosmosException.Diagnostics.ToString()
+}
+
+// When using Stream APIs
+ResponseMessage response = await this.Container.CreateItemStreamAsync(partitionKey, stream);
+if (response.Diagnostics.GetClientElapsedTime() > ConfigurableSlowRequestTimeSpan || !response.IsSuccessStatusCode)
+{
+    // Log the diagnostics and add any additional info necessary to correlate to other logs with: response.Diagnostics.ToString()
+}
+try
+{
+    ItemResponse<Book> response = await this.Container.CreateItemAsync<Book>(item: testItem);
+    if (response.Diagnostics.GetClientElapsedTime() > ConfigurableSlowRequestTimeSpan)
+    {
+        // Log the response.Diagnostics.ToString() and add any additional info necessary to correlate to other logs 
+    }
+}
+catch (CosmosException cosmosException)
+{
+    // Log the full exception including the stack trace with: cosmosException.ToString()
+    
+    // The Diagnostics can be logged separately if required with: cosmosException.Diagnostics.ToString()
+}
+
+// When using Stream APIs
+ResponseMessage response = await this.Container.CreateItemStreamAsync(partitionKey, stream);
+if (response.Diagnostics.GetClientElapsedTime() > ConfigurableSlowRequestTimeSpan || !response.IsSuccessStatusCode)
+{
+    // Log the diagnostics and add any additional info necessary to correlate to other logs with: response.Diagnostics.ToString()
+}
+Best practices for HTTP connections
+The .NET SDK usesHttpClientto perform HTTP requests regardless of the connectivity mode configured. InDirect modeHTTP is used for metadata operations and in Gateway mode it's used for both data plane and metadata operations. One of thefundamentals of HttpClientis to make sure theHttpClientcan react to DNS changes on your account bycustomizing the pooled connection lifetime. As long as pooled connections are kept open, they don't react to DNS changes.  This setting forces pooledconnections to be closedperiodically, ensuring that your application reacts to DNS changes. Our recommendation is that you customize this value according to yourconnectivity modeand workload to balance the performance impact of frequently creating new connections, with needing to react to DNS changes (availability). A 5-minute value would be a good start that can be increased if it's impacting performance particularly for Gateway mode.
+HttpClient
+HttpClient
+You can inject your custom HttpClient throughCosmosClientOptions.HttpClientFactory, for example:
+CosmosClientOptions.HttpClientFactory
+// Use a Singleton instance of the SocketsHttpHandler, which you can share across any HttpClient in your application
+SocketsHttpHandler socketsHttpHandler = new SocketsHttpHandler();
+// Customize this value based on desired DNS refresh timer
+socketsHttpHandler.PooledConnectionLifetime = TimeSpan.FromMinutes(5);
+
+CosmosClientOptions cosmosClientOptions = new CosmosClientOptions()
+{
+    // Pass your customized SocketHttpHandler to be used by the CosmosClient
+    // Make sure `disposeHandler` is `false`
+    HttpClientFactory = () => new HttpClient(socketsHttpHandler, disposeHandler: false)
+};
+
+// Use a Singleton instance of the CosmosClient
+return new CosmosClient("<connection-string>", cosmosClientOptions);
+// Use a Singleton instance of the SocketsHttpHandler, which you can share across any HttpClient in your application
+SocketsHttpHandler socketsHttpHandler = new SocketsHttpHandler();
+// Customize this value based on desired DNS refresh timer
+socketsHttpHandler.PooledConnectionLifetime = TimeSpan.FromMinutes(5);
+
+CosmosClientOptions cosmosClientOptions = new CosmosClientOptions()
+{
+    // Pass your customized SocketHttpHandler to be used by the CosmosClient
+    // Make sure `disposeHandler` is `false`
+    HttpClientFactory = () => new HttpClient(socketsHttpHandler, disposeHandler: false)
+};
+
+// Use a Singleton instance of the CosmosClient
+return new CosmosClient("<connection-string>", cosmosClientOptions);
+If you use.NET dependency injection, you can simplify the Singleton process:
+SocketsHttpHandler socketsHttpHandler = new SocketsHttpHandler();
+// Customize this value based on desired DNS refresh timer
+socketsHttpHandler.PooledConnectionLifetime = TimeSpan.FromMinutes(5);
+// Registering the Singleton SocketsHttpHandler lets you reuse it across any HttpClient in your application
+services.AddSingleton<SocketsHttpHandler>(socketsHttpHandler);
+
+// Use a Singleton instance of the CosmosClient
+services.AddSingleton<CosmosClient>(serviceProvider =>
+{
+    SocketsHttpHandler socketsHttpHandler = serviceProvider.GetRequiredService<SocketsHttpHandler>();
+    CosmosClientOptions cosmosClientOptions = new CosmosClientOptions()
+    {
+        HttpClientFactory = () => new HttpClient(socketsHttpHandler, disposeHandler: false)
+    };
+
+    return new CosmosClient("<connection-string>", cosmosClientOptions);
+});
+SocketsHttpHandler socketsHttpHandler = new SocketsHttpHandler();
+// Customize this value based on desired DNS refresh timer
+socketsHttpHandler.PooledConnectionLifetime = TimeSpan.FromMinutes(5);
+// Registering the Singleton SocketsHttpHandler lets you reuse it across any HttpClient in your application
+services.AddSingleton<SocketsHttpHandler>(socketsHttpHandler);
+
+// Use a Singleton instance of the CosmosClient
+services.AddSingleton<CosmosClient>(serviceProvider =>
+{
+    SocketsHttpHandler socketsHttpHandler = serviceProvider.GetRequiredService<SocketsHttpHandler>();
+    CosmosClientOptions cosmosClientOptions = new CosmosClientOptions()
+    {
+        HttpClientFactory = () => new HttpClient(socketsHttpHandler, disposeHandler: false)
+    };
+
+    return new CosmosClient("<connection-string>", cosmosClientOptions);
+});
+Best practices when using Gateway mode
+IncreaseSystem.Net MaxConnectionsper host when you use Gateway mode. Azure Cosmos DB requests are made over HTTPS/REST when you use Gateway mode. They're subject to the default connection limit per hostname or IP address. You might need to setMaxConnectionsto a higher value (from 100 through 1,000) so that the client library can use multiple simultaneous connections to Azure Cosmos DB. In .NET SDK 1.8.0 and later, the default value forServicePointManager.DefaultConnectionLimitis 50. To change the value, you can setCosmosClientOptions.GatewayModeMaxConnectionLimitto a higher value.
+System.Net MaxConnections
+MaxConnections
+ServicePointManager.DefaultConnectionLimit
+CosmosClientOptions.GatewayModeMaxConnectionLimit
+Best practices for write-heavy workloads
+For workloads that have heavy create payloads, set theEnableContentResponseOnWriterequest option tofalse. The service will no longer return the created or updated resource to the SDK. Normally, because the application has the object that's being created, it doesn't need the service to return it. The header values are still accessible, like a request charge. Disabling the content response can help improve performance, because the SDK no longer needs to allocate memory or serialize the body of the response. It also reduces the network bandwidth usage to further help performance.
+EnableContentResponseOnWrite
+false
+Important
+SettingEnableContentResponseOnWritetofalsewill also disable the response from a trigger operation.
+EnableContentResponseOnWrite
+false
+Best practices for multi-tenant applications
+Applications that distribute usage across multiple tenants where each tenant is represented by a different database, container, or partition keywithin the same Azure Cosmos DB accountshould use a single client instance. A single client instance can interact with all the databases, containers, and partition keys within an account, and it's best practice to use thesingleton pattern.
+However, when each tenant is represented by adifferent Azure Cosmos DB account, it's required to create a separate client instance per account. The singleton pattern still applies for each client (one client for each account for the lifetime of the application), but if the volume of tenants is high, the number of clients can be difficult to manage.Connectionscan increase beyond the limits of the compute environment and causeconnectivity issues.
+It's recommended in these cases to:
+Understand the limitations of the compute environment (CPU and connection resources). We recommend using VMs with at least 4-cores and 8-GB memory whenever possible.
+Based on the limitations of the compute environment, determine the number of client instances (and therefore number of tenants) a single compute instance can handle. You canestimate the number of connectionsthat will be opened per client depending on the connection mode chosen.
+Evaluate tenant distribution across instances. If each compute instance can successfully handle a certain limited amount of tenants, load balancing and routing of tenants to different compute instances would allow for scaling as the number of tenants grow.
+For sparse workloads, consider using a Least Frequently Used cache as the structure to hold the client instances and dispose clients for tenants that haven't been accessed within a time window. One option in .NET isMemoryCacheEntryOptions, whereRegisterPostEvictionCallbackcan be used todispose inactive clientsandSetSlidingExpirationcan be used to define the maximum time to hold inactive connections.
+Evaluate usingGateway modeto reduce the number of network connections.
+When usingDirect modeconsider adjustingCosmosClientOptions.IdleTcpConnectionTimeoutandCosmosClientOptions.PortReuseModeon thedirect mode configurationto close unused connections and keep thevolume of connectionsunder control.
+Next steps
+For a sample application that's used to evaluate Azure Cosmos DB for high-performance scenarios on a few client machines, seePerformance and scale testing with Azure Cosmos DB.
+To learn more about designing your application for scale and high performance, seePartitioning and scaling in Azure Cosmos DB.
+Trying to do capacity planning for a migration to Azure Cosmos DB? You can use information about your existing database cluster for capacity planning.
+If you know typical request rates for your current database workload, read aboutestimating request units using Azure Cosmos DB capacity planner
+Feedback
+Was this page helpful?
+Additional resources
